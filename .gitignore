@@ -1,9 +1,32 @@
-node_modules/
-.venv/
-venv/
-__pycache__/
+# Secretos. Va PRIMERO y antes de que exista ningun .env: el repositorio es
+# publico y un secreto commiteado una vez sigue publicado aunque se borre.
 .env
-.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+.vercel/
+
+# Datos personales de Alberto. En un repositorio publico la watchlist dice en
+# que invierte: vive en la base de datos, nunca en un archivo del repo.
+/datos-privados/
+watchlist.json
+watchlist.local.*
+
+# Dependencias y artefactos
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Cache local de datos de mercado
+.cache/
+
+# Sistema
 *.log
 .DS_Store
 Thumbs.db
+desktop.ini
