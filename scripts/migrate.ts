@@ -2,16 +2,19 @@
  * Aplica las migraciones de `neon/migrations` en orden alfabético.
  *
  * No lleva registro de lo aplicado: cada migración es idempotente y se ejecuta
- * entera en cada arranque. Es el patrón de Finance Hub y para un esquema de este
- * tamaño no hace falta más.
+ * entera en cada arranque. Para un esquema de este tamaño no hace falta más.
  *
- * Usa `postgres` (TCP) en vez del driver HTTP porque el HTTP no admite varias
- * sentencias en una sola llamada.
+ * Va por **HTTPS**, con el mismo driver que la aplicación, y no por el puerto
+ * 5432. Motivo: hay redes que bloquean el puerto de Postgres —la de casa, sin ir
+ * más lejos— y no tiene sentido que el migrador exija una vía de acceso que la
+ * app no necesita. El precio es que el endpoint HTTP admite una sentencia por
+ * llamada, así que el archivo se trocea aquí.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
+import { neon } from "@neondatabase/serverless";
+import { splitStatements } from "../src/lib/sql.ts";
 import { loadDotEnv } from "../src/config.ts";
 
 async function main(): Promise<void> {
@@ -31,19 +34,24 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const sql = postgres(url, { max: 1, ssl: "require" });
-  try {
-    for (const file of files) {
-      await sql.unsafe(await readFile(join(directory, file), "utf8"));
-      console.log(`✓ ${file}`);
-    }
-    console.log(`\n${files.length} migración(es) aplicadas.`);
-  } finally {
-    await sql.end();
+  const sql = neon(url);
+  let total = 0;
+  for (const file of files) {
+    const sentencias = splitStatements(await readFile(join(directory, file), "utf8"));
+    for (const sentencia of sentencias) await sql.query(sentencia);
+    total += sentencias.length;
+    console.log(`✓ ${file} (${sentencias.length} sentencias)`);
   }
+  console.log(`\n${files.length} migración(es), ${total} sentencias aplicadas.`);
 }
 
 main().catch((error: unknown) => {
-  console.error("✕ Migración fallida:", error instanceof Error ? error.message : error);
+  const detalle =
+    error instanceof AggregateError
+      ? error.errors.map((e: unknown) => (e instanceof Error ? e.message : String(e))).join("; ")
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  console.error("✕ Migración fallida:", detalle || "sin mensaje");
   process.exit(1);
 });

@@ -28,9 +28,17 @@ Falta el dashboard, y las fuentes son de momento solo FRED.
 
 ## Stack
 
-Node 22 + TypeScript en ESM, sin transpilar (`tsx`). Dos dependencias de runtime
-—`zod` y el SDK de Anthropic— más el driver de Neon; el HTTP es `fetch` nativo
-con timeout y reintentos propios.
+Node 22 + TypeScript en ESM, sin transpilar (`tsx`). Tres dependencias de
+runtime —`zod`, el SDK de Anthropic y el driver de Neon— y ninguna más; el HTTP
+es `fetch` nativo con timeout y reintentos propios.
+
+**Todo va por HTTPS, incluidas las migraciones.** El puerto 5432 de Postgres está
+bloqueado en algunas redes (la de casa, por ejemplo), así que el migrador usa el
+mismo driver HTTP que la aplicación en vez del cliente TCP. A cambio, el endpoint
+HTTP admite una sentencia por llamada y el archivo `.sql` se trocea en
+`src/lib/sql.ts` — con un recorrido que respeta cadenas, identificadores
+entrecomillados, cuerpos `$$` y comentarios, porque un `split(";")` pelado se
+rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 
 | Módulo | Qué hace |
 |---|---|
@@ -39,6 +47,7 @@ con timeout y reintentos propios.
 | `src/pipeline/rules.ts` | Paso 1 de la cascada: filtro gratis, sin LLM |
 | `src/pipeline/seen.ts` | Idempotencia y registro de lo enviado. Interfaz común: archivo local o Neon |
 | `src/db/neon.ts` | Implementación en Postgres de esa interfaz |
+| `src/lib/sql.ts` | Trocea un archivo SQL en sentencias respetando cadenas y comentarios |
 | `src/ai/cascade.ts` | Pasos 3 y 4: scoring barato y análisis profundo, con salida estructurada |
 | `src/lib/fabrication.ts` | Control anti-fabricación: toda cifra en prosa existe en los datos |
 | `src/notify/telegram.ts` | Formato de la alerta (función pura) y envío |
@@ -91,3 +100,7 @@ Los secretos que hay que dar de alta en el repositorio: `FRED_API_KEY`,
   cada quince minutos. El archivo local queda solo para desarrollo.
 - **Las migraciones son idempotentes y se aplican enteras cada vez.** No hay
   registro de lo aplicado; para un esquema de este tamaño no hace falta más.
+- **Una cifra inventada degrada la alerta, no tumba el ciclo.** Si el modelo cita
+  un número que no está en los datos, se reintenta una vez y, si insiste, se envía
+  el resumen corto del scoring. Callarse justo cuando hay noticia es el peor
+  resultado posible.
