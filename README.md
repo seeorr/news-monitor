@@ -33,7 +33,10 @@ Aparte del ciclo, una vez al dia: la **agenda macro** (`npm run agenda`), que
 dice lo que se publica esta semana. No pasa por la cascada porque no hay nada que
 interpretar en una lista de fechas.
 
-Falta el dashboard.
+Falta el dashboard. Su especificación de UI/UX está en
+[docs/dashboard-ui-ux.md](docs/dashboard-ui-ux.md), anclada a lo que el sistema
+produce de verdad: dice de qué tabla y de qué columna sale cada cosa y, sobre
+todo, qué pide el diseño que el backend todavía no genera.
 
 ## Stack
 
