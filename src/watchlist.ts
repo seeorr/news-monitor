@@ -78,13 +78,16 @@ async function main(): Promise<number> {
       log("· Sin SEC_USER_AGENT no se puede resolver el CIK ahora. Se añade sin él.");
     }
 
+    // Sin `--umbral` no se manda umbral, y no el 3 por defecto: un alta repetida
+    // para rellenar el CIK no puede llevarse por delante el umbral que el valor
+    // ya tuviera. El 3 lo pone la propia tabla cuando la fila es nueva.
     const umbralTexto = opcion("umbral");
     await anadir(config.databaseUrl, {
       ticker,
       nombre,
       cik,
       quoteSymbol: opcion("simbolo"),
-      umbral: umbralTexto ? Number(umbralTexto) : 3,
+      umbral: umbralTexto ? Number(umbralTexto) : undefined,
     });
     log(`✓ ${ticker} añadido${nombre ? ` (${nombre})` : ""}${cik ? `, CIK ${cik}` : ""}.`);
     return 0;

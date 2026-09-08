@@ -20,6 +20,15 @@ export interface Vigilado {
   umbralMovimiento: number;
 }
 
+/**
+ * Un cliente SQL ya abierto, que es lo que devuelve `neon()`.
+ *
+ * Existe para poder mirar la consulta del alta en un test sin una base delante:
+ * su `on conflict` decide qué se conserva de una fila que ya estaba, y eso es
+ * justo lo que no puede comprobarse leyendo el código y confiando.
+ */
+export type Ejecutor = (strings: TemplateStringsArray, ...valores: unknown[]) => Promise<unknown>;
+
 interface Fila {
   ticker: string;
   nombre: string | null;
@@ -42,22 +51,30 @@ export async function leerWatchlist(databaseUrl: string): Promise<Vigilado[]> {
 export async function anadir(
   databaseUrl: string,
   entrada: { ticker: string; nombre?: string | null; cik?: string | null; quoteSymbol?: string | null; umbral?: number },
+  sql: Ejecutor = neon(databaseUrl),
 ): Promise<void> {
-  const sql = neon(databaseUrl);
   // `on conflict do update` y no `do nothing`: volver a añadir un ticker con más
   // datos —el CIK ya resuelto, por ejemplo— tiene que completar la fila, no
   // ignorarse en silencio.
+  //
+  // Y completar es exactamente eso: **ningún campo que llegue vacío pisa lo que
+  // ya había**. El umbral era la excepción y era un fallo silencioso: se
+  // escribía `excluded.umbral_movimiento`, que con un alta sin `--umbral` vale
+  // el 3 por defecto, así que reañadir un valor para rellenarle el nombre le
+  // borraba el umbral que alguien había pensado. Por eso el umbral entra dos
+  // veces en la consulta: el valor por defecto solo vale para una fila nueva.
+  const umbral = entrada.umbral ?? null;
   await sql`
     insert into watchlist (ticker, nombre, cik, quote_symbol, umbral_movimiento)
     values (
       ${entrada.ticker.toUpperCase()}, ${entrada.nombre ?? null}, ${entrada.cik ?? null},
-      ${entrada.quoteSymbol ?? null}, ${entrada.umbral ?? 3}
+      ${entrada.quoteSymbol ?? null}, coalesce(${umbral}::double precision, 3)
     )
     on conflict (ticker) do update set
       nombre = coalesce(excluded.nombre, watchlist.nombre),
       cik = coalesce(excluded.cik, watchlist.cik),
       quote_symbol = coalesce(excluded.quote_symbol, watchlist.quote_symbol),
-      umbral_movimiento = excluded.umbral_movimiento
+      umbral_movimiento = coalesce(${umbral}::double precision, watchlist.umbral_movimiento)
   `;
 }
 
