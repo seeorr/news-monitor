@@ -60,7 +60,9 @@ export function formatAlert(
       lines.push(`Activos afectados: ${assets}`);
     }
     if (analysis.what_to_watch.length > 0) {
-      lines.push(`Qué vigilar ahora: ${analysis.what_to_watch.join(", ")}`);
+      // El modelo escribe cada punto como una frase, con su punto final. Unirlos
+      // con comas produce "vivienda y servicios., La variación...". Se limpian.
+      lines.push(`Qué vigilar ahora: ${analysis.what_to_watch.map(limpiar).join(" · ")}`);
     }
   } else {
     lines.push(`Resumen: ${scoring.one_liner}`);
@@ -72,6 +74,11 @@ export function formatAlert(
   lines.push(`Fuente: ${event.source_url ?? event.source} · dato de ${event.observed_at}`);
 
   return lines.join("\n");
+}
+
+/** Quita el punto final y los espacios de un elemento de lista. */
+function limpiar(s: string): string {
+  return s.trim().replace(/\.+$/, "");
 }
 
 function arrows(direction: "up" | "down" | "unclear", confidence: number): string {

@@ -43,9 +43,32 @@ export type Analysis = z.infer<typeof Analysis>;
 
 const RULES = `Eres un analista de mercados. Reglas innegociables:
 - NUNCA inventes cifras. Usa solo los números que aparecen en los DATOS.
+- Tampoco DERIVES cifras nuevas: nada de diferencias, distancias a un objetivo,
+  medias ni proyecciones. Si el número no está escrito en los DATOS, no se cita.
 - Si no sabes algo, dilo. Un hueco declarado vale; una cifra inventada no.
 - No des consejo de inversión. Describes mecanismos, no recomiendas operaciones.
 - Sé breve. Frases cortas.`;
+
+/** Recordatorio del reintento: el primer análisis se descartó por citar una cifra inventada. */
+const RETRY_NOTE =
+  "El análisis anterior se descartó porque citaba una cifra que no estaba en los DATOS. " +
+  "Escribe el análisis sin ninguna cifra que no aparezca literalmente abajo. " +
+  "Si necesitas hablar de magnitudes, hazlo con palabras.";
+
+/**
+ * El modelo citó una cifra que no está en los datos. No es un fallo del programa
+ * ni de la red: es el control funcionando. Tiene su propio tipo para que el ciclo
+ * pueda degradar en vez de morirse.
+ */
+export class FabricationError extends Error {
+  constructor(
+    readonly eventId: string,
+    readonly violations: string[],
+  ) {
+    super(`Análisis descartado por fabricación en ${eventId}: ${violations.join("; ")}`);
+    this.name = "FabricationError";
+  }
+}
 
 /** Los datos que ve el modelo. Es también el universo de cifras que puede citar. */
 export function eventFacts(event: NormalizedEvent): string {
@@ -79,6 +102,8 @@ export interface CascadeDeps {
   client: Anthropic;
   modelScoring: string;
   modelAnalysis: string;
+  /** Aviso de cada intento descartado, para que quede en el log del cron. */
+  onFabrication?: (intento: number, violations: string[]) => void;
 }
 
 /** Paso 3. Barato, corto, sobre todo lo que pasó el filtro. */
@@ -104,37 +129,48 @@ export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Pro
   return parsed;
 }
 
-/** Paso 4. Solo para lo que de verdad importa. */
+/**
+ * Paso 4. Solo para lo que de verdad importa.
+ *
+ * Un intento y un reintento. Si el modelo vuelve a citar una cifra que no está
+ * en los datos, lanza `FabricationError` y el ciclo degrada al resumen barato:
+ * vale más una alerta corta y cierta que una explicación con un número inventado.
+ */
 export async function analyzeEvent(event: NormalizedEvent, deps: CascadeDeps): Promise<Analysis> {
-  const res = await deps.client.messages.parse({
-    model: deps.modelAnalysis,
-    max_tokens: 8000,
-    system: RULES,
-    messages: [
-      {
-        role: "user",
-        content:
-          `Explica por que importa este dato, que lo puede amplificar o revertir, ` +
-          `que activos se ven afectados y que hay que vigilar ahora.\n\nDATOS:\n${eventFacts(event)}`,
-      },
-    ],
-    output_config: { format: zodOutputFormat(Analysis), effort: "medium" },
-  });
+  let ultimas: string[] = [];
 
-  if (res.stop_reason === "refusal") {
-    throw new Error(`El modelo rechazo analizar el evento ${event.id}`);
-  }
-  const parsed = res.parsed_output;
-  if (!parsed) throw new Error(`Analisis sin salida valida para ${event.id}`);
+  for (const intento of [1, 2]) {
+    const aviso = intento === 1 ? "" : `${RETRY_NOTE}\n\n`;
+    const res = await deps.client.messages.parse({
+      model: deps.modelAnalysis,
+      max_tokens: 8000,
+      system: RULES,
+      messages: [
+        {
+          role: "user",
+          content:
+            `${aviso}Explica por que importa este dato, que lo puede amplificar o revertir, ` +
+            `que activos se ven afectados y que hay que vigilar ahora.\n\nDATOS:\n${eventFacts(event)}`,
+        },
+      ],
+      output_config: { format: zodOutputFormat(Analysis), effort: "medium" },
+    });
 
-  // El control anti-fabricación corre sobre la prosa, no sobre los campos
-  // estructurados: es ahí donde un modelo se inventa un "subió un 4 %".
-  const prose = [parsed.why_it_matters, ...parsed.catalysts, ...parsed.risks].join(" ");
-  const check = checkFabrication(prose, allowedNumbers(event));
-  if (!check.ok) {
-    throw new Error(
-      `Analisis descartado por fabricacion en ${event.id}: ${check.violations.join("; ")}`,
-    );
+    if (res.stop_reason === "refusal") {
+      throw new Error(`El modelo rechazo analizar el evento ${event.id}`);
+    }
+    const parsed = res.parsed_output;
+    if (!parsed) throw new Error(`Analisis sin salida valida para ${event.id}`);
+
+    // El control anti-fabricación corre sobre la prosa, no sobre los campos
+    // estructurados: es ahí donde un modelo se inventa un "subió un 4 %".
+    const prose = [parsed.why_it_matters, ...parsed.catalysts, ...parsed.risks].join(" ");
+    const check = checkFabrication(prose, allowedNumbers(event));
+    if (check.ok) return parsed;
+
+    ultimas = check.violations;
+    deps.onFabrication?.(intento, check.violations);
   }
-  return parsed;
+
+  throw new FabricationError(event.id, ultimas);
 }

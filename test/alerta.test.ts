@@ -49,7 +49,14 @@ describe("formato de la alerta", () => {
     expect(t).toContain("Actual: 3,2% | Consenso: 3,4% | Sorpresa: -0,2 pp (vs consenso)");
     expect(t).toContain("IMPORTANCIA: 9/10 | IMPACTO:");
     expect(t).toContain("NVDA");
-    expect(t).toContain("Qué vigilar ahora: US 2Y, US 10Y, Nasdaq futures");
+    expect(t).toContain("Qué vigilar ahora: US 2Y · US 10Y · Nasdaq futures");
+  });
+
+  it("limpia los puntos finales de la lista de vigilancia", () => {
+    const conPuntos = { ...analysis, what_to_watch: ["Vivienda y servicios.", "La variacion mensual."] };
+    const t = formatAlert(event, scoring, conPuntos);
+    expect(t).toContain("Vivienda y servicios · La variacion mensual");
+    expect(t).not.toContain("servicios., ");
   });
 
   it("declara la base cuando la sorpresa no es contra consenso", () => {

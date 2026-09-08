@@ -110,4 +110,15 @@ describe("anti-fabricacion", () => {
     const r = checkFabrication("Importancia 9 de 10. Publicado el 2026-08-01.", [3.21]);
     expect(r.ok).toBe(true);
   });
+
+  // Caso real del 8 de septiembre: con CPI 3,54 y anterior 3,73, el modelo
+  // escribio "1,5 puntos por encima del objetivo". La resta es suya, no del dato.
+  it("caza una cifra DERIVADA de los datos y no presente en ellos", () => {
+    const r = checkFabrication(
+      "La inflacion sigue 1,5 puntos por encima del objetivo del 2 %.",
+      [3.54, 3.73, null, -0.19],
+    );
+    expect(r.ok).toBe(false);
+    expect(r.violations.join(" ")).toContain("1.5");
+  });
 });

@@ -10,7 +10,13 @@
  *   npm start -- --force   ignora el registro de vistos (reenvía)
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { analyzeEvent, scoreEvent, type Analysis, type CascadeDeps } from "./ai/cascade.ts";
+import {
+  analyzeEvent,
+  FabricationError,
+  scoreEvent,
+  type Analysis,
+  type CascadeDeps,
+} from "./ai/cascade.ts";
 import { describeMissing, loadConfig, loadDotEnv, missingVars } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
 import { HttpError } from "./lib/http.ts";
@@ -88,6 +94,8 @@ async function main(): Promise<number> {
     client: new Anthropic({ apiKey: config.anthropicApiKey }),
     modelScoring: config.modelScoring,
     modelAnalysis: config.modelAnalysis,
+    onFabrication: (intento, violations) =>
+      log(`· Intento ${intento} descartado: ${violations.join("; ")}`),
   };
 
   const scoring = await scoreEvent(event, deps);
@@ -95,8 +103,17 @@ async function main(): Promise<number> {
 
   let analysis: Analysis | null = null;
   if (scoring.importance_score >= config.deepAnalysisThreshold) {
-    analysis = await analyzeEvent(event, deps);
-    log(`✓ Análisis profundo (${config.modelAnalysis})`);
+    try {
+      analysis = await analyzeEvent(event, deps);
+      log(`✓ Análisis profundo (${config.modelAnalysis})`);
+    } catch (err) {
+      // Que el modelo se invente una cifra no puede tumbar el ciclo: se manda la
+      // alerta corta, que es cierta, en vez de callarse. Cualquier otro error sí
+      // sube: un fallo de red o de credenciales no debe pasar desapercibido.
+      if (!(err instanceof FabricationError)) throw err;
+      log(`· ${err.message}`);
+      log("  Se degrada al resumen del scoring: mejor corta y cierta que larga e inventada.");
+    }
   } else {
     log(`· Por debajo de ${config.deepAnalysisThreshold}: sin análisis profundo. Ese es el ahorro.`);
   }
