@@ -67,13 +67,44 @@ export async function watchlistEfectiva(
   return desdeEntorno(config.watchlist, config.secWatchlist);
 }
 
+/**
+ * Envuelve el log para que ningun ticker de la watchlist salga en claro. Se
+ * numeran las tareas de precios en vez de nombrarlas, pero los mensajes de
+ * error los compone cada fuente y no hay forma de auditarlos uno a uno: esta
+ * red se pone al final, donde el texto ya esta formado.
+ *
+ * En local, con la watchlist a la vista en Neon, se pierde poco: el numero de
+ * tarea basta para saber cual fallo mirando el orden de `vigilados`.
+ */
+function taparTickers(
+  log: (...a: unknown[]) => void,
+  vigilados: Vigilado[],
+): (...a: unknown[]) => void {
+  const simbolos = vigilados
+    .flatMap((v) => [v.ticker, v.quoteSymbol])
+    .filter((s): s is string => Boolean(s));
+  if (simbolos.length === 0) return log;
+
+  const escapado = simbolos.map((s) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&"));
+  const re = new RegExp(`\\b(?:${escapado.join("|")})\\b`, "gi");
+  return (...a: unknown[]) =>
+    log(...a.map((x) => (typeof x === "string" ? x.replace(re, "•••") : x)));
+}
+
 export async function collectEvents(
   config: Config,
   opts: { retrievedAt: string; log?: (...a: unknown[]) => void },
 ): Promise<Collected> {
-  const log = opts.log ?? (() => {});
+  const logCrudo = opts.log ?? (() => {});
   const retrievedAt = opts.retrievedAt;
-  const vigilados = await watchlistEfectiva(config, log);
+  const vigilados = await watchlistEfectiva(config, logCrudo);
+  // El repositorio es publico y los logs de Actions tambien: cualquiera puede
+  // leer la salida de cada ciclo. Los errores de Yahoo y de EDGAR llevan el
+  // simbolo dentro del mensaje, asi que sin tapar esto la watchlist se
+  // publicaria sola cada quince minutos — justo el dato que vive en Neon para
+  // no estar aqui. Se tapa en la salida y no fuente por fuente, para que una
+  // fuente nueva no tenga que acordarse.
+  const log = taparTickers(logCrudo, vigilados);
   const tasks: Task[] = [];
 
   // ── FRED ───────────────────────────────────────────────────────────────────
@@ -135,10 +166,12 @@ export async function collectEvents(
   // ── Precios ────────────────────────────────────────────────────────────────
   // Una tarea por valor y no una sola: si Yahoo se atraganta con un símbolo, se
   // pierde ese y no la cartera entera.
-  for (const v of vigilados.filter((x) => x.vigilarPrecio)) {
+  const conPrecio = vigilados.filter((x) => x.vigilarPrecio);
+  for (const [i, v] of conPrecio.entries()) {
     const symbol = v.quoteSymbol ?? v.ticker;
     tasks.push({
-      name: `yahoo:${v.ticker}`,
+      // Numerada, no nombrada: el log es publico. Ver `taparTickers`.
+      name: `yahoo:#${i + 1}`,
       run: async () => {
         const c = await fetchCotizacion(symbol);
         const evento = movimientoEvent(c, {
