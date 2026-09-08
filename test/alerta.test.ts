@@ -59,6 +59,27 @@ describe("formato de la alerta", () => {
     expect(t).not.toContain("servicios., ");
   });
 
+  it("no deja la etiqueta colgando si la lista se queda vacia al limpiarla", () => {
+    const vacia = { ...analysis, what_to_watch: [".", "", "  "] };
+    const t = formatAlert(event, scoring, vacia);
+    expect(t).not.toContain("Qué vigilar ahora");
+  });
+
+  it("descarta los elementos basura sin dejar separadores sueltos", () => {
+    const sucia = { ...analysis, what_to_watch: ["US 2Y", ".", "US 10Y"] };
+    const t = formatAlert(event, scoring, sucia);
+    expect(t).toContain("Qué vigilar ahora: US 2Y · US 10Y");
+  });
+
+  it("omite los activos sin simbolo", () => {
+    const sinSimbolo = {
+      ...analysis,
+      affected_assets: [{ symbol: "  ", direction: "up" as const, confidence: 2 }],
+    };
+    const t = formatAlert(event, scoring, sinSimbolo);
+    expect(t).not.toContain("Activos afectados");
+  });
+
   it("declara la base cuando la sorpresa no es contra consenso", () => {
     const sinConsenso = {
       ...event,

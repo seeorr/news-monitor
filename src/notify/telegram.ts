@@ -53,17 +53,17 @@ export function formatAlert(
 
   if (analysis) {
     lines.push(`Por qué importa: ${analysis.why_it_matters}`);
-    if (analysis.affected_assets.length > 0) {
-      const assets = analysis.affected_assets
-        .map((a) => `${a.symbol} ${arrows(a.direction, a.confidence)}`)
-        .join(", ");
-      lines.push(`Activos afectados: ${assets}`);
-    }
-    if (analysis.what_to_watch.length > 0) {
-      // El modelo escribe cada punto como una frase, con su punto final. Unirlos
-      // con comas produce "vivienda y servicios., La variación...". Se limpian.
-      lines.push(`Qué vigilar ahora: ${analysis.what_to_watch.map(limpiar).join(" · ")}`);
-    }
+    const assets = analysis.affected_assets
+      .filter((a) => limpiar(a.symbol) !== "")
+      .map((a) => `${limpiar(a.symbol)} ${arrows(a.direction, a.confidence)}`);
+    if (assets.length > 0) lines.push(`Activos afectados: ${assets.join(", ")}`);
+
+    // El modelo escribe cada punto como una frase con su punto final. Unirlos
+    // con comas produce "vivienda y servicios., La variación...". Se limpian, y
+    // se filtra DESPUÉS de limpiar: si no, un elemento que era solo un punto deja
+    // la etiqueta colgando sin nada detrás. Paso justo en la primera alerta real.
+    const vigilar = analysis.what_to_watch.map(limpiar).filter((x) => x !== "");
+    if (vigilar.length > 0) lines.push(`Qué vigilar ahora: ${vigilar.join(" · ")}`);
   } else {
     lines.push(`Resumen: ${scoring.one_liner}`);
   }
