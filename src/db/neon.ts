@@ -18,13 +18,13 @@ export function neonSeenStore(databaseUrl: string): SeenStore {
   const mark = async (event: NormalizedEvent): Promise<void> => {
     await sql`
       insert into events (
-        id, source, source_url, kind, title, country, series_id,
+        id, source, source_url, kind, title, summary, country, series_id,
         observed_at, retrieved_at,
         actual, previous, consensus, unit, surprise_value, surprise_basis,
         stale, official
       ) values (
         ${event.id}, ${event.source}, ${event.source_url}, ${event.kind},
-        ${event.title}, ${event.country}, ${event.series_id},
+        ${event.title}, ${event.summary}, ${event.country}, ${event.series_id},
         ${event.observed_at}, ${event.retrieved_at},
         ${event.actual}, ${event.previous}, ${event.consensus}, ${event.unit},
         ${event.surprise?.value ?? null}, ${event.surprise?.basis ?? null},

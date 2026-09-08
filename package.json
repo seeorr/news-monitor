@@ -9,6 +9,8 @@
   },
   "scripts": {
     "start": "tsx src/main.ts",
+    "agenda": "tsx src/agenda.ts",
+    "watchlist": "tsx src/watchlist.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test",

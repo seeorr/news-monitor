@@ -49,3 +49,24 @@ export function applyRules(
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+/**
+ * ¿Se anuncia o solo se registra?
+ *
+ * De una fuente primaria —la Fed, el BCE, un documento ante la SEC, un dato de
+ * FRED— basta con que el modelo diga que merece aviso: quien publica ya ha
+ * filtrado. Un titular de prensa tiene que llegar al umbral por sí mismo.
+ *
+ * La diferencia apareció en cuanto entraron cinco feeds: con `needs_alert` como
+ * única condición, un "las acciones de X pesan por la inflación" de 6/10 se
+ * anunciaba igual que una decisión de tipos. Cuatro avisos así y se deja de
+ * mirar el teléfono, que es la única forma real de que este sistema falle.
+ */
+export function mereceAlerta(
+  event: NormalizedEvent,
+  scoring: { needs_alert: boolean; importance_score: number },
+  umbral: number,
+): boolean {
+  if (scoring.importance_score >= umbral) return true;
+  return event.official && scoring.needs_alert;
+}

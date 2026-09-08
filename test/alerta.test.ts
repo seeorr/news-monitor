@@ -9,6 +9,7 @@ const event: NormalizedEvent = {
   source_url: "https://fred.stlouisfed.org/series/CPIAUCSL",
   kind: "macro_release",
   title: "US CPI",
+  summary: null,
   country: "US",
   series_id: "CPIAUCSL",
   observed_at: "2026-08-01",

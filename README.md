@@ -13,18 +13,27 @@ contextualiza y explica**, y manda una alerta a Telegram. No es un agregador.
 
 ## Estado
 
-Bloque 1 (días 1-2) completo y con persistencia. El slice vertical funciona de
-punta a punta:
+Bloques 1 a 4 completos. Cuatro fuentes entran por el mismo contrato y el ciclo
+procesa N eventos por vuelta:
 
 ```
-FRED  →  normalización  →  filtro por reglas  →  dedupe  →  scoring (Haiku)
-                                                              ↓
-                    Telegram  ←  formato de alerta  ←  análisis (Opus, solo si importa)
-                                                              ↓
-                                                        Neon Postgres
+FRED (3 series)  ─┐
+feeds RSS/Atom   ─┤
+SEC EDGAR        ─┼→ evento normalizado → frescura → reglas → dedupe → agrupacion
+precios (Yahoo)  ─┘                                                        │
+                                                                           ▼
+                                                            scoring (Haiku, con techo)
+                                                                           │
+                              Telegram ← formato ← analisis (Opus, solo si importa)
+                                                                           │
+                                                                     Neon Postgres
 ```
 
-Falta el dashboard, y las fuentes son de momento solo FRED.
+Aparte del ciclo, una vez al dia: la **agenda macro** (`npm run agenda`), que
+dice lo que se publica esta semana. No pasa por la cascada porque no hay nada que
+interpretar en una lista de fechas.
+
+Falta el dashboard.
 
 ## Stack
 
@@ -42,9 +51,17 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 
 | Módulo | Qué hace |
 |---|---|
+| `src/schema/event.ts` | El contrato: `NormalizedEvent`. Toda fuente normaliza aquí |
 | `src/sources/fred.ts` | Lee FRED y normaliza. Calcula la variación interanual a partir de observaciones reales |
-| `src/schema/event.ts` | El contrato: `NormalizedEvent`. Toda fuente futura normaliza aquí |
-| `src/pipeline/rules.ts` | Paso 1 de la cascada: filtro gratis, sin LLM |
+| `src/sources/rss.ts` | Registro de feeds y conversión a eventos. Oficiales (Fed, BCE, SEC) y prensa |
+| `src/sources/sec-edgar.ts` | Documentos ante la SEC de la watchlist: resuelve ticker→CIK, filtra por tipo y reconoce los resultados por su apartado |
+| `src/sources/mercado.ts` | Precios de Yahoo. Solo es evento la sesion que se sale del umbral de ese valor |
+| `src/sources/calendario.ts` | Agenda macro desde FRED: que se publica y cuando |
+| `src/db/watchlist.ts` | La watchlist en Neon, con umbral por valor |
+| `src/lib/feed.ts` | Lector de RSS 2.0 y Atom sin dependencias: CDATA, entidades, prefijos |
+| `src/pipeline/collect.ts` | Recolecta todas las fuentes y corta por frescura. Una caída no tumba el ciclo |
+| `src/pipeline/rules.ts` | Paso 1 de la cascada: filtro gratis, sin LLM. Y la puerta de la alerta |
+| `src/pipeline/agrupar.ts` | La misma historia contada por cinco medios es una historia: se funde antes de gastar modelo |
 | `src/pipeline/seen.ts` | Idempotencia y registro de lo enviado. Interfaz común: archivo local o Neon |
 | `src/db/neon.ts` | Implementación en Postgres de esa interfaz |
 | `src/lib/sql.ts` | Trocea un archivo SQL en sentencias respetando cadenas y comentarios |
@@ -62,6 +79,14 @@ npm start                 # ciclo completo
 npm start -- --dry        # todo menos enviar a Telegram
 npm start -- --force      # ignora el registro de vistos
 npm run check             # typecheck + tests
+
+npm run agenda            # agenda macro de la semana a Telegram
+npm run agenda -- --dry   # la compone y la enseña, sin enviar
+
+npm run watchlist                     # que se vigila
+npm run watchlist -- add NVDA         # añadir (resuelve el CIK si hay SEC_USER_AGENT)
+npm run watchlist -- add EUNL --simbolo EUNL.DE --umbral 2
+npm run watchlist -- rm NVDA
 ```
 
 Sin credenciales el programa no falla a ciegas: dice **qué** falta, **para qué**
@@ -69,7 +94,8 @@ sirve y **dónde** conseguirlo, y sale con código 1.
 
 ## Producción
 
-`.github/workflows/monitor.yml` ejecuta el ciclo **cada 15 minutos**. Ese
+`.github/workflows/monitor.yml` ejecuta el ciclo **cada 15 minutos**, y
+`agenda.yml` manda la agenda macro **a las 06:30 UTC de lunes a viernes**. Ese
 intervalo solo es posible porque el repositorio es público: en uno privado, las
 2.880 ejecuciones al mes no caben en los 2.000 minutos del free tier.
 
@@ -85,6 +111,11 @@ la ejecución: un monitor que se cae en silencio es peor que no tener monitor.
 
 Los secretos que hay que dar de alta en el repositorio: `FRED_API_KEY`,
 `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` y `DATABASE_URL`.
+
+Tres más, opcionales, que **no pueden vivir en el código porque el repositorio es
+público**: `SEC_USER_AGENT` (el contacto que la SEC exige; sin él EDGAR responde
+403 y la fuente se salta), `SEC_WATCHLIST` y `WATCHLIST` (qué empresas se
+vigilan, que es exactamente el dato que dice en qué inviertes).
 
 ## Decisiones que condicionan el código
 
@@ -104,3 +135,31 @@ Los secretos que hay que dar de alta en el repositorio: `FRED_API_KEY`,
   un número que no está en los datos, se reintenta una vez y, si insiste, se envía
   el resumen corto del scoring. Callarse justo cuando hay noticia es el peor
   resultado posible.
+- **Una fuente caída no tumba el ciclo, y un evento fallido no tumba a los que
+  quedan.** Se recogen todas las fuentes, se dice cuál falló y se sigue. El
+  siguiente evento puede ser el que importaba.
+- **Hay techo de llamadas al modelo por ciclo.** El cron corre cada 15 minutos y
+  un feed suelta treinta elementos el primer día. Se atiende lo más reciente y el
+  resto espera a la vuelta siguiente, que llega en un cuarto de hora.
+- **El corte por antigüedad no se aplica a los datos macro.** Un titular de hace
+  una semana no es noticia; el IPC de agosto lleva fecha del 1 de agosto y se
+  publica a mediados de septiembre. Ahí la novedad la decide el registro de
+  vistos, no el calendario.
+- **De prensa solo se anuncia lo que llega al umbral.** De una fuente primaria
+  basta con que el modelo lo pida. Cuatro avisos de relleno y se deja de mirar el
+  teléfono: es la forma real en que un monitor deja de servir.
+- **La misma historia contada por cinco medios es una historia.** Se agrupa por
+  parecido de titulares —Jaccard sobre palabras, no un modelo— antes de puntuar.
+  El umbral (0,6) está calibrado con titulares reales: con 0,5 se fundían "Best
+  CD rates" y "Best high-yield savings rates", que son cosas distintas.
+- **La agenda descarta lo que aparece a diario.** FRED marca el comunicado del
+  FOMC y los tipos del BCE como publicación de todos los días. No son citas: son
+  series continuas, y anunciarlas cada mañana vacía la agenda de sentido. Esas
+  decisiones ya entran por los feeds de prensa de la Fed y del BCE.
+- **La watchlist vive en Neon, no en el entorno.** Dice en qué invierte su dueño,
+  y en un repositorio público eso no puede estar ni en el código ni a la vista.
+  Además cada valor lleva su propio umbral de movimiento: un 3 % en una utility
+  no es lo mismo que un 3 % en una biotecnológica.
+- **De los resultados nos enteramos por el apartado 2.02 de un 8-K.** Es la vía
+  gratuita y oficial: los calendarios de earnings de pago no hacen falta para
+  saber que una empresa acaba de presentar cuentas.

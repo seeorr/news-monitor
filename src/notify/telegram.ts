@@ -33,6 +33,7 @@ export function formatAlert(
   event: NormalizedEvent,
   scoring: Scoring,
   analysis: Analysis | null,
+  opts: { tambien?: string[] } = {},
 ): string {
   const unit = event.unit ?? "";
   const lines: string[] = ["🚨 MARKET ALERT", `${event.country ?? ""} ${event.title}`.trim()];
@@ -68,12 +69,46 @@ export function formatAlert(
     lines.push(`Resumen: ${scoring.one_liner}`);
   }
 
+  // Que tres medios cuenten lo mismo es información: dice que la historia corre.
+  // Y explica por qué llega un solo aviso y no tres.
+  if (opts.tambien && opts.tambien.length > 0) {
+    lines.push(`También lo cuentan: ${opts.tambien.join(", ")}`);
+  }
+
   if (event.stale) {
     lines.push("⚠️ Dato obsoleto: es el último válido conocido, no uno fresco.");
   }
-  lines.push(`Fuente: ${event.source_url ?? event.source} · dato de ${event.observed_at}`);
+  lines.push(
+    `Fuente: ${event.source_url ?? event.source} · ${ETIQUETA_FECHA[event.kind]} ${fecha(event.observed_at)}`,
+  );
 
   return lines.join("\n");
+}
+
+/**
+ * Un dato macro se fecha por el periodo al que se refiere; una noticia, por
+ * cuándo se publicó. Decir "dato de" delante del instante de publicación de un
+ * titular confunde las dos cosas, y esa confusión es justo la que el contrato
+ * separa en `observed_at` y `retrieved_at`.
+ */
+const ETIQUETA_FECHA: Record<NormalizedEvent["kind"], string> = {
+  macro_release: "dato de",
+  news: "publicado",
+  filing: "presentado",
+  market_move: "visto",
+  calendar: "agenda del",
+};
+
+/**
+ * Fecha legible. Un instante ISO se queda en minutos y en UTC —la hora local de
+ * quien lee no la sabemos, y fingirla sería inventar—; una fecha sin hora se
+ * imprime tal cual, porque el dato no tiene más precisión que esa.
+ */
+export function fecha(observedAt: string): string {
+  if (!observedAt.includes("T")) return observedAt;
+  const t = Date.parse(observedAt);
+  if (!Number.isFinite(t)) return observedAt;
+  return new Date(t).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 }
 
 /** Quita el punto final y los espacios de un elemento de lista. */

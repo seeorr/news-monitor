@@ -137,6 +137,8 @@ export function toEvent(
     source_url: `https://fred.stlouisfed.org/series/${spec.id}`,
     kind: "macro_release",
     title: spec.title,
+    // Un dato macro es su cifra: no hay entradilla que resumir.
+    summary: null,
     country: spec.country,
     series_id: spec.id,
     observed_at: latest.date,

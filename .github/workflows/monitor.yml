@@ -39,6 +39,22 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # La SEC exige un contacto en el User-Agent; la watchlist dice en que
+          # invierte Alberto. Las dos son secretos porque el repositorio es publico.
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_WATCHLIST: ${{ secrets.SEC_WATCHLIST }}
+          WATCHLIST: ${{ secrets.WATCHLIST }}
+          # Ajustes sin tocar el codigo: son "variables" del repositorio, no
+          # secretos, porque no esconden nada. Vacias, mandan los valores por
+          # defecto del codigo. Se cambian en Settings -> Secrets and variables
+          # -> Actions -> Variables, o con `gh variable set ALERT_THRESHOLD`.
+          ALERT_THRESHOLD: ${{ vars.ALERT_THRESHOLD }}
+          DEEP_ANALYSIS_THRESHOLD: ${{ vars.DEEP_ANALYSIS_THRESHOLD }}
+          MAX_SCORING_PER_CYCLE: ${{ vars.MAX_SCORING_PER_CYCLE }}
+          MAX_DEEP_PER_CYCLE: ${{ vars.MAX_DEEP_PER_CYCLE }}
+          MAX_ITEM_AGE_HOURS: ${{ vars.MAX_ITEM_AGE_HOURS }}
+          GROUP_THRESHOLD: ${{ vars.GROUP_THRESHOLD }}
+          RSS_FEEDS: ${{ vars.RSS_FEEDS }}
 
       # Un monitor que se cae en silencio es peor que no tener monitor: crees
       # que no pasa nada en los mercados cuando lo que pasa es que no corre.

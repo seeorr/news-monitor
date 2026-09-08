@@ -1,0 +1,279 @@
+{
+ "realtime_start": "2026-09-08",
+ "realtime_end": "2026-09-18",
+ "order_by": "release_date",
+ "sort_order": "asc",
+ "count": 45,
+ "release_dates": [
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-08"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-08"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-08"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-08"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-09"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-09"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-09"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-09"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 46,
+   "release_name": "Producer Price Index",
+   "release_last_updated": "2026-08-13 13:10:13-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 180,
+   "release_name": "Unemployment Insurance Weekly Claims Report",
+   "release_last_updated": "2026-09-03 07:34:23-05",
+   "date": "2026-09-10"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-11"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-11"
+  },
+  {
+   "release_id": 10,
+   "release_name": "Consumer Price Index",
+   "release_last_updated": "2026-08-12 09:10:21-05",
+   "date": "2026-09-11"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-11"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-11"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-12"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-12"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-13"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-13"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-14"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-14"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-14"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-14"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-15"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-15"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-15"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-15"
+  },
+  {
+   "release_id": 9,
+   "release_name": "Advance Monthly Sales for Retail and Food Services",
+   "release_last_updated": "2026-08-14 07:35:26-05",
+   "date": "2026-09-16"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-16"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-16"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-16"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-16"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-17"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-17"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-17"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-17"
+  },
+  {
+   "release_id": 180,
+   "release_name": "Unemployment Insurance Weekly Claims Report",
+   "release_last_updated": "2026-09-03 07:34:23-05",
+   "date": "2026-09-17"
+  },
+  {
+   "release_id": 441,
+   "release_name": "Coinbase Cryptocurrencies",
+   "release_last_updated": "2026-09-07 19:05:26-05",
+   "date": "2026-09-18"
+  },
+  {
+   "release_id": 86,
+   "release_name": "Commercial Paper",
+   "release_last_updated": "2026-09-08 12:01:57-05",
+   "date": "2026-09-18"
+  },
+  {
+   "release_id": 101,
+   "release_name": "FOMC Press Release",
+   "release_last_updated": "2026-09-08 07:01:34-05",
+   "date": "2026-09-18"
+  },
+  {
+   "release_id": 484,
+   "release_name": "Key ECB Interest Rates",
+   "release_last_updated": "2026-09-08 06:47:31-05",
+   "date": "2026-09-18"
+  }
+ ]
+}

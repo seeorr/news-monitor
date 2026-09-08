@@ -14,7 +14,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { checkFabrication } from "../lib/fabrication.ts";
+import { checkFabrication, extractNumbers } from "../lib/fabrication.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
 export const Scoring = z.object({
@@ -70,21 +70,53 @@ export class FabricationError extends Error {
   }
 }
 
-/** Los datos que ve el modelo. Es también el universo de cifras que puede citar. */
+/** Cómo se le presenta cada clase de evento al modelo. */
+const TIPO: Record<NormalizedEvent["kind"], string> = {
+  macro_release: "dato macroeconomico",
+  news: "noticia de prensa",
+  filing: "documento presentado ante el regulador (SEC EDGAR)",
+  market_move: "movimiento de mercado",
+  calendar: "cita del calendario economico",
+};
+
+/**
+ * Los datos que ve el modelo. Es también el universo de cifras que puede citar.
+ *
+ * Sirve para las tres fuentes, y por eso **no imprime lo que el evento no tiene**.
+ * Un bloque de "Actual: n/d · Anterior: n/d · Consenso: n/d" delante de una
+ * noticia no informa de nada: es un formulario vacío que invita a rellenarlo.
+ */
 export function eventFacts(event: NormalizedEvent): string {
   const l = [
-    `Indicador: ${event.title}`,
-    `Pais/region: ${event.country ?? "n/d"}`,
-    `Fecha del dato: ${event.observed_at}`,
-    `Actual: ${fmt(event.actual)}${event.unit ?? ""}`,
-    `Anterior: ${fmt(event.previous)}${event.unit ?? ""}`,
-    `Consenso: ${event.consensus === null ? "no disponible (fuente gratuita no lo publica)" : fmt(event.consensus) + (event.unit ?? "")}`,
+    `Tipo: ${TIPO[event.kind]}`,
+    `Fuente: ${event.source}${event.official ? " (primaria/oficial)" : " (prensa, no oficial)"}`,
+    `Titular: ${event.title}`,
   ];
-  if (event.surprise) {
-    l.push(`Sorpresa: ${fmt(event.surprise.value)} ${event.surprise.unit} (frente a: ${event.surprise.basis})`);
+  if (event.summary) l.push(`Lo que dice la fuente: ${event.summary}`);
+  l.push(`Pais/region: ${event.country ?? "n/d"}`);
+  l.push(`Fecha del evento: ${event.observed_at}`);
+
+  const tieneCifras =
+    event.actual !== null || event.previous !== null || event.consensus !== null;
+
+  if (tieneCifras) {
+    const u = event.unit ?? "";
+    l.push(`Actual: ${fmt(event.actual)}${u}`);
+    l.push(`Anterior: ${fmt(event.previous)}${u}`);
+    l.push(
+      `Consenso: ${event.consensus === null ? "no disponible (fuente gratuita no lo publica)" : fmt(event.consensus) + u}`,
+    );
+    l.push(
+      event.surprise
+        ? `Sorpresa: ${fmt(event.surprise.value)} ${event.surprise.unit} (frente a: ${event.surprise.basis})`
+        : "Sorpresa: no calculable con los datos disponibles",
+    );
   } else {
-    l.push("Sorpresa: no calculable con los datos disponibles");
+    // Decirlo explícitamente evita la tentación contraria: que el modelo traiga
+    // de su memoria la cifra que aquí falta.
+    l.push("Este evento no trae cifras. No cites ninguna que no este en el texto de arriba.");
   }
+
   if (event.stale) l.push("AVISO: dato obsoleto, es el ultimo valido conocido.");
   return l.join("\n");
 }
@@ -93,9 +125,22 @@ function fmt(n: number | null): string {
   return n === null ? "n/d" : String(n);
 }
 
-/** Universo numérico permitido para el control anti-fabricación. */
+/**
+ * Universo numérico permitido para el control anti-fabricación.
+ *
+ * No son solo los campos estructurados: las cifras del titular y del resumen
+ * también son datos de entrada. Sin esto, una noticia que dice "recorta 25
+ * puntos básicos" haría saltar el control cuando el modelo la repite, que es
+ * precisamente lo que queremos que haga.
+ */
 export function allowedNumbers(event: NormalizedEvent): Array<number | null> {
-  return [event.actual, event.previous, event.consensus, event.surprise?.value ?? null];
+  return [
+    event.actual,
+    event.previous,
+    event.consensus,
+    event.surprise?.value ?? null,
+    ...extractNumbers(`${event.title} ${event.summary ?? ""}`),
+  ];
 }
 
 export interface CascadeDeps {
@@ -115,7 +160,7 @@ export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Pro
     messages: [
       {
         role: "user",
-        content: `Puntua la relevancia de mercado de este dato macro.\n\nDATOS:\n${eventFacts(event)}`,
+        content: `Puntua la relevancia de mercado de este evento.\n\nDATOS:\n${eventFacts(event)}`,
       },
     ],
     output_config: { format: zodOutputFormat(Scoring) },
@@ -149,7 +194,7 @@ export async function analyzeEvent(event: NormalizedEvent, deps: CascadeDeps): P
         {
           role: "user",
           content:
-            `${aviso}Explica por que importa este dato, que lo puede amplificar o revertir, ` +
+            `${aviso}Explica por que importa este evento, que lo puede amplificar o revertir, ` +
             `que activos se ven afectados y que hay que vigilar ahora.\n\nDATOS:\n${eventFacts(event)}`,
         },
       ],

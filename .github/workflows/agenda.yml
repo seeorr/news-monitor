@@ -1,0 +1,59 @@
+# La agenda macro de la semana, una vez al dia.
+#
+# Va aparte del monitor porque es otra cosa: el monitor reacciona a lo que ya ha
+# pasado, esto dice lo que va a pasar. Y porque una lista de fechas no necesita
+# ni modelo ni cascada, asi que no tiene sentido pagar el ciclo entero por ella.
+#
+# 06:30 UTC de lunes a viernes: antes de que abra Europa y muy antes de que
+# publiquen las agencias estadounidenses, que es cuando la lista sirve de algo.
+name: Agenda
+
+on:
+  schedule:
+    - cron: "30 6 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: agenda
+  cancel-in-progress: false
+
+jobs:
+  agenda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Enviar la agenda
+        run: npm run agenda
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENDA_DIAS: ${{ vars.AGENDA_DIAS }}
+
+      # Si la agenda no sale, hay que enterarse. Es el mismo motivo que en el
+      # monitor: un aviso que falla en silencio se confunde con un dia tranquilo.
+      - name: Avisar del fallo por Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Sin credenciales de Telegram: no se puede avisar del fallo."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=News Monitor: la agenda macro ha fallado. $RUN_URL" \
+            --data "disable_web_page_preview=true" > /dev/null
