@@ -10,6 +10,8 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "agenda": "tsx src/agenda.ts",
+    "regimen": "tsx src/regimen.ts",
+    "brief": "tsx src/brief.ts",
     "dashboard": "next dev",
     "dashboard:build": "next build",
     "watchlist": "tsx src/watchlist.ts",

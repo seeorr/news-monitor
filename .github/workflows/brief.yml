@@ -1,0 +1,45 @@
+# Genera el régimen y el resumen en Neon. No envía mensajes.
+# La activación de entregas se hace aparte, tras revisar una vista local.
+name: Resumen de mañana
+
+on:
+  schedule:
+    - cron: "19 6 * * 1-5"
+    - cron: "49 7 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: morning-brief
+  cancel-in-progress: false
+
+jobs:
+  preparar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Calcular y guardar régimen
+        id: regimen
+        continue-on-error: true
+        run: npm run regimen
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Preparar resumen con sus carencias
+        run: npm run brief
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Marcar régimen incompleto
+        if: steps.regimen.outcome == 'failure'
+        run: |
+          echo "Régimen incompleto o fallo de persistencia; revisar disponibilidad de datos y migraciones."
+          exit 1
