@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { actualizar, anadir, desdeEntorno, type Ejecutor } from "../src/db/watchlist.ts";
+import { interruptor, opcion } from "../src/watchlist.ts";
 
 /**
  * Un cliente SQL de mentira que solo apunta lo que se le pide.
@@ -124,5 +125,47 @@ describe("cambios sobre una fila que ya existe", () => {
     expect(await actualizar(URL_FALSA, "ACME", { umbral: 4 }, vacio)).toBe(false);
     const conFila: Ejecutor = async () => [{ ticker: "ACME" }];
     expect(await actualizar(URL_FALSA, "ACME", { umbral: 4 }, conFila)).toBe(true);
+  });
+});
+
+/**
+ * Los argumentos del comando `set`.
+ *
+ * Es lo unico de ese comando que puede fallar en silencio. `actualizar()` ya
+ * tiene sus pruebas; lo que no las tenia es la traduccion de banderas a los tres
+ * estados, y ahi vive el fallo caro: apagar la vigilancia de un valor sin
+ * haberlo pedido.
+ */
+describe("argumentos de set", () => {
+  const argv = (...args: string[]) => ["node", "watchlist.ts", "set", "ACME", ...args];
+
+  it("no pedir nada no es lo mismo que apagar", () => {
+    expect(interruptor("documentos", argv("--umbral", "5"))).toBeNull();
+    expect(interruptor("precio", argv("--umbral", "5"))).toBeNull();
+  });
+
+  it("enciende y apaga cuando se lo piden", () => {
+    expect(interruptor("documentos", argv("--con-documentos"))).toBe(true);
+    expect(interruptor("documentos", argv("--sin-documentos"))).toBe(false);
+  });
+
+  it("un interruptor no toca al otro", () => {
+    const a = argv("--sin-documentos");
+    expect(interruptor("documentos", a)).toBe(false);
+    expect(interruptor("precio", a)).toBeNull();
+  });
+
+  // Pedir las dos cosas a la vez no es una preferencia ambigua que resolver a
+  // ojo: es que quien lo escribio no sabe lo que quiere. Mejor parar.
+  it("con y sin a la vez es un error, no un empate", () => {
+    expect(() => interruptor("precio", argv("--con-precio", "--sin-precio"))).toThrow();
+  });
+
+  it("una opcion sin valor detras devuelve null y no la bandera siguiente", () => {
+    expect(opcion("umbral", argv("--umbral"))).toBeNull();
+  });
+
+  it("lee el valor de la opcion", () => {
+    expect(opcion("umbral", argv("--umbral", "8"))).toBe("8");
   });
 });
