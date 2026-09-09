@@ -25,28 +25,19 @@ import {
   type Analysis,
   type CascadeDeps,
 } from "./ai/cascade.ts";
-import { describeMissing, loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
+import { loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
 import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
-import { collectEvents, porFecha, recientes, taparTickers } from "./pipeline/collect.ts";
+import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
+import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import { fileSeenStore, type Puntuacion, type SeenStore } from "./pipeline/seen.ts";
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
 
-/**
- * La unica salida del proceso, y por eso es `let`.
- *
- * Se reasigna **una sola vez**, en cuanto la ingesta devuelve la watchlist que
- * de verdad se ha usado, para que a partir de ahi ningun ticker salga en claro.
- * No es una precaucion abstracta: el repositorio es publico y los logs de
- * Actions tambien, y de aqui abajo se imprime el titular de cada evento y el
- * cuerpo entero de la alerta. Un movimiento de precio se titula "ACME +4,20 % en
- * la sesion" y un documento "ACME · 8-K": el ticker va dentro del texto, no al
- * lado, asi que taparlo en el origen exigiria auditar cada fuente. Se tapa aqui,
- * que es por donde sale todo.
- */
-let log = (...a: unknown[]) => console.log(...a);
+// Seguro desde el arranque, incluso antes de cargar configuración y watchlist.
+const log = createLogger();
+let stage: LogStage = "startup";
 
 async function main(): Promise<number> {
   const dry = process.argv.includes("--dry");
@@ -56,60 +47,58 @@ async function main(): Promise<number> {
   const config = loadConfig();
   const missing = missingVars(config);
 
-  log("── News Monitor ──");
-  if (missing.length > 0) log(describeMissing(missing) + "\n");
+  log("CYCLE_START", { stage });
+  for (const variable of missing) {
+    // El logger valida también el nombre contra su enum cerrado en ejecución.
+    log("CONFIG_MISSING", { stage, count: missing.length, variable: variable.name as LogFields["variable"] });
+  }
 
   const seen = abrirEstado(config);
   const retrievedAt = new Date().toISOString();
 
   // ── Ingesta ────────────────────────────────────────────────────────────────
-  const { events, failures, ok, vigilados } = await collectEvents(config, { retrievedAt, log });
-  // Desde aqui, todo lo que se imprima pasa por la red. `collectEvents` tapa su
-  // propia salida porque conoce la watchlist antes que nadie; esta es la otra
-  // mitad, la que cubre el resto del ciclo.
-  log = taparTickers(log, vigilados);
+  stage = "collect";
+  const { events, failures, ok, vigilados } = await collectEvents(config, { retrievedAt, logger: log });
   if (ok === 0) {
-    log("\n✕ Ninguna fuente ha respondido. No hay nada que analizar: se aborta el ciclo.");
+    log("NO_SOURCES", { stage, failed: failures.length });
     return 1;
   }
   if (failures.length > 0) {
-    log(`· ${failures.length} fuente(s) caída(s); se sigue con las ${ok} que respondieron.`);
+    log("SOURCES_PARTIAL", { stage, failed: failures.length, ok });
   }
 
   // ── Frescura ───────────────────────────────────────────────────────────────
+  stage = "freshness";
   const frescos = recientes(events, { now: new Date(), maxAgeHours: config.maxItemAgeHours });
-  log(
-    `· ${events.length} evento(s) recogidos; ${frescos.length} dentro de las últimas ` +
-      `${config.maxItemAgeHours} h (un dato macro no caduca por fecha, un titular sí).`,
-  );
+  log("FRESHNESS", { stage, total: events.length, count: frescos.length });
 
   // ── Paso 1: reglas ─────────────────────────────────────────────────────────
   // La watchlist del filtro es la misma que la de la ingesta: si se vigila a una
   // empresa, su nombre en un titular también cuenta.
+  stage = "rules";
   const watchlist = vigilados.map((v) => v.ticker);
   const candidatos = frescos.filter((e) => applyRules(e, { watchlist }).pass);
-  log(
-    `· Filtro por reglas: pasan ${candidatos.length}, descartados ` +
-      `${frescos.length - candidatos.length} sin gastar una llamada al modelo.`,
-  );
+  log("RULES", { stage, count: candidatos.length, discarded: frescos.length - candidatos.length });
 
   // ── Paso 2: deduplicación ──────────────────────────────────────────────────
+  stage = "dedupe";
   const nuevos: NormalizedEvent[] = [];
   for (const event of porFecha(candidatos)) {
     if (force || !(await seen.has(event.id))) nuevos.push(event);
   }
-  log(`· Nuevos: ${nuevos.length} (${candidatos.length - nuevos.length} ya procesados).`);
+  log("DEDUPE", { stage, count: nuevos.length, discarded: candidatos.length - nuevos.length });
   if (nuevos.length === 0) return 0;
 
   // ── Paso 2b: la misma historia contada por varios ──────────────────────────
+  stage = "group";
   const grupos = agrupar(nuevos, { umbral: config.umbralAgrupacion });
   const fundidos = nuevos.length - grupos.length;
   if (fundidos > 0) {
-    log(`· ${fundidos} titular(es) eran la misma historia ya contada: un aviso, no varios.`);
+    log("GROUPED", { stage, count: grupos.length, discarded: fundidos });
   }
 
   if (!config.anthropicApiKey) {
-    log("\n✕ Sin ANTHROPIC_API_KEY no se puede puntuar nada. Se detiene aquí.");
+    log("SCORING_UNAVAILABLE", { stage: "scoring" });
     return 1;
   }
 
@@ -118,15 +107,12 @@ async function main(): Promise<number> {
     modelScoring: config.modelScoring,
     modelAnalysis: config.modelAnalysis,
     onFabrication: (intento, violations) =>
-      log(`  · Intento ${intento} descartado: ${violations.join("; ")}`),
+      log("FABRICATION_RETRY", { stage: "analysis", attempt: intento, count: violations.length }),
   };
 
   const porPuntuar = grupos.slice(0, config.maxScoringPerCycle);
   if (grupos.length > porPuntuar.length) {
-    log(
-      `· Techo del ciclo: se puntúan ${porPuntuar.length} y ${grupos.length - porPuntuar.length} ` +
-        "esperan a la vuelta siguiente. Lo más reciente va primero.",
-    );
+    log("SCORING_LIMIT", { stage: "scoring", count: porPuntuar.length, discarded: grupos.length - porPuntuar.length });
   }
 
   // ── Pasos 3 y 4, y alerta ──────────────────────────────────────────────────
@@ -134,7 +120,7 @@ async function main(): Promise<number> {
   let enviadas = 0;
   let fallidos = 0;
 
-  for (const grupo of porPuntuar) {
+  for (const [index, grupo] of porPuntuar.entries()) {
     try {
       const resultado = await procesar(grupo, {
         config,
@@ -151,14 +137,11 @@ async function main(): Promise<number> {
       // Un evento que revienta no puede llevarse por delante a los que quedan:
       // el siguiente puede ser el que importaba.
       fallidos++;
-      log(`✕ ${grupo.representante.id}: ${err instanceof Error ? err.message : String(err)}`);
+      log("EVENT_FAILED", { stage, source: grupo.representante.source, index: index + 1, error: err });
     }
   }
 
-  log(
-    `\n── Ciclo terminado: ${enviadas} alerta(s), ${profundos} análisis profundo(s), ` +
-      `${fallidos} evento(s) con error. ──`,
-  );
+  log("CYCLE_END", { stage: "cycle", sent: enviadas, deep: profundos, failed: fallidos });
 
   // Que no haya nada que contar es un final normal. Que fallara todo lo que se
   // intentó, no: eso tiene que salir en rojo y disparar el aviso del workflow.
@@ -178,10 +161,9 @@ async function procesar(
   { config, deps, seen, dry, analisisProfundo }: ProcesarDeps,
 ): Promise<{ enviada: boolean; deep: boolean }> {
   const event = grupo.representante;
+  stage = "scoring";
   const scoring = await scoreEvent(event, deps);
-  log(
-    `\n▸ ${event.title}\n  ${scoring.importance_score}/10 · ${scoring.sentiment} · ${event.source}`,
-  );
+  log("SCORED", { stage, source: event.source });
 
   const puntuacion: Puntuacion = {
     importance: scoring.importance_score,
@@ -191,7 +173,8 @@ async function procesar(
   };
 
   if (!mereceAlerta(event, scoring, config.alertThreshold)) {
-    log("  · No merece alerta. Registrado con su nota y a otra cosa.");
+    log("ALERT_SKIPPED", { stage, source: event.source });
+    stage = "persist";
     if (!dry) await marcarGrupo(seen, grupo, puntuacion);
     return { enviada: false, deep: false };
   }
@@ -199,46 +182,49 @@ async function procesar(
   let analysis: Analysis | null = null;
   if (scoring.importance_score >= config.deepAnalysisThreshold && analisisProfundo) {
     try {
+      stage = "analysis";
       analysis = await analyzeEvent(event, deps);
-      log(`  ✓ Análisis profundo (${config.modelAnalysis})`);
+      log("ANALYSIS_OK", { stage, source: event.source });
     } catch (err) {
       // Que el modelo se invente una cifra no puede tumbar el ciclo: se manda la
       // alerta corta, que es cierta, en vez de callarse. Cualquier otro error sí
       // sube: un fallo de red o de credenciales no debe pasar desapercibido.
       if (!(err instanceof FabricationError)) throw err;
-      log(`  · ${err.message}`);
-      log("    Se degrada al resumen del scoring: mejor corta y cierta que larga e inventada.");
+      log("ANALYSIS_FALLBACK", { stage, source: event.source });
     }
   } else if (scoring.importance_score >= config.deepAnalysisThreshold) {
-    log("  · Techo de análisis profundos del ciclo: va el resumen del scoring.");
+    log("ANALYSIS_LIMIT", { stage: "analysis", source: event.source });
   }
 
+  stage = "format";
   const text = formatAlert(event, scoring, analysis, { tambien: tambienLoCuentan(grupo) });
-  log("\n" + text + "\n");
+  log("ALERT_READY", { stage, source: event.source });
 
   if (dry) {
-    log("  --dry: no se envía ni se registra.");
+    log("DRY_RUN", { stage });
     return { enviada: false, deep: analysis !== null };
   }
   if (!config.telegramBotToken || !config.telegramChatId) {
-    log("  · Sin credenciales de Telegram: alerta compuesta pero no enviada. No se registra.");
+    log("TELEGRAM_MISSING", { stage: "telegram" });
     return { enviada: false, deep: analysis !== null };
   }
 
+  stage = "telegram";
   const sent = await sendTelegram(config.telegramBotToken, config.telegramChatId, text);
   if (!sent.ok) {
     // Sin registrar: se reintenta en la vuelta siguiente. Es preferible arriesgar
     // un duplicado a perder la alerta.
-    throw new Error(`Telegram rechazó el mensaje: ${sent.description ?? "sin detalle"}`);
+    throw new Error("TELEGRAM_REJECTED");
   }
 
   // `analysis` viaja entero a la base, además de formateado dentro de `text`.
   // Antes solo iba la prosa: se pagaba Opus por un análisis que la base no podía
   // consultar y la ficha de detalle no tenía de dónde sacar catalizadores,
   // riesgos ni activos afectados.
+  stage = "persist";
   await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text, analysis });
   await marcarDuplicados(seen, grupo);
-  log("  ✓ Enviada a Telegram y registrada.");
+  log("ALERT_SENT", { stage, source: event.source });
   return { enviada: true, deep: analysis !== null };
 }
 
@@ -266,17 +252,18 @@ async function marcarDuplicados(seen: SeenStore, grupo: Grupo): Promise<void> {
 
 /** El archivo local no sobrevive a un job de Actions: en producción manda Neon. */
 function abrirEstado(config: Config): SeenStore {
+  stage = "persist";
   if (config.databaseUrl) {
-    log("· Estado en Neon.");
+    log("STATE_OPEN", { stage, source: "neon" });
     return neonSeenStore(config.databaseUrl);
   }
-  log(`· Estado en ${config.stateDir}/seen.json (local; en Actions no persiste).`);
+  log("STATE_OPEN", { stage, source: "file" });
   return fileSeenStore(config.stateDir);
 }
 
 main()
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
-    console.error("✕ Error no controlado:", err);
+    log("UNHANDLED", { stage, error: err });
     process.exit(1);
   });

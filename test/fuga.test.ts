@@ -1,108 +1,308 @@
-import { describe, expect, it } from "vitest";
-import { taparTickers } from "../src/pipeline/collect.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Config } from "../src/config.ts";
 import type { Vigilado } from "../src/db/watchlist.ts";
+import type { CascadeDeps } from "../src/ai/cascade.ts";
+import type { LogCode, LogFields } from "../src/lib/log.ts";
 
-/**
- * La watchlist no puede salir en los logs de GitHub Actions.
- *
- * El repositorio es publico y sus logs tambien: cualquiera puede leer la salida
- * de cada ciclo. La primera version de esta red solo envolvia el log de la
- * ingesta, y dejaba fuera lo que `main.ts` imprime despues —el titular de cada
- * evento y el cuerpo entero de la alerta—, que es justo donde el ticker aparece
- * escrito con todas las letras.
- *
- * Los tickers de estas pruebas son inventados a proposito. En un repositorio
- * publico, un test que use la watchlist de verdad publica lo mismo que la fuga
- * que pretende impedir.
- */
-const vigilado = (ticker: string, quoteSymbol: string | null = null): Vigilado => ({
-  ticker,
-  nombre: null,
-  cik: null,
-  quoteSymbol,
-  vigilarFilings: true,
-  vigilarPrecio: true,
-  umbralMovimiento: 3,
+// Solo datos inventados. Se ejecutan main, collect, normalizadores y logger reales.
+// Los dobles se limitan a las fronteras de servicios: no red, LLM ni escrituras.
+const mocks = vi.hoisted(() => ({
+  config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
+  filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), fred: vi.fn(),
+  score: vi.fn(), analyze: vi.fn(), send: vi.fn(), state: vi.fn(),
+  seen: { has: vi.fn(), mark: vi.fn(), saveAlert: vi.fn() },
+}));
+vi.mock("../src/config.ts", async (original) => ({
+  ...await original<typeof import("../src/config.ts")>(),
+  loadConfig: mocks.config, loadDotEnv: mocks.dotenv,
+}));
+vi.mock("../src/db/watchlist.ts", async (original) => ({
+  ...await original<typeof import("../src/db/watchlist.ts")>(), leerWatchlist: mocks.watchlist,
+}));
+vi.mock("../src/sources/mercado.ts", async (original) => ({
+  ...await original<typeof import("../src/sources/mercado.ts")>(), fetchCotizacion: mocks.quote,
+}));
+vi.mock("../src/sources/sec-edgar.ts", async (original) => ({
+  ...await original<typeof import("../src/sources/sec-edgar.ts")>(),
+  fetchFilings: mocks.filings, resolveTickers: mocks.resolve,
+}));
+vi.mock("../src/sources/rss.ts", async (original) => ({
+  ...await original<typeof import("../src/sources/rss.ts")>(), fetchFeed: mocks.feed,
+}));
+vi.mock("../src/sources/fred.ts", async (original) => ({
+  ...await original<typeof import("../src/sources/fred.ts")>(), fetchObservations: mocks.fred,
+}));
+vi.mock("../src/ai/cascade.ts", async (original) => ({
+  ...await original<typeof import("../src/ai/cascade.ts")>(),
+  scoreEvent: mocks.score, analyzeEvent: mocks.analyze,
+}));
+vi.mock("../src/notify/telegram.ts", async (original) => ({
+  ...await original<typeof import("../src/notify/telegram.ts")>(), sendTelegram: mocks.send,
+}));
+vi.mock("../src/db/neon.ts", () => ({ neonSeenStore: mocks.state }));
+vi.mock("../src/pipeline/seen.ts", async (original) => ({
+  ...await original<typeof import("../src/pipeline/seen.ts")>(), fileSeenStore: mocks.state,
+}));
+
+const PRIVATE = "^INDX A.C GLOBX.DE North Example Holdings 0000123456";
+const URL = "https://www.sec.gov/Archives/edgar/data/123456/000012345626000001/doc.htm";
+const SECRET = "clave-sintetica-no-publicable";
+const payload = `${PRIVATE} ${URL} ${SECRET}`;
+const vigilado = (ticker = "A.C"): Vigilado => ({
+  ticker, nombre: "North Example Holdings", cik: "0000123456", quoteSymbol: "^INDX",
+  vigilarFilings: false, vigilarPrecio: true, umbralMovimiento: 3,
+});
+const config = (): Config => ({
+  anthropicApiKey: SECRET, fredApiKey: null, telegramBotToken: SECRET,
+  telegramChatId: SECRET, databaseUrl: `postgres://user:${SECRET}@invalid.test/db`,
+  secUserAgent: SECRET, secWatchlist: [], watchlist: [], feeds: [payload], edgarForms: [],
+  maxItemAgeHours: 72, maxScoringPerCycle: 12, maxDeepPerCycle: 3, agendaDias: 7,
+  umbralAgrupacion: 0.6, modelScoring: SECRET, modelAnalysis: SECRET,
+  deepAnalysisThreshold: 7, alertThreshold: 7, stateDir: payload,
 });
 
-function capturar(vigilados: Vigilado[]) {
-  const salida: string[] = [];
-  const log = taparTickers((...a: unknown[]) => salida.push(a.map(String).join(" ")), vigilados);
-  return { salida, log };
+beforeEach(() => {
+  vi.resetModules();
+  vi.resetAllMocks();
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Red no autorizada en fuga.test"); }));
+  mocks.config.mockReturnValue(config());
+  mocks.watchlist.mockResolvedValue([vigilado()]);
+  mocks.quote.mockResolvedValue({ symbol: "^INDX", currency: "USD", price: 110,
+    previousClose: 100, sessionDate: new Date().toISOString() });
+  mocks.resolve.mockResolvedValue({ companies: [], unknown: [PRIVATE] });
+  mocks.filings.mockResolvedValue([]);
+  mocks.feed.mockResolvedValue([]);
+  mocks.state.mockReturnValue(mocks.seen);
+  mocks.seen.has.mockResolvedValue(false);
+  mocks.score.mockResolvedValue({ importance_score: 8, market_impact_score: 8,
+    sentiment: "bullish", needs_alert: true, one_liner: `Prosa scoring ${payload}` });
+  mocks.analyze.mockResolvedValue({ why_it_matters: `Prosa profunda ${payload}`,
+    catalysts: [payload], risks: [payload], affected_assets: [], what_to_watch: [payload] });
+  mocks.send.mockResolvedValue({ ok: true });
+});
+afterEach(() => {
+  expect(fetch).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+function sinFugas(lines: string[]) {
+  const text = lines.join("\n");
+  for (const value of ["^INDX", "A.C", "GLOBX.DE", "North Example Holdings", "0000123456",
+    "123456", "sec.gov", SECRET, "Prosa scoring", "Prosa profunda", "MARKET ALERT"]) {
+    expect(text).not.toContain(value);
+  }
+  expect(lines.length).toBeGreaterThan(0);
+  for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
 }
 
-describe("la watchlist no sale en los logs", () => {
-  // El titulo de un movimiento de precio empieza por el ticker. Es la primera
-  // linea que se publicaria en cuanto un valor se saliera de su umbral.
-  it("tapa el ticker en el titulo de un movimiento de precio", () => {
-    const { salida, log } = capturar([vigilado("ACME")]);
-    log("▸ ACME +4,20 % en la sesión");
-    expect(salida[0]).not.toContain("ACME");
-    expect(salida[0]).toContain("•••");
+async function ejecutarMain(dry = true) {
+  const salida: string[] = [];
+  vi.spyOn(console, "log").mockImplementation((...args) => salida.push(args.map(String).join(" ")));
+  const error = vi.spyOn(console, "error").mockImplementation((...args) => salida.push(args.map(String).join(" ")));
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "main.ts", ...(dry ? ["--dry"] : [])]);
+  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  await import("../src/main.ts");
+  await vi.waitFor(() => expect(exit).toHaveBeenCalledTimes(1));
+  expect(error).not.toHaveBeenCalled();
+  sinFugas(salida);
+  return { records: salida.map((line) => JSON.parse(line)), exit };
+}
+
+describe.each(["true", ""])("logger real, GITHUB_ACTIONS=%s", (actions) => {
+  it("solo publica vocabulario permitido, sin depender de la watchlist", async () => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    const { createLogger } = await import("../src/lib/log.ts");
+    const lines: string[] = [];
+    const log = createLogger((line) => lines.push(line));
+    for (const value of [payload, `(^INDX), /%5EINDX?token=${SECRET}`, new Error(payload),
+      { ticker: "^INDX", empresa: "North Example Holdings", nested: { url: URL, key: SECRET } }]) {
+      // Simula un llamante JS o un cast: no basta con que el tipo sea cerrado.
+      log(value as LogCode, { source: payload, stage: payload, title: payload,
+        body: payload, count: SECRET } as unknown as LogFields);
+    }
+    log("SOURCE_OK", { source: "yahoo", stage: "collect", index: 1, count: 2 });
+    sinFugas(lines);
+    expect(lines.slice(0, 4).map((line) => JSON.parse(line))).toEqual(Array(4).fill({ code: "LOG_SUPPRESSED" }));
+    expect(JSON.parse(lines[4]!)).toEqual({ code: "SOURCE_OK", source: "yahoo",
+      stage: "collect", index: 1, count: 2 });
   });
 
-  it("tapa el ticker en el titulo de un documento de la SEC", () => {
-    const { salida, log } = capturar([vigilado("ACME")]);
-    log("▸ ACME · 8-K — resultados");
-    expect(salida[0]).not.toContain("ACME");
+  it("descarta Error, objetos anidados, ciclos y hooks sin ejecutarlos", async () => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    const { createLogger } = await import("../src/lib/log.ts");
+    const lines: string[] = [];
+    const log = createLogger((line) => lines.push(line));
+    const hook = vi.fn(() => { throw new Error(payload); });
+    const nested: Record<string, unknown> = { url: URL, secret: SECRET, toJSON: hook, toString: hook };
+    nested.self = nested;
+    Object.defineProperty(nested, "status", { get: hook });
+    const error = Object.assign(new Error(payload, { cause: nested }), { body: payload, code: payload });
+    log("SOURCE_FAILED", { stage: "collect", error });
+    log("UNHANDLED", { stage: "startup", error: nested });
+    log("UNHANDLED", nested as LogFields);
+    sinFugas(lines);
+    expect(hook).not.toHaveBeenCalled();
+    expect(JSON.parse(lines[0]!)).toEqual({ code: "SOURCE_FAILED", stage: "collect", error: "UNKNOWN" });
   });
 
-  // El cuerpo de la alerta es el texto largo, con el ticker repetido dentro de
-  // la prosa del analisis. Es la fuga mas grande de todas.
-  it("tapa el ticker dentro del cuerpo entero de la alerta", () => {
-    const { salida, log } = capturar([vigilado("ACME")]);
-    log(
-      "🚨 MARKET ALERT\n🌐 ACME sube un 4 %\nActivos afectados: ACME 🟢🟢, GLOBX 🟢\n" +
-        "Qué vigilar ahora: el próximo 8-K de ACME",
+  it("conserva HTTP y códigos SQL/red permitidos; ignora mensajes y códigos arbitrarios", async () => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    const { createLogger } = await import("../src/lib/log.ts");
+    const { HttpError } = await import("../src/lib/http.ts");
+    const lines: string[] = [];
+    const log = createLogger((line) => lines.push(line));
+    log("SOURCE_FAILED", { error: new HttpError(payload, 503, payload), source: "fred", stage: "collect" });
+    log("WATCHLIST_FAILED", { error: Object.assign(new Error(payload), { code: "42P01" }) });
+    log("SOURCE_FAILED", { error: { code: "ETIMEDOUT", message: payload } });
+    log("SOURCE_FAILED", { error: { status: SECRET, code: SECRET, body: payload } });
+    sinFugas(lines);
+    expect(JSON.parse(lines[0]!)).toEqual({ code: "SOURCE_FAILED", source: "fred", stage: "collect", error: "HTTP", status: 503 });
+    expect(JSON.parse(lines[1]!).error).toBe("42P01");
+    expect(JSON.parse(lines[2]!).error).toBe("ETIMEDOUT");
+    expect(JSON.parse(lines[3]!).error).toBe("UNKNOWN");
+  });
+
+  it("solo acepta nombres de configuración del enum y conteos enteros", async () => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    const { createLogger } = await import("../src/lib/log.ts");
+    const lines: string[] = [];
+    const log = createLogger((line) => lines.push(line));
+    log("CONFIG_MISSING", { variable: "DATABASE_URL", count: 1 });
+    log("CONFIG_MISSING", { variable: payload, count: NaN, total: Infinity,
+      failed: -1, index: 1.2, body: payload } as unknown as LogFields);
+    sinFugas(lines);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      { code: "CONFIG_MISSING", variable: "DATABASE_URL", count: 1 },
+      { code: "CONFIG_MISSING" },
+    ]);
+  });
+});
+
+describe("bordes reales de collect", () => {
+  it("protege el fallo SQL antes de conocer la lista y usa el respaldo", async () => {
+    const { watchlistEfectiva } = await import("../src/pipeline/collect.ts");
+    mocks.watchlist.mockRejectedValue(Object.assign(new Error(payload), { code: "28P01", query: payload }));
+    const lines: string[] = [];
+    const cfg = { ...config(), watchlist: ["^INDX"] };
+    const result = await watchlistEfectiva(cfg, (line) => lines.push(line));
+    expect(result[0]?.ticker).toBe("^INDX");
+    sinFugas(lines);
+    expect(JSON.parse(lines[0]!)).toEqual({ code: "WATCHLIST_FAILED", source: "neon", stage: "watchlist", error: "28P01" });
+  });
+
+  it("protege errores Yahoo y EDGAR y conserva una fuente sana", async () => {
+    const { collectEvents } = await import("../src/pipeline/collect.ts");
+    const { HttpError } = await import("../src/lib/http.ts");
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarFilings: true }, vigilado("A.C")]);
+    mocks.filings.mockRejectedValue(new HttpError(payload, 403, payload));
+    mocks.quote.mockRejectedValueOnce({ response: payload, ticker: "^INDX", cause: new Error(payload) });
+    const lines: string[] = [];
+    const result = await collectEvents(config(), { retrievedAt: new Date().toISOString(), log: (line) => lines.push(line) });
+    sinFugas(lines);
+    expect(result.ok).toBe(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.failures).toHaveLength(2);
+    expect(JSON.stringify(result.failures)).not.toContain(SECRET);
+    expect(lines.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      { code: "SOURCE_FAILED", source: "sec-edgar", stage: "collect", index: 1, error: "HTTP", status: 403 },
+      { code: "SOURCE_FAILED", source: "yahoo", stage: "collect", index: 2, error: "UNKNOWN" },
+      { code: "SOURCE_OK", source: "yahoo", stage: "collect", index: 3, count: 1 },
+    ]));
+  });
+
+  it("solo cuenta los símbolos SEC desconocidos", async () => {
+    const { collectEvents } = await import("../src/pipeline/collect.ts");
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), cik: null, vigilarFilings: true, vigilarPrecio: false }]);
+    const lines: string[] = [];
+    await collectEvents(config(), { retrievedAt: new Date().toISOString(), log: (line) => lines.push(line) });
+    sinFugas(lines);
+    expect(lines.map((line) => JSON.parse(line))).toContainEqual({ code: "SEC_UNKNOWN", source: "sec-edgar", stage: "collect", count: 1 });
+  });
+});
+
+describe("consola del main real", () => {
+  it.each(["true", ""])("no imprime título, alerta ni prosa en --dry (Actions=%s)", async (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    const { records, exit } = await ejecutarMain();
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.score.mock.calls[0]?.[0].title).toContain("A.C");
+    expect(mocks.analyze).toHaveBeenCalledTimes(1);
+    expect(records).toContainEqual({ code: "ALERT_READY", source: "yahoo", stage: "format" });
+    expect(records).toContainEqual({ code: "DRY_RUN", stage: "format" });
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.seen.saveAlert).not.toHaveBeenCalled();
+    expect(mocks.seen.mark).not.toHaveBeenCalled();
+  });
+
+  it("no imprime un documento SEC con ^, nombre con espacios y CIK en URL", async () => {
+    mocks.watchlist.mockResolvedValue([{ ...vigilado("^INDX"), vigilarFilings: true, vigilarPrecio: false }]);
+    mocks.filings.mockResolvedValue([{ accession: "000012345626000001", formType: "8-K",
+      formName: payload, filedAt: new Date().toISOString(), url: URL, items: payload }]);
+    const { records, exit } = await ejecutarMain();
+    expect(mocks.score.mock.calls[0]?.[0]).toMatchObject({ source_url: URL, title: expect.stringContaining("^INDX"),
+      summary: expect.stringContaining("North Example Holdings") });
+    expect(records).toContainEqual({ code: "ALERT_READY", source: "sec-edgar", stage: "format" });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("indica todas las variables faltantes, nunca sus valores", async () => {
+    mocks.config.mockReturnValue({ ...config(), anthropicApiKey: null, fredApiKey: null,
+      telegramBotToken: null, telegramChatId: null, databaseUrl: null, secUserAgent: null });
+    const { records } = await ejecutarMain();
+    expect(records.filter((r) => r.code === "CONFIG_MISSING")).toEqual(
+      ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DATABASE_URL", "SEC_USER_AGENT"]
+        .map((variable) => ({ code: "CONFIG_MISSING", stage: "startup", count: 6, variable })),
     );
-    expect(salida[0]).not.toContain("ACME");
-    expect(salida[0]?.match(/•••/g)).toHaveLength(3);
-    // Lo que no está en la watchlist no se tapa: no es un dato personal.
-    expect(salida[0]).toContain("GLOBX");
   });
 
-  it("tapa tambien el simbolo de Yahoo, que no coincide con el ticker", () => {
-    const { salida, log } = capturar([vigilado("GLOBX", "GLOBX.DE")]);
-    log("✕ Yahoo no devolvió datos para GLOBX.DE");
-    expect(salida[0]).not.toContain("GLOBX.DE");
-    expect(salida[0]).not.toContain("GLOBX");
+  it("tapa violaciones y FabricationError sin perder el diagnóstico de degradación", async () => {
+    const { FabricationError } = await import("../src/ai/cascade.ts");
+    mocks.analyze.mockImplementation(async (_event, deps: CascadeDeps) => {
+      deps.onFabrication?.(1, [payload]);
+      throw new FabricationError(payload, [payload]);
+    });
+    const { records, exit } = await ejecutarMain();
+    expect(records).toContainEqual({ code: "FABRICATION_RETRY", stage: "analysis", count: 1, attempt: 1 });
+    expect(records).toContainEqual({ code: "ANALYSIS_FALLBACK", source: "yahoo", stage: "analysis" });
+    expect(records).toContainEqual({ code: "ALERT_READY", source: "yahoo", stage: "format" });
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it("no distingue mayusculas: un titular en minusculas filtraria igual", () => {
-    const { salida, log } = capturar([vigilado("ACME")]);
-    log("acme presenta resultados");
-    expect(salida[0]?.toLowerCase()).not.toContain("acme");
+  it.each([new Error(payload), { message: payload, nested: { token: SECRET } }])(
+    "protege errores por evento y termina con código de fallo", async (error) => {
+      mocks.score.mockRejectedValue(error);
+      const { records, exit } = await ejecutarMain();
+      expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "scoring", index: 1, error: "UNKNOWN" });
+      expect(exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it("protege el catch final antes de cargar configuración", async () => {
+    mocks.dotenv.mockImplementation(() => { throw new Error(payload); });
+    const { records, exit } = await ejecutarMain();
+    expect(records).toEqual([{ code: "UNHANDLED", stage: "startup", error: "UNKNOWN" }]);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(mocks.watchlist).not.toHaveBeenCalled();
   });
 
-  // Un ticker corto dentro de otra palabra no es una mencion. Taparlo dejaria el
-  // log ilegible sin proteger nada: "•••ción" no esconde a nadie.
-  it("solo tapa la palabra completa, no un trozo de otra palabra", () => {
-    const { salida, log } = capturar([vigilado("ON")]);
-    log("La sesión continúa monótona");
-    expect(salida[0]).toBe("La sesión continúa monótona");
+  it("protege el catch final en dedupe ante errores de objetos SQL", async () => {
+    mocks.seen.has.mockRejectedValue({ code: "42P01", query: payload, detail: payload });
+    const { records, exit } = await ejecutarMain();
+    expect(records).toContainEqual({ code: "UNHANDLED", stage: "dedupe", error: "42P01" });
+    expect(exit).toHaveBeenCalledWith(1);
   });
 
-  // Con la watchlist vacia no hay nada que tapar, y envolver por envolver
-  // costaria una expresion regular vacia que casaria con todo.
-  it("con la watchlist vacia devuelve el log tal cual", () => {
-    const { salida, log } = capturar([]);
-    log("nada que tapar");
-    expect(salida[0]).toBe("nada que tapar");
-  });
-
-  // Un ticker con punto o guion es un simbolo valido, y sus caracteres son
-  // metacaracteres de expresion regular: sin escapar, `A.C` casaria con `ABC`.
-  it("escapa los metacaracteres del simbolo", () => {
-    const { salida, log } = capturar([vigilado("A.C")]);
-    log("ABC no es A.C");
-    expect(salida[0]).toContain("ABC");
-    expect(salida[0]).not.toContain("A.C ");
-  });
-
-  it("no toca lo que no es texto", () => {
-    const salida: unknown[] = [];
-    const log = taparTickers((...a: unknown[]) => salida.push(a[0]), [vigilado("ACME")]);
-    log({ ticker: "ACME" });
-    expect(salida[0]).toEqual({ ticker: "ACME" });
+  it("protege la descripción de rechazo de Telegram (doble sin red)", async () => {
+    mocks.send.mockResolvedValue({ ok: false, description: payload });
+    const { records, exit } = await ejecutarMain(false);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0]?.[2]).toContain("Prosa profunda");
+    expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "telegram", index: 1, error: "UNKNOWN" });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(mocks.seen.saveAlert).not.toHaveBeenCalled();
   });
 });

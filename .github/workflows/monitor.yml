@@ -40,9 +40,9 @@
 # La consecuencia hay que decirla en voz alta y no esconderla dentro de un cron:
 # **este monitor NO avisa cada media hora.** Pide 48 disparos al dia y GitHub
 # entrega los que quiere, que historicamente han sido unos pocos. Lo que si
-# garantiza el sistema es que nada se pierde ni se duplica: el registro de vistos
-# y el indice unico de `alerts` hacen que un hueco solo retrase un aviso, nunca
-# lo borre.
+# hace el sistema es recordar lo procesado. Un hueco puede perder entradas que
+# desaparezcan del feed o superen 72 horas. El indice unico evita filas SQL
+# duplicadas, no un reenvio si Telegram acepta y luego falla el registro.
 #
 # Si algun dia la puntualidad importa mas que la pureza del coste cero, la salida
 # honesta es un disparador externo con free tier permanente que llame a

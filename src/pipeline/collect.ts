@@ -19,7 +19,7 @@ import {
   toEvents as filingEvents,
   type Company,
 } from "../sources/sec-edgar.ts";
-import { HttpError } from "../lib/http.ts";
+import { createLogger, type Logger } from "../lib/log.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
 export interface SourceFailure {
@@ -38,6 +38,7 @@ export interface Collected {
 
 interface Task {
   name: string;
+  source: "fred" | "rss" | "sec-edgar" | "yahoo";
   run: () => Promise<NormalizedEvent[]>;
 }
 
@@ -53,66 +54,35 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function watchlistEfectiva(
   config: Config,
-  log: (...a: unknown[]) => void = () => {},
+  sink: (line: string) => void = () => {},
+): Promise<Vigilado[]> {
+  return cargarWatchlist(config, createLogger(sink));
+}
+
+async function cargarWatchlist(
+  config: Config,
+  log: Logger,
 ): Promise<Vigilado[]> {
   if (config.databaseUrl) {
     try {
       const filas = await leerWatchlist(config.databaseUrl);
       if (filas.length > 0) return filas;
-      log("· Watchlist vacía en Neon: se usa la del entorno, si la hay.");
+      log("WATCHLIST_EMPTY", { stage: "watchlist", source: "neon" });
     } catch (err) {
-      log(`· No se pudo leer la watchlist de Neon (${String(err)}). Se usa la del entorno.`);
+      log("WATCHLIST_FAILED", { stage: "watchlist", source: "neon", error: err });
     }
   }
   return desdeEntorno(config.watchlist, config.secWatchlist);
 }
 
-/**
- * Envuelve el log para que ningun ticker de la watchlist salga en claro. Se
- * numeran las tareas de precios en vez de nombrarlas, pero los mensajes de
- * error los compone cada fuente y no hay forma de auditarlos uno a uno: esta
- * red se pone al final, donde el texto ya esta formado.
- *
- * En local, con la watchlist a la vista en Neon, se pierde poco: el numero de
- * tarea basta para saber cual fallo mirando el orden de `vigilados`.
- *
- * Se exporta porque **la red tiene que estar en el borde de salida del proceso,
- * no dentro de una funcion**. Puesta solo aqui cubria la ingesta y dejaba fuera
- * todo lo que `main.ts` imprime despues: el titular de cada evento y el cuerpo
- * entero de la alerta. Y los titulos de precios y de documentos llevan el ticker
- * dentro por construccion —"ACME +4,20 % en la sesion", "ACME · 8-K"—, asi que
- * la primera sesion que superara un umbral habria publicado el valor en un log
- * que cualquiera puede leer.
- */
-export function taparTickers(
-  log: (...a: unknown[]) => void,
-  vigilados: Vigilado[],
-): (...a: unknown[]) => void {
-  const simbolos = vigilados
-    .flatMap((v) => [v.ticker, v.quoteSymbol])
-    .filter((s): s is string => Boolean(s));
-  if (simbolos.length === 0) return log;
-
-  const escapado = simbolos.map((s) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&"));
-  const re = new RegExp(`\\b(?:${escapado.join("|")})\\b`, "gi");
-  return (...a: unknown[]) =>
-    log(...a.map((x) => (typeof x === "string" ? x.replace(re, "•••") : x)));
-}
-
 export async function collectEvents(
   config: Config,
-  opts: { retrievedAt: string; log?: (...a: unknown[]) => void },
+  opts: { retrievedAt: string; log?: (line: string) => void; logger?: Logger },
 ): Promise<Collected> {
-  const logCrudo = opts.log ?? (() => {});
+  const log = opts.logger ?? createLogger(opts.log ?? (() => {}));
   const retrievedAt = opts.retrievedAt;
-  const vigilados = await watchlistEfectiva(config, logCrudo);
-  // El repositorio es publico y los logs de Actions tambien: cualquiera puede
-  // leer la salida de cada ciclo. Los errores de Yahoo y de EDGAR llevan el
-  // simbolo dentro del mensaje, asi que sin tapar esto la watchlist se
-  // publicaria sola cada media hora — justo el dato que vive en Neon para
-  // no estar aqui. Se tapa en la salida y no fuente por fuente, para que una
-  // fuente nueva no tenga que acordarse.
-  const log = taparTickers(logCrudo, vigilados);
+  // Protegido incluso si Neon falla antes de devolver la lista.
+  const vigilados = await cargarWatchlist(config, log);
   const tasks: Task[] = [];
 
   // ── FRED ───────────────────────────────────────────────────────────────────
@@ -120,6 +90,7 @@ export async function collectEvents(
     for (const spec of Object.values(SERIES)) {
       tasks.push({
         name: `fred:${spec.id}`,
+        source: "fred",
         run: async () => {
           const raw = await fetchObservations(spec, config.fredApiKey!);
           const series = applyTransform(raw, spec);
@@ -134,11 +105,12 @@ export async function collectEvents(
   for (const id of elegidos) {
     const spec = FEEDS[id];
     if (!spec) {
-      log(`· Feed "${id}" no está en el registro: se ignora.`);
+      log("FEED_UNKNOWN", { stage: "collect", source: "rss", count: 1 });
       continue;
     }
     tasks.push({
       name: `rss:${spec.id}`,
+      source: "rss",
       run: async () => feedEvents(await fetchFeed(spec), spec, { retrievedAt }),
     });
   }
@@ -150,6 +122,7 @@ export async function collectEvents(
   if (conFilings.length > 0 && config.secUserAgent) {
     tasks.push({
       name: "sec-edgar",
+      source: "sec-edgar",
       run: async () => {
         const ua = config.secUserAgent!;
         const companies = await resolverEmpresas(conFilings, ua, log);
@@ -168,7 +141,7 @@ export async function collectEvents(
       },
     });
   } else if (conFilings.length > 0) {
-    log("· SEC EDGAR: hay watchlist pero falta SEC_USER_AGENT. Se salta la fuente.");
+    log("SEC_CONTACT_MISSING", { stage: "collect", source: "sec-edgar" });
   }
 
   // ── Precios ────────────────────────────────────────────────────────────────
@@ -178,8 +151,9 @@ export async function collectEvents(
   for (const [i, v] of conPrecio.entries()) {
     const symbol = v.quoteSymbol ?? v.ticker;
     tasks.push({
-      // Numerada, no nombrada: el log es publico. Ver `taparTickers`.
+      // Numerada, no nombrada: el diagnóstico no identifica la cartera.
       name: `yahoo:#${i + 1}`,
+      source: "yahoo",
       run: async () => {
         const c = await fetchCotizacion(symbol);
         const evento = movimientoEvent(c, {
@@ -198,16 +172,16 @@ export async function collectEvents(
   const failures: SourceFailure[] = [];
   let ok = 0;
 
-  for (const task of tasks) {
+  for (const [index, task] of tasks.entries()) {
     try {
       const nuevos = await task.run();
       events.push(...nuevos);
       ok++;
-      log(`✓ ${task.name}: ${nuevos.length} evento(s)`);
+      log("SOURCE_OK", { stage: "collect", source: task.source, index: index + 1, count: nuevos.length });
     } catch (err) {
-      const detail = err instanceof HttpError ? `${err.message} — ${err.body}` : String(err);
-      failures.push({ source: task.name, detail });
-      log(`✕ ${task.name} falló: ${detail}`);
+      // Tampoco devolver mensajes crudos que otro consumidor pudiera imprimir.
+      failures.push({ source: task.name, detail: "SOURCE_FAILED" });
+      log("SOURCE_FAILED", { stage: "collect", source: task.source, index: index + 1, error: err });
     }
   }
 
@@ -224,7 +198,7 @@ export async function collectEvents(
 async function resolverEmpresas(
   vigilados: Vigilado[],
   userAgent: string,
-  log: (...a: unknown[]) => void,
+  log: Logger,
 ): Promise<Company[]> {
   const listas: Company[] = vigilados
     .filter((v) => v.cik)
@@ -235,7 +209,7 @@ async function resolverEmpresas(
 
   const { companies, unknown } = await resolveTickers(pendientes, userAgent);
   if (unknown.length > 0) {
-    log(`· Tickers que la SEC no reconoce: ${unknown.join(", ")}. Se ignoran.`);
+    log("SEC_UNKNOWN", { stage: "collect", source: "sec-edgar", count: unknown.length });
   }
   return [...listas, ...companies];
 }
