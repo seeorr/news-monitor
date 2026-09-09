@@ -32,6 +32,7 @@ import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
 import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import { fileSeenStore, type Puntuacion, type SeenStore } from "./pipeline/seen.ts";
+
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
 
@@ -225,7 +226,44 @@ async function procesar(
   await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text, analysis });
   await marcarDuplicados(seen, grupo);
   log("ALERT_SENT", { stage, source: event.source });
+
+  await copiarAlGrupo(config, event, text);
   return { enviada: true, deep: analysis !== null };
+}
+
+/**
+ * La misma alerta, íntegra, al grupo compartido.
+ *
+ * **El grupo ve exactamente lo mismo que el chat privado**, y eso incluye los
+ * movimientos de precio y los documentos ante la SEC de la watchlist, que solo
+ * existen porque esos valores están vigilados. Es decisión explícita de Alberto,
+ * tomada con la fuga delante: el sistema revela **qué** empresas sigue, no
+ * **cuánto** tiene en cada una, y esa asimetría le vale.
+ *
+ * Se dice aquí porque es justo el tipo de cosa que dentro de seis meses parece
+ * un descuido. No lo es. Si algún día deja de valer, el sitio donde filtrar es
+ * este, y el criterio defendible sería "solo lo que el monitor habría marcado
+ * con la watchlist vacía".
+ *
+ * Va después de registrar el envío privado y no entre el envío y el registro: si
+ * el proceso muere durante estos quince segundos de red, la alerta privada ya
+ * está anotada y no se repite en la vuelta siguiente. El grupo es el destino
+ * secundario y paga él ese riesgo.
+ *
+ * Nada de lo que ocurra aquí puede tumbar el ciclo ni tocar el resultado de la
+ * alerta privada, que es la que importa: se registra qué pasó y se sigue. Un
+ * fallo se reintenta solo si el evento vuelve a alertar, cosa que no pasará —el
+ * registro de vistos ya lo tiene—, así que un rechazo del grupo es una alerta
+ * perdida **para el grupo** y hay que poder verlo en el log.
+ */
+async function copiarAlGrupo(config: Config, event: NormalizedEvent, text: string): Promise<void> {
+  if (!config.telegramGroupChatId || !config.telegramBotToken) return;
+  try {
+    const copia = await sendTelegram(config.telegramBotToken, config.telegramGroupChatId, text);
+    log(copia.ok ? "GROUP_SENT" : "GROUP_REJECTED", { stage: "telegram", source: event.source });
+  } catch (err) {
+    log("GROUP_FAILED", { stage: "telegram", source: event.source, error: err });
+  }
 }
 
 /**

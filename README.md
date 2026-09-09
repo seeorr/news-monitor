@@ -106,6 +106,10 @@ npm run check             # typecheck + tests
 npm run agenda            # agenda macro de la semana a Telegram
 npm run agenda -- --dry   # la compone y la enseña, sin enviar
 
+npm run brief                  # compone el resumen y lo guarda en Neon
+npm run brief -- --send        # además lo entrega a los destinos configurados
+npm run brief -- --dry --preview   # dos vistas locales, sin escribir ni enviar
+
 npm run watchlist                     # que se vigila
 npm run watchlist -- add NVDA         # añadir (resuelve el CIK si hay SEC_USER_AGENT)
 npm run watchlist -- add EUNL --simbolo EUNL.DE --umbral 2
@@ -140,7 +144,8 @@ Actions. Para una vuelta manual: `gh workflow run monitor.yml`.
 
 Secretos: `FRED_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`,
 `TELEGRAM_CHAT_ID` y `DATABASE_URL`. `SEC_USER_AGENT` es el contacto exigido
-por la SEC. La watchlist vive en Neon; las variables de watchlist son respaldo.
+por la SEC. `TELEGRAM_GROUP_CHAT_ID` es **opcional** y activa el grupo
+compartido. La watchlist vive en Neon; las variables de watchlist son respaldo.
 
 ### Régimen y resumen matinal
 
@@ -159,11 +164,57 @@ operación. Cada fotografía guarda las observaciones usadas, las fechas y las
 reglas para recalcularla.
 
 `npm run brief -- --dry --preview` compone el resumen: eventos ya puntuados de
-las últimas 24 horas, agenda y régimen. La vista queda en
-`.cache/morning-brief.txt`. Sin `--dry`, se guarda en `daily_briefs`.
-El envío requiere `--send` explícito. El workflow `brief.yml` sólo genera y
-guarda; no tiene credenciales de Telegram ni activa entregas. Sus horarios
-siguen dependiendo de GitHub. Aplicar `npm run db:migrate` antes de activarlo.
+las últimas 24 horas, agenda y régimen. Deja **dos** vistas locales,
+`.cache/morning-brief.txt`, que es literalmente lo que se va a publicar en los
+dos destinos. Sin `--dry` se guarda en `daily_briefs`; con `--send` se
+entrega. El workflow `brief.yml` corre `npm run brief -- --send`, así que el
+resumen **se envía siempre**, no sólo se guarda. Sus horarios siguen dependiendo
+de GitHub y el segundo disparo del día encuentra el resumen ya entregado y sale
+`blocked`, que no es un fallo. Aplicar `npm run db:migrate` antes de activarlo.
+
+### El grupo compartido
+
+`TELEGRAM_GROUP_CHAT_ID` es opcional y añade un **segundo destino** para
+compartir noticias con otras personas. Sin esa variable no hay grupo y todo se
+comporta igual que antes: ni fila de más en `daily_briefs`, ni envío de más, ni
+fallo del job.
+
+**El grupo recibe exactamente lo mismo que el chat privado**, sin filtrar. Eso
+incluye lo que delata la cartera: un `ACME +4,2 % en la sesión` o un
+`ACME · 8-K` solo existen porque ACME está en la watchlist, porque los precios y
+los documentos solo se consultan de lo que se vigila.
+
+Es una decisión explícita de Alberto, tomada con la fuga delante: **el sistema
+revela qué empresas sigue, no cuánto tiene en cada una**, y esa asimetría le
+vale. Está escrito aquí y en `src/main.ts` porque es justo el tipo de cosa que
+dentro de seis meses parece un descuido, y no lo es.
+
+Si algún día deja de valer, el sitio donde filtrar es `copiarAlGrupo()` en
+`src/main.ts`, y el criterio defendible sería *"solo lo que el monitor habría
+marcado con la watchlist vacía"* —evaluable con `applyRules(evento, {})` más la
+exclusión de `yahoo` y `sec-edgar`—, que es determinista y se audita mirando el
+evento. No está implementado: no hay ningún interruptor apagado esperando.
+
+Para activarlo:
+
+1. Crear el grupo en Telegram y añadir el bot como miembro.
+2. Escribir `/start@<usuario_del_bot>` en el grupo. Con el modo privacidad
+   activado —el de por defecto— un mensaje normal **no** llega al bot y no
+   aparecerá en `getUpdates`; un comando dirigido a él, sí.
+3. Abrir `https://api.telegram.org/bot<TOKEN>/getUpdates` y coger el `chat.id`:
+   es un número **negativo** (`-100…`), no un `@nombre`.
+4. Cargarlo como `TELEGRAM_GROUP_CHAT_ID` en `.env` (local) y en los secretos
+   del repositorio (Actions). Nunca en el código: el repositorio es público.
+
+Cada destino lleva su propia fila y su propio estado de envío en `daily_briefs`
+—la clave primaria es `(brief_date, destination)`—, así que un resumen entregado
+en privado no se da por entregado en el grupo, y un `sending` bloqueado en uno
+no bloquea el otro. La máquina de estados no cambia: `sending` no caduca por
+tiempo y un acuse perdido deja la fila bloqueada, porque Telegram no ofrece
+idempotencia y un resumen duplicado en un grupo con gente es peor que uno que no
+sale. En las alertas del ciclo la copia al grupo va **después** de registrar el
+envío privado y ningún fallo suyo tumba el ciclo: se anota en el log
+(`GROUP_SENT`, `GROUP_SKIPPED`, `GROUP_REJECTED`, `GROUP_FAILED`) y se sigue.
 
 En PowerShell, usar `npm.cmd` en estos comandos para conservar los argumentos
 que siguen a `--`. Un resumen vacío no demuestra que el mercado esté tranquilo:
@@ -231,6 +282,10 @@ protección que cubra todas sus URLs, incluidas acciones de escritura.
   FOMC y los tipos del BCE como publicación de todos los días. No son citas: son
   series continuas, y anunciarlas cada mañana vacía la agenda de sentido. Esas
   decisiones ya entran por los feeds de prensa de la Fed y del BCE.
+- **El grupo compartido lo ve todo, sin filtrar.** Decisión de su dueño con el
+  riesgo delante: el sistema revela qué empresas sigue, no cuánto tiene en cada
+  una. Aun así los dos destinos llevan estado de envío separado, porque entregar
+  en uno no dice nada de si se entregó en el otro.
 - **La watchlist vive en Neon, no en el entorno.** Dice en qué invierte su dueño,
   y en un repositorio público eso no puede estar ni en el código ni a la vista.
   Además cada valor lleva su propio umbral de movimiento: un 3 % en una utility

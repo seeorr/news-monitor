@@ -12,6 +12,13 @@ export interface Config {
   fredApiKey: string | null;
   telegramBotToken: string | null;
   telegramChatId: string | null;
+  /**
+   * Grupo opcional donde se comparte **solo** lo que el monitor habría marcado
+   * con la watchlist vacía (ver `src/notify/compartir.ts`). No entra en
+   * `missingVars`: sin ella el sistema se comporta exactamente igual que antes
+   * de que el grupo existiera. Es un id negativo, no un @nombre.
+   */
+  telegramGroupChatId: string | null;
   databaseUrl: string | null;
   /**
    * Contacto que la SEC exige en el User-Agent ("Nombre correo"). Sin esto,
@@ -77,6 +84,7 @@ export function loadConfig(): Config {
     fredApiKey: env("FRED_API_KEY"),
     telegramBotToken: env("TELEGRAM_BOT_TOKEN"),
     telegramChatId: env("TELEGRAM_CHAT_ID"),
+    telegramGroupChatId: env("TELEGRAM_GROUP_CHAT_ID"),
     databaseUrl: env("DATABASE_URL"),
     secUserAgent: env("SEC_USER_AGENT"),
     secWatchlist: lista("SEC_WATCHLIST"),

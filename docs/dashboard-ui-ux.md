@@ -1133,9 +1133,12 @@ fechas y versión de regla. La liquidez y la página `/regime` siguen pendientes
 No debe presentarse esta clasificación como régimen macro global ni como DXY.
 
 El resumen matinal se genera con `npm run brief`, vive en `daily_briefs` y
-reutiliza los eventos puntuados de las últimas 24 horas. Su envío requiere
-`--send`; el workflow nuevo sólo lo prepara. No hay todavía un selector de hora
-ni una página para leer el resumen. La ausencia de eventos no demuestra calma.
+reutiliza los eventos puntuados de las últimas 24 horas. El workflow lo envía
+con `--send`. Desde que existe el grupo compartido hay una fila por fecha **y
+destino** (`private` y `group`), con su propio estado de envío: una pantalla que
+lea `daily_briefs` tiene que filtrar por destino o enseñará el mismo día dos
+veces. No hay todavía un selector de hora ni una página para leer el resumen.
+La ausencia de eventos no demuestra calma.
 
 La protección estándar de Vercel deja público el dominio de producción. Antes
 de desplegar datos de cartera hace falta proteger las rutas y las acciones;

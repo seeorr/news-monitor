@@ -21,8 +21,16 @@ export const MACRO_KEYWORDS = [
   "downgrade", "upgrade", "sanctions", "tariff", "arancel",
 ];
 
+/**
+ * Lo único que la regla mira de un evento: su titular y si la fuente es
+ * primaria. Se declara aparte, y no como `NormalizedEvent`, para que la firma
+ * diga la verdad sobre lo que lee, y para que el día que la regla necesite un
+ * campo más haya que añadirlo aquí, a la vista, en vez de que entre gratis.
+ */
+export type Enjuiciable = Pick<NormalizedEvent, "title" | "official">;
+
 export function applyRules(
-  event: NormalizedEvent,
+  event: Enjuiciable,
   opts: { watchlist?: string[] } = {},
 ): RuleDecision {
   // Fuente oficial (Fed, BLS, SEC, BCE) pasa siempre. Es dato primario, no opinión.

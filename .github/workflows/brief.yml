@@ -1,5 +1,6 @@
-# Genera el régimen y el resumen en Neon. No envía mensajes.
-# La activación de entregas se hace aparte, tras revisar una vista local.
+# Genera el régimen y el resumen, lo guarda en Neon y lo ENVÍA a Telegram.
+# Al chat privado, siempre. Al grupo, solo si TELEGRAM_GROUP_CHAT_ID está
+# configurado, y solo con la parte compartible (ver src/notify/compartir.ts).
 name: Resumen de mañana
 
 on:
@@ -33,11 +34,18 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Preparar resumen con sus carencias
-        run: npm run brief
+      # El segundo disparo del día encuentra el resumen ya entregado y sale
+      # `blocked`, que no es un fallo: es la máquina de estados haciendo su
+      # trabajo. Si el grupo no está configurado, su secreto llega vacío, no hay
+      # segundo destino y el job no falla por ello.
+      - name: Enviar el resumen con sus carencias
+        run: npm run brief -- --send
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
       - name: Marcar régimen incompleto
         if: steps.regimen.outcome == 'failure'
         run: |

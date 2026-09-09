@@ -54,7 +54,8 @@ const vigilado = (ticker = "A.C"): Vigilado => ({
 });
 const config = (): Config => ({
   anthropicApiKey: SECRET, fredApiKey: null, telegramBotToken: SECRET,
-  telegramChatId: SECRET, databaseUrl: `postgres://user:${SECRET}@invalid.test/db`,
+  telegramChatId: SECRET, telegramGroupChatId: SECRET,
+  databaseUrl: `postgres://user:${SECRET}@invalid.test/db`,
   secUserAgent: SECRET, secWatchlist: [], watchlist: [], feeds: [payload], edgarForms: [],
   maxItemAgeHours: 72, maxScoringPerCycle: 12, maxDeepPerCycle: 3, agendaDias: 7,
   umbralAgrupacion: 0.6, modelScoring: SECRET, modelAnalysis: SECRET,
@@ -304,5 +305,59 @@ describe("consola del main real", () => {
     expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "telegram", index: 1, error: "UNKNOWN" });
     expect(exit).toHaveBeenCalledWith(1);
     expect(mocks.seen.saveAlert).not.toHaveBeenCalled();
+  });
+});
+
+describe("copia al grupo compartido", () => {
+  // Este es el caso que revela la cartera: un movimiento de precio solo existe
+  // porque ese valor esta vigilado. Va al grupo por decision explicita de
+  // Alberto, y el test lo fija para que dejar de hacerlo tenga que ser un
+  // cambio deliberado y no un efecto colateral.
+  it("un movimiento de precio de la watchlist tambien se copia al grupo", async () => {
+    mocks.send.mockResolvedValue({ ok: true });
+    const { records, exit } = await ejecutarMain(false);
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    const [privado, grupo] = mocks.send.mock.calls;
+    expect(privado?.[1]).toBe(SECRET); // TELEGRAM_CHAT_ID
+    expect(grupo?.[1]).toBe(SECRET);   // TELEGRAM_GROUP_CHAT_ID
+    expect(grupo?.[2]).toBe(privado?.[2]);
+    expect(records).toContainEqual({ code: "GROUP_SENT", source: "yahoo", stage: "telegram" });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("un titular macro de prensa sí se copia, con el mismo cuerpo", async () => {
+    mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
+      telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
+    mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
+      link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
+      summary: null, raw: "<item/>" }]);
+    mocks.send.mockResolvedValue({ ok: true });
+
+    const { records, exit } = await ejecutarMain(false);
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    const [privado, grupo] = mocks.send.mock.calls;
+    expect(privado?.[1]).toBe("chat-privado");
+    expect(grupo?.[1]).toBe("-100grupo");
+    expect(grupo?.[2]).toBe(privado?.[2]); // El mismo cuerpo, sin recortar.
+    expect(records).toContainEqual({ code: "GROUP_SENT", source: "rss", stage: "telegram" });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("un rechazo del grupo se registra y no toca el resultado de la alerta privada", async () => {
+    mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
+      telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
+    mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
+      link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
+      summary: null, raw: "<item/>" }]);
+    mocks.send.mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(Object.assign(new Error(payload), { code: "ECONNRESET" }));
+
+    const { records, exit } = await ejecutarMain(false);
+    expect(records).toContainEqual({ code: "ALERT_SENT", source: "rss", stage: "persist" });
+    expect(records).toContainEqual({ code: "GROUP_FAILED", source: "rss", stage: "telegram", error: "ECONNRESET" });
+    expect(mocks.seen.saveAlert).toHaveBeenCalledTimes(1); // La alerta privada queda registrada.
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { dailyBriefStore, recentBriefEvents } from "../src/db/brief.ts";
 import type { Ejecutor } from "../src/db/cliente.ts";
 import { briefDependencies, parseBriefArgs, runBriefCli, sendBriefTelegram } from "../src/brief.ts";
-import { generateBrief, runBrief, selectBriefEvents, type BriefDependencies,
-  type BriefEvent, type BriefStore, type StoredBrief } from "../src/pipeline/brief.ts";
+import { deliverBrief, generateBrief, runBrief, selectBriefEvents, type BriefDependencies,
+  type BriefDestination, type BriefEvent, type BriefStore, type StoredBrief } from "../src/pipeline/brief.ts";
 import { calcularRegimen, formatRegimen, type Regimen } from "../src/sources/regimen.ts";
 
 const now = new Date("2026-09-09T06:00:00.000Z");
@@ -18,29 +18,39 @@ const regimen: Regimen = { asOf: now.toISOString(), version: "fixture-v1", state
     date: "2026-09-08", value: 20, unit: "puntos", stale: false, vote: 0, detail: "Regla de prueba: 20 es mixto." },
 ] };
 
-/** Simula operaciones atómicas, no pretende verificar un servidor Postgres. */
+/**
+ * Simula operaciones atómicas, no pretende verificar un servidor Postgres.
+ * La clave es `(fecha, destino)`, igual que la clave primaria de la tabla.
+ */
 function memoryStore() {
   const rows = new Map<string, StoredBrief>();
   const tokens = new Map<string, string>();
+  const clave = (date: string, destination: BriefDestination) => `${date}/${destination}`;
   const store = {
-    persist: vi.fn<BriefStore["persist"]>(async (brief) => {
-      if (!rows.has(brief.date)) rows.set(brief.date, structuredClone({ ...brief, state: "generated" }));
-      return structuredClone(rows.get(brief.date)!);
+    persist: vi.fn<BriefStore["persist"]>(async (brief, destination) => {
+      const k = clave(brief.date, destination);
+      if (!rows.has(k)) rows.set(k, structuredClone({ ...brief, state: "generated" }));
+      return structuredClone(rows.get(k)!);
     }),
-    claim: vi.fn<BriefStore["claim"]>(async (date, token) => {
-      const row = rows.get(date);
+    claim: vi.fn<BriefStore["claim"]>(async (date, destination, token) => {
+      const row = rows.get(clave(date, destination));
       if (!row || !["generated", "rejected"].includes(row.state)) return null;
       row.state = "sending";
-      tokens.set(date, token);
+      tokens.set(clave(date, destination), token);
       return structuredClone(row);
     }),
-    finish: vi.fn<BriefStore["finish"]>(async (date, token, state) => {
-      const row = rows.get(date);
-      if (!row || row.state !== "sending" || token !== tokens.get(date)) throw new Error("lost_claim");
+    finish: vi.fn<BriefStore["finish"]>(async (date, destination, token, state) => {
+      const row = rows.get(clave(date, destination));
+      if (!row || row.state !== "sending" || token !== tokens.get(clave(date, destination))) {
+        throw new Error("lost_claim");
+      }
       row.state = state;
     }),
   };
-  return { store, rows };
+  /** Estado de una fila concreta; por defecto, la del destino privado. */
+  const estado = (date: string, destination: BriefDestination = "private") =>
+    rows.get(clave(date, destination))?.state;
+  return { store, rows, estado };
 }
 function setup(extra: Partial<BriefDependencies> = {}) {
   const memory = memoryStore();
@@ -214,7 +224,7 @@ describe("persistencia y entrega", () => {
     const original = await runBrief(deps, { now });
     deps.events = async () => [event("nuevo-privado")];
     await runBrief(deps, { now: new Date("2026-09-09T07:00:00Z"), send: true });
-    expect(send).toHaveBeenCalledWith(original.brief.body);
+    expect(send).toHaveBeenCalledWith(original.brief.body, "private");
     expect(send.mock.calls[0]![0]).not.toContain("nuevo-privado");
   });
 
@@ -245,21 +255,21 @@ describe("persistencia y entrega", () => {
   });
 
   it("timeout ambiguo bloquea siguientes envíos", async () => {
-    const { deps, send, rows } = setup();
+    const { deps, send, estado } = setup();
     send.mockRejectedValueOnce(Error("timeout con contenido privado"));
     expect((await runBrief(deps, { now, send: true })).state).toBe("uncertain");
-    expect(rows.get("2026-09-09")?.state).toBe("uncertain");
+    expect(estado("2026-09-09")).toBe("uncertain");
     expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
     expect(send).toHaveBeenCalledOnce();
   });
 
   it.each(["sent", "uncertain", "rejected"] as const)("si falla el registro de %s no libera el claim", async (outcome) => {
-    const { deps, send, store, rows } = setup();
+    const { deps, send, store, estado } = setup();
     send.mockResolvedValueOnce(outcome);
     store.finish.mockRejectedValueOnce(Error("db_unreachable"));
     expect((await runBrief(deps, { now, send: true })).state)
       .toBe(outcome === "sent" ? "record_failed_after_send" : "uncertain");
-    expect(rows.get("2026-09-09")?.state).toBe("sending");
+    expect(estado("2026-09-09")).toBe("sending");
     expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
     expect(send).toHaveBeenCalledOnce();
   });
@@ -267,7 +277,10 @@ describe("persistencia y entrega", () => {
   it("si el claim se aplica pero se pierde su respuesta no envía ni lo recicla", async () => {
     const { deps, store, send } = setup();
     const claim = store.claim.getMockImplementation()!;
-    store.claim.mockImplementationOnce(async (date, token) => { await claim(date, token); throw Error("lost_ack"); });
+    store.claim.mockImplementationOnce(async (date, destination, token) => {
+      await claim(date, destination, token);
+      throw Error("lost_ack");
+    });
     expect((await runBrief(deps, { now, send: true })).state).toBe("failed_before_send");
     expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
     expect(send).not.toHaveBeenCalled();
@@ -309,29 +322,35 @@ describe("contrato SQL y migración, sin ejecutar DB", () => {
     const { deps } = setup();
     const brief = await generateBrief(deps, { now });
     const { sql, calls } = spy([[], [{ ...brief, state: "generated" }]]);
-    expect(await dailyBriefStore(sql).persist(brief)).toEqual({ ...brief, state: "generated" });
+    expect(await dailyBriefStore(sql).persist(brief, "private")).toEqual({ ...brief, state: "generated" });
     expect(calls).toHaveLength(2);
-    expect(calls[0]!.text).toContain("on conflict (brief_date) do nothing");
+    expect(calls[0]!.text).toContain("on conflict (brief_date, destination) do nothing");
     expect(calls[0]!.text).not.toContain("Titular privado");
-    expect(calls[0]!.values).toEqual([brief.date, brief.body, JSON.stringify(brief.payload)]);
+    expect(calls[0]!.values).toEqual([brief.date, "private", brief.body, JSON.stringify(brief.payload)]);
     expect(calls[1]!.text).toContain("brief_date::text as date");
+    expect(calls[1]!.text).toContain("destination = ?");
   });
 
   it("claim es un UPDATE condicional, sin caducidad, con token y cuerpo ganador", async () => {
     const { sql, calls } = spy();
-    expect(await dailyBriefStore(sql).claim("2026-09-09", "claim-test")).toBeNull();
+    expect(await dailyBriefStore(sql).claim("2026-09-09", "group", "claim-test")).toBeNull();
     const { text, values } = calls[0]!;
     expect(text).toContain("send_state = 'sending'");
     expect(text).toContain("send_state in ('generated', 'rejected')");
     expect(text).toContain("returning brief_date::text as date, body, payload");
     expect(text).not.toContain("interval");
-    expect(values).toEqual(["claim-test", "2026-09-09"]);
+    // El claim es por destino: reclamar el del grupo no toca la fila del privado.
+    expect(text).toContain("destination = ?");
+    expect(values).toEqual(["claim-test", "2026-09-09", "group"]);
   });
 
   it("finish exige propietario y detecta la pérdida del claim", async () => {
     const { sql, calls } = spy();
-    await expect(dailyBriefStore(sql).finish("2026-09-09", "claim-test", "sent")).rejects.toThrow("brief_claim_lost");
+    await expect(dailyBriefStore(sql).finish("2026-09-09", "group", "claim-test", "sent"))
+      .rejects.toThrow("brief_claim_lost");
     expect(calls[0]!.text).toContain("claim_token = ? and send_state = 'sending'");
+    expect(calls[0]!.text).toContain("destination = ?");
+    expect(calls[0]!.values).toEqual(["sent", "sent", "2026-09-09", "group", "claim-test"]);
   });
 
   it("migración idempotente tiene fecha única, payload, límite y estados explícitos", () => {
@@ -408,5 +427,111 @@ describe("Telegram simulado y privacidad CLI", () => {
     expect(brief.state).toBe("dry");
     expect(brief.brief.payload.gaps).toHaveLength(3);
     expect((await runBrief(deps, { now })).state).toBe("failed_before_send");
+  });
+});
+
+describe("segundo destino: el grupo compartido", () => {
+  const publico = () => event("publico", { title: "Decisión de tipos del BCE", importance_score: 9 });
+
+  it("cada destino lleva su propio estado: uno enviado no da por enviado el otro", async () => {
+    const { deps, send, estado } = setup();
+    const documento = await generateBrief(deps, { now });
+
+    expect((await deliverBrief(deps, documento, { send: true, destination: "private" })).state).toBe("sent");
+    expect(estado("2026-09-09", "private")).toBe("sent");
+    expect(estado("2026-09-09", "group")).toBeUndefined();
+
+    expect((await deliverBrief(deps, documento, { send: true, destination: "group" })).state).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.map((c) => c[1])).toEqual(["private", "group"]);
+
+    // Y reintentar uno queda bloqueado sin tocar el estado del otro.
+    expect((await deliverBrief(deps, documento, { send: true, destination: "private" })).state).toBe("blocked");
+    expect(estado("2026-09-09", "group")).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("un envío incierto al grupo bloquea el grupo y deja intacto el privado", async () => {
+    const { deps, send, estado } = setup();
+    const documento = await generateBrief(deps, { now });
+    send.mockImplementation(async (_body, destination) => {
+      if (destination === "group") throw Error("timeout con contenido privado");
+      return "sent";
+    });
+    expect((await deliverBrief(deps, documento, { send: true, destination: "group" })).state).toBe("uncertain");
+    expect((await deliverBrief(deps, documento, { send: true, destination: "private" })).state).toBe("sent");
+    expect(estado("2026-09-09", "group")).toBe("uncertain");
+    expect(estado("2026-09-09", "private")).toBe("sent");
+    expect((await deliverBrief(deps, documento, { send: true, destination: "group" })).state).toBe("blocked");
+  });
+
+  it("la CLI genera una sola vez y entrega el mismo cuerpo a los dos destinos", async () => {
+    const events = vi.fn(async () => [publico(), event("privado")]);
+    const { deps, send, store, estado } = setup({ events });
+    const log = vi.fn();
+    expect(await runBriefCli(["--send"], { deps, now, env: {}, log, preview: vi.fn() })).toBe(0);
+
+    expect(events).toHaveBeenCalledOnce(); // Una sola ronda de FRED y de Neon.
+    expect(store.persist).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
+    const [privado, grupo] = send.mock.calls;
+    expect(privado![1]).toBe("private");
+    expect(privado![0]).toContain("Titular privado privado");
+    expect(grupo![1]).toBe("group");
+    // El grupo ve exactamente lo mismo, watchlist incluida: decisión de Alberto.
+    expect(grupo![0]).toBe(privado![0]);
+    expect(estado("2026-09-09", "private")).toBe("sent");
+    expect(estado("2026-09-09", "group")).toBe("sent");
+    expect(log.mock.calls.flat().join(" ")).toContain("eventos=2");
+  });
+
+  it("sin grupo configurado no hay segunda fila, ni segundo envío, ni fallo", async () => {
+    const { deps, send, store } = setup({ canSend: (destination) => destination === "private" });
+    const log = vi.fn();
+    expect(await runBriefCli(["--send"], { deps, now, env: {}, log, preview: vi.fn() })).toBe(0);
+    expect(store.persist).toHaveBeenCalledOnce();
+    expect(store.persist.mock.calls[0]![1]).toBe("private");
+    expect(send).toHaveBeenCalledOnce();
+    expect(log.mock.calls.flat().join(" ")).toContain("grupo=no configurado");
+  });
+
+  it("preview deja la vista y sigue sin persistir nada", async () => {
+    const { deps, store } = setup({ events: async () => [publico(), event("privado")] });
+    const preview = vi.fn();
+    expect(await runBriefCli(["--dry", "--preview"], { deps, now, env: {}, preview, log: vi.fn() })).toBe(0);
+    expect(preview).toHaveBeenCalledOnce();
+    expect(preview.mock.calls[0]![1]).toBe("private");
+    expect(preview.mock.calls[0]![0]).toContain("Titular privado privado");
+    expect(store.persist).not.toHaveBeenCalled();
+  });
+
+  it("un rechazo del grupo se ve en el código de salida y no ensucia el privado", async () => {
+    const { deps, send, estado } = setup();
+    send.mockImplementation(async (_body, destination) => (destination === "group" ? "rejected" : "sent"));
+    expect(await runBriefCli(["--send"], { deps, now, env: {}, log: vi.fn(), preview: vi.fn() })).toBe(1);
+    expect(estado("2026-09-09", "private")).toBe("sent");
+    expect(estado("2026-09-09", "group")).toBe("rejected");
+  });
+
+  it("el destino de grupo solo existe si está su variable, y va a ese chat", async () => {
+    const sinGrupo = briefDependencies({ TELEGRAM_BOT_TOKEN: "fixture", TELEGRAM_CHAT_ID: "111" });
+    expect(sinGrupo.canSend?.("private")).toBe(true);
+    expect(sinGrupo.canSend?.("group")).toBe(false);
+
+    const conGrupo = briefDependencies({ TELEGRAM_BOT_TOKEN: "fixture", TELEGRAM_CHAT_ID: "111",
+      TELEGRAM_GROUP_CHAT_ID: "-1001234567890" });
+    expect(conGrupo.canSend?.("group")).toBe(true);
+    // Una respuesta nueva por llamada: un Response solo se puede leer una vez.
+    const request = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
+    vi.stubGlobal("fetch", request);
+    try {
+      expect(await conGrupo.send?.("cuerpo", "group")).toBe("sent");
+      expect(await conGrupo.send?.("cuerpo", "private")).toBe("sent");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(request.mock.calls.map((c) => JSON.parse(String(c[1]!.body)).chat_id))
+      .toEqual(["-1001234567890", "111"]);
   });
 });

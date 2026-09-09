@@ -12,6 +12,10 @@ const CODES = [
   "SCORED", "ALERT_SKIPPED", "FABRICATION_RETRY", "ANALYSIS_OK",
   "ANALYSIS_FALLBACK", "ANALYSIS_LIMIT", "ALERT_READY", "DRY_RUN",
   "TELEGRAM_MISSING", "ALERT_SENT", "EVENT_FAILED", "CYCLE_END",
+  // Copia al grupo compartido. Dicen si salió o si Telegram la rechazó. No dicen
+  // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
+  // diagnosticar.
+  "GROUP_SENT", "GROUP_REJECTED", "GROUP_FAILED",
   "UNHANDLED", "LOG_SUPPRESSED",
 ] as const;
 const SOURCES = ["fred", "rss", "sec-edgar", "yahoo", "coingecko", "neon", "file"] as const;

@@ -34,10 +34,20 @@ export type SendState = "sent" | "rejected" | "uncertain";
 export interface StoredBrief extends BriefDocument {
   state: "generated" | "sending" | SendState;
 }
+/**
+ * Los dos destinos del resumen, que reciben **el mismo cuerpo**: el chat de
+ * siempre y el grupo compartido.
+ *
+ * Aun siendo idéntico el texto, cada uno lleva su propio estado de envío en
+ * `daily_briefs`. Que el privado salga no dice nada de si el del grupo salió, y
+ * compartir una sola fila haría que el segundo destino se diera por entregado
+ * sin haberlo intentado nunca.
+ */
+export type BriefDestination = "private" | "group";
 export interface BriefStore {
-  persist(brief: BriefDocument): Promise<StoredBrief>;
-  claim(date: string, token: string): Promise<StoredBrief | null>;
-  finish(date: string, token: string, state: SendState): Promise<void>;
+  persist(brief: BriefDocument, destination: BriefDestination): Promise<StoredBrief>;
+  claim(date: string, destination: BriefDestination, token: string): Promise<StoredBrief | null>;
+  finish(date: string, destination: BriefDestination, token: string, state: SendState): Promise<void>;
 }
 export interface BriefDependencies {
   events(now: Date): Promise<BriefEvent[]>;
@@ -45,12 +55,13 @@ export interface BriefDependencies {
   regimen(now: Date): Promise<Regimen>;
   formatRegimen(regimen: Regimen): string;
   store?: BriefStore;
-  /** Se ejecuta ANTES del claim; no hace red. */
-  canSend?: () => boolean;
-  send?: (body: string) => Promise<SendState>;
+  /** Se ejecuta ANTES del claim; no hace red. También dice si el destino existe. */
+  canSend?: (destination: BriefDestination) => boolean;
+  send?: (body: string, destination: BriefDestination) => Promise<SendState>;
   claimToken?: () => string;
 }
 export interface BriefOptions { now: Date; dry?: boolean; send?: boolean; agendaDays?: number }
+export interface DeliverOptions { send?: boolean; destination?: BriefDestination }
 export type BriefRunState = "dry" | "generated" | "blocked" | SendState |
   "failed_before_send" | "record_failed_after_send";
 export interface BriefResult { state: BriefRunState; brief: BriefDocument }
@@ -174,6 +185,20 @@ export async function generateBrief(deps: BriefDependencies, opts: BriefOptions)
     regimenText: regimen.status === "fulfilled" ? regimen.value.text : null,
     coverage: "unknown", gaps: [],
   };
+  calcularCarencias(payload);
+  return { date, payload, body: formatBrief(payload) };
+}
+
+/**
+ * Escribe en `payload.gaps` lo que ese payload **no** puede afirmar.
+ *
+ * Vive aparte de `generateBrief` porque el resumen del grupo es otro payload:
+ * lleva menos eventos, y sus carencias tienen que ser ciertas para lo que ese
+ * destino ve. Heredar las del privado sería declarar una cobertura que el
+ * documento filtrado no tiene.
+ */
+export function calcularCarencias(payload: BriefPayload): void {
+  payload.gaps = [];
   if (payload.events.status === "unavailable") payload.gaps.push("eventos no disponibles");
   else {
     if (!payload.events.data.length) payload.gaps.push("sin eventos puntuados");
@@ -185,25 +210,34 @@ export async function generateBrief(deps: BriefDependencies, opts: BriefOptions)
   else if (payload.regimen.data.state === "insufficient_data" || payload.regimen.data.signals.some(
     (s) => s.stale || s.value === null || s.date === null,
   )) payload.gaps.push("régimen con datos insuficientes u obsoletos");
-  return { date, payload, body: formatBrief(payload) };
 }
 
-export async function runBrief(deps: BriefDependencies, opts: BriefOptions): Promise<BriefResult> {
-  let brief = await generateBrief(deps, opts);
-  if (opts.dry) return { state: "dry", brief }; // Sin persistencia, preflight ni claim.
+/**
+ * Persistir, reclamar, enviar y registrar **un** documento en **un** destino.
+ *
+ * Separado de `runBrief` para que la CLI genere una sola vez y entregue a los
+ * dos destinos: repetir `generateBrief` por destino significaría dos rondas de
+ * FRED y de Neon, y dos documentos que podrían no coincidir si algo cambia entre
+ * medias. El comportamiento por destino es exactamente el que tenía `runBrief`.
+ */
+export async function deliverBrief(
+  deps: BriefDependencies, documento: BriefDocument, opts: DeliverOptions = {},
+): Promise<BriefResult> {
+  const destination = opts.destination ?? "private";
+  let brief = documento;
   try {
     if (!deps.store) return { state: "failed_before_send", brief };
-    brief = await deps.store.persist(brief); // El primero gana, incluido su cuerpo.
+    brief = await deps.store.persist(brief, destination); // El primero gana, incluido su cuerpo.
     if (!opts.send) return { state: "generated", brief };
-    if (!deps.send || !deps.canSend?.()) return { state: "failed_before_send", brief };
+    if (!deps.send || !deps.canSend?.(destination)) return { state: "failed_before_send", brief };
     const token = deps.claimToken?.() ?? randomUUID();
-    const claimed = await deps.store.claim(brief.date, token);
+    const claimed = await deps.store.claim(brief.date, destination, token);
     if (!claimed) return { state: "blocked", brief };
     brief = claimed;
     let state: SendState;
-    try { state = await deps.send(brief.body); }
+    try { state = await deps.send(brief.body, destination); }
     catch { state = "uncertain"; } // Timeout/red: podría haber llegado.
-    try { await deps.store.finish(brief.date, token, state); }
+    try { await deps.store.finish(brief.date, destination, token, state); }
     catch {
       // Sigue en sending: jamás liberar ni reintentar al perder el acuse SQL.
       return { state: state === "sent" ? "record_failed_after_send" : "uncertain", brief };
@@ -213,4 +247,10 @@ export async function runBrief(deps: BriefDependencies, opts: BriefOptions): Pro
     // Un claim cuya respuesta se pierde también queda bloqueado, sin enviar.
     return { state: "failed_before_send", brief };
   }
+}
+
+export async function runBrief(deps: BriefDependencies, opts: BriefOptions): Promise<BriefResult> {
+  const brief = await generateBrief(deps, opts);
+  if (opts.dry) return { state: "dry", brief }; // Sin persistencia, preflight ni claim.
+  return deliverBrief(deps, brief, { send: opts.send, destination: "private" });
 }

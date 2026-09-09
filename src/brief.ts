@@ -5,7 +5,8 @@ import { neon } from "@neondatabase/serverless";
 import { loadDotEnv } from "./config.ts";
 import { dailyBriefStore, recentBriefEvents } from "./db/brief.ts";
 import { fetchAgenda } from "./sources/calendario.ts";
-import { runBrief, type BriefDependencies, type SendState } from "./pipeline/brief.ts";
+import { deliverBrief, generateBrief, type BriefDependencies, type BriefDestination,
+  type BriefRunState, type SendState } from "./pipeline/brief.ts";
 
 export interface BriefFlags { dry: boolean; send: boolean; preview: boolean }
 type BriefEnv = Record<string, string | undefined>;
@@ -43,6 +44,9 @@ export function briefDependencies(env: BriefEnv): BriefDependencies {
   const apiKey = env.FRED_API_KEY?.trim();
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   const chat = env.TELEGRAM_CHAT_ID?.trim();
+  // Opcional. Sin él no hay segundo destino y el resumen se comporta como antes.
+  const grupo = env.TELEGRAM_GROUP_CHAT_ID?.trim();
+  const destino = (d: BriefDestination) => (d === "group" ? grupo : chat);
   const sql = databaseUrl ? neon(databaseUrl) : null;
   // El módulo de régimen lo implementa la sesión principal. Carga diferida:
   // una fuente ausente se declara como carencia y no rompe todo el resumen.
@@ -66,8 +70,8 @@ export function briefDependencies(env: BriefEnv): BriefDependencies {
       return module.formatRegimen(regimen);
     },
     store: sql ? dailyBriefStore(sql) : undefined,
-    canSend: () => Boolean(token && chat),
-    send: (body) => sendBriefTelegram(token!, chat!, body),
+    canSend: (destination) => Boolean(token && destino(destination)),
+    send: (body, destination) => sendBriefTelegram(token!, destino(destination)!, body),
   };
 }
 
@@ -76,19 +80,50 @@ interface CliDependencies {
   now: Date;
   env: BriefEnv;
   log: (message: string) => void;
-  preview: (body: string) => Promise<void>;
+  preview: (body: string, destination: BriefDestination) => Promise<void>;
 }
 
-/** Inyectable: las pruebas no leen secretos, no tocan red ni escriben preview. */
+/** Un estado que no exige mirar el job: entregado, ya entregado, o solo generado. */
+function correcto(state: BriefRunState): boolean {
+  return ["dry", "generated", "blocked", "sent"].includes(state);
+}
+
+/**
+ * Inyectable: las pruebas no leen secretos, no tocan red ni escriben preview.
+ *
+ * El documento se genera **una vez** y se entrega a los destinos configurados.
+ * Generarlo por destino costaría otra ronda de FRED y de Neon y podría producir
+ * dos resúmenes distintos del mismo día.
+ *
+ * **Los dos destinos reciben el mismo cuerpo.** El grupo ve exactamente lo que
+ * ve el chat privado, por decisión explícita de Alberto: el sistema revela qué
+ * empresas sigue, no cuánto tiene en cada una. Aun así son dos filas y dos
+ * estados, porque entregar en uno no dice nada de si se entregó en el otro.
+ */
 export async function runBriefCli(args: string[], io: CliDependencies): Promise<number> {
   try {
     const flags = parseBriefArgs(args, io.env);
-    const result = await runBrief(io.deps, { now: io.now, dry: flags.dry, send: flags.send });
-    if (flags.preview) await io.preview(result.brief.body);
-    const p = result.brief.payload;
-    io.log(`Resumen: estado=${result.state}; eventos=${p.events.status === "ok" ? p.events.data.length : 0}; ` +
+    const documento = await generateBrief(io.deps, { now: io.now });
+    if (flags.preview) await io.preview(documento.body, "private");
+
+    const hayGrupo = io.deps.canSend?.("group") === true;
+    let privado: BriefRunState = "dry";
+    let grupo: BriefRunState | null = hayGrupo ? "dry" : null;
+    if (!flags.dry) {
+      privado = (await deliverBrief(io.deps, documento, { send: flags.send, destination: "private" })).state;
+      // Un fallo del privado no cancela el grupo: son dos filas y dos estados.
+      if (hayGrupo) {
+        grupo = (await deliverBrief(io.deps, documento, { send: flags.send, destination: "group" })).state;
+      }
+    }
+
+    const p = documento.payload;
+    io.log(`Resumen: estado=${privado}; grupo=${grupo ?? "no configurado"}; ` +
+      `eventos=${p.events.status === "ok" ? p.events.data.length : 0}; ` +
       `citas=${p.agenda.status === "ok" ? p.agenda.data.length : 0}; carencias=${p.gaps.length}.`);
-    return ["dry", "generated", "blocked", "sent"].includes(result.state) ? 0 : 1;
+    // Que el grupo no esté configurado nunca falla. Que esté y no se entregue, sí:
+    // un bot expulsado del grupo tiene que verse en rojo, no callarse.
+    return correcto(privado) && (grupo === null || correcto(grupo)) ? 0 : 1;
   } catch {
     // Nunca volcar objetos Error: pueden contener SQL, URL con claves o titulares.
     io.log("Resumen: error de configuración o ejecución; no se publica contenido.");
@@ -102,10 +137,13 @@ async function main(): Promise<number> {
   return runBriefCli(process.argv.slice(2), {
     deps: briefDependencies(process.env), now: new Date(), env: process.env,
     log: (message) => console.log(message),
-    preview: async (body) => {
+    // Un solo archivo: los dos destinos reciben el mismo cuerpo. Sirve para leer
+    // lo que se va a publicar antes de que exista el grupo.
+    preview: async (body, destination) => {
       const directory = fileURLToPath(new URL("../.cache/", import.meta.url));
       await mkdir(directory, { recursive: true });
-      await writeFile(new URL("../.cache/morning-brief.txt", import.meta.url), body, { encoding: "utf8", mode: 0o600 });
+      const nombre = destination === "group" ? "morning-brief-grupo.txt" : "morning-brief.txt";
+      await writeFile(new URL(`../.cache/${nombre}`, import.meta.url), body, { encoding: "utf8", mode: 0o600 });
     },
   });
 }
