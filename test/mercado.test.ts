@@ -83,7 +83,7 @@ describe("movimiento de sesión", () => {
     expect(e.summary).toContain("NVIDIA (NVDA)");
   });
 
-  // Un evento por valor y sesión: el cron pasa cada quince minutos y el precio
+  // Un evento por valor y sesión: el ciclo pasa cada media hora y el precio
   // sigue moviéndose, pero "hoy se ha movido" se cuenta una vez.
   it("da el mismo id durante toda la sesión y otro al día siguiente", () => {
     const hoy = toEvent(base, { ticker: "NVDA", umbral: 3, retrievedAt })!;

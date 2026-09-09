@@ -1,18 +1,66 @@
 # Ciclo de ingesta. Corre en el free tier de GitHub Actions, que es ILIMITADO
-# porque el repositorio es publico. Por eso este cron puede ir a 15 minutos:
-# en un repositorio privado, 2.880 ejecuciones al mes no caben en 2.000 minutos.
+# porque el repositorio es publico. El recurso escaso aqui no son los minutos:
+# son los disparos del planificador.
 #
-# Cron de GitHub: siempre UTC y con retrasos habituales de 5-15 minutos. Esto
-# no sirve para alertas al segundo y no pretende servir.
+# ── Por que esto ya no es "un cron cada 30 minutos" ───────────────────────────
+#
+# Lo era cada 15, y GitHub no lo cumplia. Medido el 9 de septiembre de 2026 con
+# `gh run list`, con el repositorio ya publico y los tres workflows activos:
+#
+#   2026-09-08 22:59 UTC  schedule  success   (+122 min sobre la anterior)
+#   2026-09-09 01:10 UTC  schedule  success   (+131 min)
+#   2026-09-09 05:58 UTC  schedule  success   (+288 min)
+#
+# Tres ejecuciones programadas en catorce horas cuando tocaban ~56, y todas en
+# verde: no falla el ciclo, falla la frecuencia. El mismo dia, el cron de una
+# sola vez al dia de `agenda.yml` (06:30 UTC, dia laborable) tampoco disparo ni
+# una vez. Eso descarta la explicacion comoda: el problema no es pedirlo
+# demasiado a menudo. El planificador es "best effort" y descarta disparos
+# —tambien los de una vez al dia— y la documentacion de GitHub lo dice sin
+# rodeos: "if the load is sufficiently high enough, some queued jobs may be
+# dropped" y "high load times include the start of every hour".
+#
+# Asi que pedir MAS disparos no arregla nada: el disparo es justo lo que escasea.
+# Se invierte el trato. Cada disparo que sobrevive compra un bloque de ~5 h de
+# monitorizacion, no una vuelta: el job se queda vivo repitiendo el ciclo cada 30
+# minutos hasta agotar su presupuesto, por debajo del limite duro de 6 horas por
+# job. Hacen falta ~4 disparos utiles al dia en vez de 48, y se lanzan 24.
+#
+# Dos efectos colaterales que conviene conocer antes de mirar el historial:
+#
+# 1. `concurrency` pasa de ser una precaucion a ser la pieza que sostiene esto.
+#    Mientras un bloque vive, el disparo siguiente se queda PENDIENTE y arranca
+#    en cuanto el bloque termina: los bloques se encadenan solos y la cobertura
+#    es continua. Basta con que UN disparo entre para que la cadena se sostenga.
+# 2. GitHub solo guarda una ejecucion pendiente por grupo y cancela la anterior.
+#    Por eso el historial tendra ~20 ejecuciones "cancelled" al dia. No son
+#    fallos ni gastan minutos: son los intentos sobrantes, que es exactamente
+#    para lo que estan. `gh run list --status success` filtra el ruido.
+#
+# El bloque tambien amortiza el `npm ci`: once vueltas pagan una instalacion en
+# vez de once, y desde que el dashboard vive en el mismo paquete esa instalacion
+# arrastra tambien Next.js y React.
 name: Monitor
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Un intento por hora, repartido entre DOS definiciones independientes y en
+    # minutos que no son ni :00 ni un cuarto: la franja de mas carga —y de mas
+    # descartes— es el arranque de cada hora, y las tres ejecuciones que si
+    # salieron lo hicieron con 10-15 minutos de retraso sobre su cuarto.
+    - cron: "23 0,2,4,6,8,10,12,14,16,18,20,22 * * *"
+    - cron: "51 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
   workflow_dispatch:
+    inputs:
+      vueltas:
+        description: "Cuantas vueltas dar. Vacio = el bloque entero (~11)"
+        required: false
+        default: "1"
 
 # Un ciclo cada vez. Dos ejecuciones solapadas leerian la misma observacion y
 # competirian por escribirla; la base lo aguanta, pero no hay nada que ganar.
+# `cancel-in-progress: false` es ahora obligatorio: cancelar el bloque vivo cada
+# vez que entra un disparo nuevo devolveria el problema entero.
 concurrency:
   group: monitor
   cancel-in-progress: false
@@ -20,19 +68,25 @@ concurrency:
 jobs:
   ciclo:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 5 h 30 de margen sobre las ~5 h 15 que puede durar el bloque, y por debajo
+    # del limite de 6 h de GitHub a proposito: si el job muriera por timeout, el
+    # aviso de fallo diria que el ciclo se ha roto cuando solo se habia acabado.
+    timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
+      # v5 en las dos: v4 corre sobre Node 20, deprecado, y cada ejecucion salia
+      # con el aviso. v5 pide runner >= 2.327.1, que el runner alojado de GitHub
+      # supera de sobra, y no cambia nada de lo que aqui se usa: `cache: npm`
+      # explicito y `node-version-file` siguen igual.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
 
-      - name: Ejecutar el ciclo
-        run: npm start
+      - name: Ejecutar el ciclo cada 30 minutos hasta agotar el bloque
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -55,9 +109,90 @@ jobs:
           MAX_ITEM_AGE_HOURS: ${{ vars.MAX_ITEM_AGE_HOURS }}
           GROUP_THRESHOLD: ${{ vars.GROUP_THRESHOLD }}
           RSS_FEEDS: ${{ vars.RSS_FEEDS }}
+          # Vacio en los disparos programados; "1" por defecto al lanzarlo a
+          # mano, para que probar una cosa no ocupe el grupo durante cinco horas.
+          MAX_VUELTAS: ${{ inputs.vueltas }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          CADENCIA=1800       # 30 min de arranque a arranque, que es la cadencia pedida
+          PRESUPUESTO=19800   # 5 h 30: la ultima vuelta arranca a las 5 h en punto
+          LIMITE_VUELTA=600   # lo que valia `timeout-minutes: 10` cuando el job era una vuelta
 
-      # Un monitor que se cae en silencio es peor que no tener monitor: crees
-      # que no pasa nada en los mercados cuando lo que pasa es que no corre.
+          # Un monitor que se cae en silencio es peor que no tener monitor: crees
+          # que no pasa nada en los mercados cuando lo que pasa es que no corre.
+          # El `|| true` porque un Telegram caido no puede llevarse por delante el
+          # bloque entero: convertiria un aviso perdido en cinco horas mudas.
+          avisar() {
+            if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+              echo "Sin credenciales de Telegram: no se puede avisar del fallo."
+              return 0
+            fi
+            curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+              --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+              --data-urlencode "text=$1" \
+              --data "disable_web_page_preview=true" > /dev/null || true
+          }
+
+          inicio=$(date +%s)
+          vuelta=0
+          fallando=0
+          fallidas=0
+
+          while : ; do
+            vuelta=$((vuelta + 1))
+            arranque=$(date +%s)
+            echo "── Vuelta $vuelta · $(date -u +%H:%M:%S) UTC ──"
+
+            # Una vuelta colgada no puede comerse el bloque: es el mismo tope de
+            # 10 minutos que tenia el job cuando el job era una sola vuelta.
+            if timeout "$LIMITE_VUELTA" npm start; then
+              estado=0
+            else
+              estado=$?
+            fi
+
+            if [ "$estado" -ne 0 ]; then
+              fallidas=$((fallidas + 1))
+              echo "✕ La vuelta $vuelta ha fallado (codigo $estado). El bloque sigue."
+              # Solo se avisa del primer fallo de una racha. Si algo esta roto de
+              # verdad —una clave caducada— falla igual las once vueltas, y once
+              # mensajes identicos en cinco horas no dicen mas que uno. Si se
+              # recupera y vuelve a romperse, hay aviso nuevo: eso si es noticia.
+              if [ "$fallando" -eq 0 ]; then
+                avisar "News Monitor: el ciclo ha fallado (vuelta $vuelta, codigo $estado). $RUN_URL"
+              fi
+              fallando=1
+            else
+              fallando=0
+            fi
+
+            if [ -n "$MAX_VUELTAS" ] && [ "$vuelta" -ge "$MAX_VUELTAS" ]; then
+              echo "── Tope de $MAX_VUELTAS vuelta(s), pedido a mano. ──"
+              break
+            fi
+
+            # Se decide sobre el ARRANQUE de la vuelta siguiente, no sobre el
+            # momento actual: asi la cadencia son 30 minutos de verdad y ninguna
+            # vuelta puede empezar tan tarde que el job muera por timeout.
+            proxima=$(( arranque - inicio + CADENCIA ))
+            if [ "$proxima" -ge "$PRESUPUESTO" ]; then
+              echo "── Bloque agotado tras $vuelta vuelta(s), $fallidas con error. ──"
+              echo "El disparo siguiente recoge el testigo; ya deberia estar pendiente."
+              break
+            fi
+
+            espera=$(( proxima - ($(date +%s) - inicio) ))
+            if [ "$espera" -gt 0 ]; then
+              echo "· Siguiente vuelta en $((espera / 60)) min."
+              sleep "$espera"
+            fi
+          done
+
+      # Este aviso ya no cubre el fallo de una vuelta —de eso se encarga el bucle,
+      # que no puede morirse con ella—, sino que el bloque entero no llegue a
+      # arrancar: checkout, `npm ci`, el runner. Sigue haciendo falta: sin el, un
+      # job que revienta antes del primer `npm start` no se distingue de un dia
+      # tranquilo.
       - name: Avisar del fallo por Telegram
         if: failure()
         env:
@@ -71,5 +206,5 @@ jobs:
           fi
           curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
             --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
-            --data-urlencode "text=News Monitor: el ciclo ha fallado. $RUN_URL" \
+            --data-urlencode "text=News Monitor: el bloque del monitor no ha llegado a arrancar. $RUN_URL" \
             --data "disable_web_page_preview=true" > /dev/null

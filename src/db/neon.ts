@@ -3,7 +3,7 @@
  *
  * Por qué una base de datos y no el archivo local: el job de GitHub Actions
  * arranca con el disco vacío en cada ejecución. Sin estado remoto, el cron no
- * recuerda nada y reenvía la misma alerta cada quince minutos.
+ * recuerda nada y reenvía la misma alerta cada media hora.
  *
  * Neon y no Supabase: ya está en uso en Finance Hub, el free tier no caduca y
  * el proyecto no se pausa mientras el cron lo toque. Mismo driver HTTP que allí.

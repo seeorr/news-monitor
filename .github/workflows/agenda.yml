@@ -4,13 +4,23 @@
 # pasado, esto dice lo que va a pasar. Y porque una lista de fechas no necesita
 # ni modelo ni cascada, asi que no tiene sentido pagar el ciclo entero por ella.
 #
-# 06:30 UTC de lunes a viernes: antes de que abra Europa y muy antes de que
+# Primera hora de lunes a viernes: antes de que abra Europa y muy antes de que
 # publiquen las agencias estadounidenses, que es cuando la lista sirve de algo.
+#
+# Tres intentos y no uno porque el planificador de GitHub descarta disparos, y
+# este workflow es la prueba: el 9 de septiembre de 2026, con el repositorio ya
+# publico y el workflow activo, su unico cron ("30 6 * * 1-5") no disparo ni una
+# vez. Un cron diario no esta a salvo por ser poco frecuente. Repetir sale gratis
+# porque la agenda ya es idempotente por dia —`seen.has(event.id)` corta el
+# segundo intento y sale en verde sin enviar nada—, asi que lo peor que puede
+# pasar es que se mande una sola vez, que es justo lo que se quiere.
 name: Agenda
 
 on:
   schedule:
-    - cron: "30 6 * * 1-5"
+    - cron: "23 6 * * 1-5"
+    - cron: "7 7 * * 1-5"
+    - cron: "41 7 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -22,9 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm

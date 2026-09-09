@@ -1,11 +1,19 @@
 # GitHub desactiva los workflows programados tras 60 dias sin actividad en el
-# repositorio, y lo hace en silencio. Un commit mensual mantiene vivo el cron
+# repositorio, y lo hace en silencio. Un commit periodico mantiene vivo el cron
 # del monitor cuando el sprint acabe y el repositorio deje de moverse.
+#
+# Dos latidos al mes, no uno. Este era el punto unico de fallo mas caro del
+# proyecto: si su disparo mensual se pierde —y el 9 de septiembre de 2026 se
+# comprobo que GitHub descarta hasta los crons de una vez al dia— el reloj de
+# los 60 dias sigue corriendo y nadie se entera hasta que el monitor lleva
+# semanas apagado. Con dos fechas separadas harian falta cuatro descartes
+# seguidos para llegar a los 60 dias, y un commit de mas no molesta a nadie.
 name: Latido
 
 on:
   schedule:
     - cron: "17 6 1 * *"
+    - cron: "43 6 15 * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +23,7 @@ jobs:
   latido:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Registrar el latido
         run: |

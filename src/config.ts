@@ -29,7 +29,7 @@ export interface Config {
   edgarForms: string[];
   /** Más viejo que esto, ni se puntúa: un feed trae su historial, y eso no es noticia. */
   maxItemAgeHours: number;
-  /** Techo de llamadas al modelo barato por ciclo. El cron corre cada 15 minutos. */
+  /** Techo de llamadas al modelo barato por ciclo. El ciclo corre cada 30 minutos. */
   maxScoringPerCycle: number;
   /** Techo de llamadas al modelo caro por ciclo. Ahí está el gasto de verdad. */
   maxDeepPerCycle: number;

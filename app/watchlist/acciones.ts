@@ -107,7 +107,7 @@ export async function anadirTicker(_previo: Estado, datos: FormData): Promise<Es
   return {
     tipo: "ok",
     // Lo único que hace falta saber para no quedarse mirando la pantalla.
-    mensaje: `${ticker} entra en el próximo ciclo, que corre como mucho dentro de 15 minutos.`,
+    mensaje: `${ticker} entra en el próximo ciclo, que corre como mucho dentro de 30 minutos.`,
     avisos,
   };
 }

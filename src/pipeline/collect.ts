@@ -101,7 +101,7 @@ export async function collectEvents(
   // El repositorio es publico y los logs de Actions tambien: cualquiera puede
   // leer la salida de cada ciclo. Los errores de Yahoo y de EDGAR llevan el
   // simbolo dentro del mensaje, asi que sin tapar esto la watchlist se
-  // publicaria sola cada quince minutos — justo el dato que vive en Neon para
+  // publicaria sola cada media hora — justo el dato que vive en Neon para
   // no estar aqui. Se tapa en la salida y no fuente por fuente, para que una
   // fuente nueva no tenga que acordarse.
   const log = taparTickers(logCrudo, vigilados);

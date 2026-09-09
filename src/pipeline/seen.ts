@@ -2,7 +2,7 @@
  * Idempotencia y registro de lo enviado.
  *
  * Es el fallo que convierte este sistema en el agregador que no quiere ser. El
- * cron corre cada quince minutos y ve la misma última observación de CPI durante
+ * ciclo corre cada media hora y ve la misma última observación de CPI durante
  * un mes entero; sin esto, manda la misma alerta cada vez.
  *
  * Dos implementaciones tras la misma interfaz: Neon en producción

@@ -164,7 +164,7 @@ export function toEvent(
   const nombre = opts.nombre ? `${opts.nombre} (${opts.ticker})` : opts.ticker;
 
   return {
-    // Un evento por valor y sesión: el cron pasa cada quince minutos y la sesión
+    // Un evento por valor y sesión: el ciclo pasa cada media hora y la sesión
     // sigue moviéndose, pero la noticia —"hoy se ha movido"— es una sola.
     id: eventId("yahoo", opts.ticker, c.sessionDate),
     source: "yahoo",

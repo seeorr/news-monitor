@@ -15,7 +15,7 @@ import { cargar } from "../_lib/cargar.ts";
 import { desdeFecha, hastaFecha, numero, texto, type Parametros } from "../_lib/parametros.ts";
 import { historialAlertas } from "../../src/db/lectura.ts";
 
-// Cada carga consulta la base: lo que enseña cambia cada quince minutos y una
+// Cada carga consulta la base: lo que enseña cambia cada media hora y una
 // página cacheada diría que no ha pasado nada cuando sí ha pasado.
 export const dynamic = "force-dynamic";
 

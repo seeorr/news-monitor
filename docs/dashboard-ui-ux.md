@@ -745,7 +745,7 @@ Todos explícitos. Ninguno es un spinner sin texto.
 | Parcial | "No está en EDGAR, sí en Yahoo: se vigilará su precio, no sus documentos" |
 | No encontrado | Mensaje concreto por causa —símbolo mal escrito, parece un ISIN, Yahoo no responde—, y opción de añadir igualmente |
 | Guardando | Botón en carga. La escritura es un `insert` contra Neon: milisegundos |
-| Guardado | La fila aparece arriba y resaltada unos segundos, y un aviso explica lo que de verdad ha pasado: **"ACME entra en el próximo ciclo, que corre como mucho dentro de 15 minutos."** Es la única forma de que nadie se quede mirando la pantalla esperando datos que no van a llegar hasta la vuelta siguiente |
+| Guardado | La fila aparece arriba y resaltada unos segundos, y un aviso explica lo que de verdad ha pasado: **"ACME entra en el próximo ciclo, que corre como mucho dentro de 30 minutos."** Es la única forma de que nadie se quede mirando la pantalla esperando datos que no van a llegar hasta la vuelta siguiente |
 | Error | El mensaje real de Neon, no un "algo ha fallado". Con reintento, y sin perder lo escrito |
 
 ### Borrar

@@ -10,7 +10,7 @@
  *
  * 1. Una fuente caída no tumba el ciclo; se sigue con las demás y se dice cuál.
  * 2. Un evento que falla no tumba a los siguientes.
- * 3. Hay techo de llamadas al modelo por ciclo. El cron corre cada 15 minutos y
+ * 3. Hay techo de llamadas al modelo por ciclo. El ciclo corre cada 30 minutos y
  *    un feed puede soltar treinta elementos de golpe el primer día.
  *
  *   npm start              ejecuta el ciclo

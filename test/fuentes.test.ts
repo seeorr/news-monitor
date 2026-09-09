@@ -46,7 +46,7 @@ describe("feeds → eventos", () => {
     expect(eventos[0]?.unit).toBeNull();
   });
 
-  // El id es lo que impide reenviar la misma noticia cada quince minutos.
+  // El id es lo que impide reenviar la misma noticia cada media hora.
   it("da el mismo id a la misma noticia y distinto a otra", () => {
     const otraVuelta = feedEvents(parseFeed(fed), spec, { retrievedAt: "2026-09-08T11:00:00Z" });
     expect(otraVuelta[0]?.id).toBe(eventos[0]?.id);

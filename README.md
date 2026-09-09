@@ -123,20 +123,53 @@ sirve y **dónde** conseguirlo, y sale con código 1.
 
 ## Producción
 
-`.github/workflows/monitor.yml` ejecuta el ciclo **cada 15 minutos**, y
-`agenda.yml` manda la agenda macro **a las 06:30 UTC de lunes a viernes**. Ese
-intervalo solo es posible porque el repositorio es público: en uno privado, las
-2.880 ejecuciones al mes no caben en los 2.000 minutos del free tier.
+`.github/workflows/monitor.yml` ejecuta el ciclo **cada 30 minutos**, y
+`agenda.yml` manda la agenda macro **a primera hora, de lunes a viernes**. Eso
+solo es posible porque el repositorio es público: en uno privado, las
+ejecuciones de un mes no caben en los 2.000 minutos del free tier.
 
-Dos cosas que el cron de GitHub hace y conviene no olvidar:
+**El cron de GitHub no cumple lo que se le pide, y este workflow está escrito
+alrededor de ese hecho.** El 9 de septiembre de 2026, con `*/15`, hubo **tres**
+ejecuciones programadas en catorce horas cuando tocaban ~56; el mismo día, el
+cron *diario* de la agenda no disparó ni una vez. El planificador es *best
+effort* y descarta disparos —también los de una vez al día— y la documentación
+de GitHub lo dice: bajo carga, "some queued jobs may be dropped", y la franja de
+más carga es el arranque de cada hora.
 
-- **Va en UTC y llega tarde**, entre 5 y 15 minutos. Esto no sirve para alertas
-  al segundo y no lo pretende.
+La respuesta no es pedir más disparos, porque el disparo es justo lo que escasea:
+
+- **Cada disparo que sobrevive compra un bloque de ~5 horas.** El job se queda
+  vivo repitiendo el ciclo cada 30 minutos hasta agotar su presupuesto, por
+  debajo del límite duro de 6 horas por job. Hacen falta ~4 disparos útiles al
+  día en vez de 48.
+- **Los bloques se encadenan solos.** Mientras uno vive, el disparo siguiente
+  queda pendiente por `concurrency` y arranca en cuanto el anterior termina.
+  Basta con que uno entre para que la cadena se sostenga.
+- **Se lanzan 24 intentos al día**, en dos entradas `cron` distintas y en
+  minutos que no son ni `:00` ni un cuarto. Los sobrantes se cancelan solos: en
+  el historial de Actions aparecerán ~20 ejecuciones `cancelled` al día, que no
+  son fallos ni gastan minutos. `gh run list --status success` filtra el ruido.
+
+Lo que **sigue sin garantizarse** es el instante: si un bloque muere y todos los
+disparos de las horas siguientes se descartan, hay un hueco. Esto es un monitor
+de media hora de resolución, no de alertas al segundo, y no lo pretende.
+
+Dos cosas más del cron de GitHub que conviene no olvidar:
+
+- **Va en UTC**, siempre, sin horario de verano.
 - **Se desactiva solo** tras 60 días sin actividad en el repositorio, y sin
-  avisar. Por eso existe `keepalive.yml`, que hace un commit al mes.
+  avisar. Por eso existe `keepalive.yml`, que hace dos commits al mes —dos y no
+  uno porque a él también le descartan disparos, y ese es el único fallo que
+  apaga el sistema entero sin ruido.
 
 Si el ciclo falla, el propio workflow manda un aviso a Telegram con el enlace de
-la ejecución: un monitor que se cae en silencio es peor que no tener monitor.
+la ejecución: un monitor que se cae en silencio es peor que no tener monitor. Un
+fallo no tumba el bloque —las vueltas siguientes se intentan igual— y solo se
+avisa del primer fallo de una racha: once mensajes idénticos en cinco horas no
+dicen más que uno.
+
+Para probar algo a mano, `gh workflow run monitor.yml` da **una sola vuelta** por
+defecto; con `-f vueltas=` (vacío) da el bloque entero.
 
 Los secretos que hay que dar de alta en el repositorio: `FRED_API_KEY`,
 `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` y `DATABASE_URL`.
@@ -169,7 +202,7 @@ formularios.
   7 por defecto). Ahí está el ahorro de la cascada.
 - **El estado vive en Neon, no en disco.** El job de Actions arranca con el disco
   vacío: sin base de datos remota, el cron no recuerda nada y repite la alerta
-  cada quince minutos. El archivo local queda solo para desarrollo.
+  en cada vuelta. El archivo local queda solo para desarrollo.
 - **Las migraciones son idempotentes y se aplican enteras cada vez.** No hay
   registro de lo aplicado; para un esquema de este tamaño no hace falta más.
 - **Una cifra inventada degrada la alerta, no tumba el ciclo.** Si el modelo cita
@@ -179,9 +212,9 @@ formularios.
 - **Una fuente caída no tumba el ciclo, y un evento fallido no tumba a los que
   quedan.** Se recogen todas las fuentes, se dice cuál falló y se sigue. El
   siguiente evento puede ser el que importaba.
-- **Hay techo de llamadas al modelo por ciclo.** El cron corre cada 15 minutos y
+- **Hay techo de llamadas al modelo por ciclo.** El ciclo corre cada 30 minutos y
   un feed suelta treinta elementos el primer día. Se atiende lo más reciente y el
-  resto espera a la vuelta siguiente, que llega en un cuarto de hora.
+  resto espera a la vuelta siguiente, que llega en media hora.
 - **El corte por antigüedad no se aplica a los datos macro.** Un titular de hace
   una semana no es noticia; el IPC de agosto lleva fecha del 1 de agosto y se
   publica a mediados de septiembre. Ahí la novedad la decide el registro de

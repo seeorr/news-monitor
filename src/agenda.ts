@@ -2,7 +2,7 @@
  * La agenda macro de la semana, una vez al día.
  *
  * Va aparte del ciclo del monitor a propósito. El monitor es reactivo —llega
- * algo, se juzga— y corre cada quince minutos; esto es una lista de fechas que
+ * algo, se juzga— y corre cada media hora; esto es una lista de fechas que
  * cambia una vez al día y no necesita ni modelo ni cascada. Mezclarlos habría
  * significado meter una condición en el bucle del ciclo para el único caso que
  * no es un evento.
