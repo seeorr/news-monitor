@@ -48,6 +48,44 @@ export interface AnalisisProfundo {
   what_to_watch: string[];
 }
 
+/**
+ * ¿Lo que ha vuelto de la base tiene de verdad esta forma?
+ *
+ * El tipo de arriba no garantiza nada al leer: el `jsonb` llega deserializado y
+ * el `as FilaEvento[]` de la capa de lectura es un cast, no una comprobación.
+ * Escribirlo lo escribe una salida validada con Zod, pero eso no cubre un
+ * `update` a mano ni un backfill futuro, y aguas abajo la ficha de detalle hace
+ * `analisis.why_it_matters.trim()` sin red: **una sola fila con otra forma
+ * lanzaría dentro de un Server Component y tumbaría `/news`, `/alerts` y el Home
+ * enteros**, porque las tres pintan el mismo componente.
+ *
+ * Es la misma doctrina que ya aplica el estado local unas líneas más abajo, donde
+ * un JSON corrupto no puede tumbar la ingesta. Aquí un JSON corrupto no puede
+ * tumbar el dashboard: se trata como si no hubiera análisis, que es exactamente
+ * lo que hay.
+ */
+export function esAnalisisProfundo(x: unknown): x is AnalisisProfundo {
+  if (typeof x !== "object" || x === null) return false;
+  const a = x as Record<string, unknown>;
+  const listaDeTextos = (v: unknown) => Array.isArray(v) && v.every((i) => typeof i === "string");
+  return (
+    typeof a["why_it_matters"] === "string" &&
+    listaDeTextos(a["catalysts"]) &&
+    listaDeTextos(a["risks"]) &&
+    listaDeTextos(a["what_to_watch"]) &&
+    Array.isArray(a["affected_assets"]) &&
+    a["affected_assets"].every((i) => {
+      if (typeof i !== "object" || i === null) return false;
+      const act = i as Record<string, unknown>;
+      return (
+        typeof act["symbol"] === "string" &&
+        typeof act["direction"] === "string" &&
+        typeof act["confidence"] === "number"
+      );
+    })
+  );
+}
+
 /** Lo que se guarda de una alerta enviada. Es una puntuación con lo que se mandó. */
 export interface AlertRecord extends Puntuacion {
   /** Si corrió el paso 4 de la cascada o se quedó en el resumen barato. */

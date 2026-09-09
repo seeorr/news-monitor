@@ -32,7 +32,7 @@ import { KINDS, SOURCES } from "../schema/event.ts";
 // El análisis se lee con el mismo tipo con el que se escribe. Declararlo dos
 // veces —una para guardar y otra para leer— es garantizar que un día digan cosas
 // distintas y que nadie lo note hasta que una sección de la ficha salga vacía.
-import type { AnalisisProfundo } from "../pipeline/seen.ts";
+import { esAnalisisProfundo, type AnalisisProfundo } from "../pipeline/seen.ts";
 
 export type { AnalisisProfundo };
 
@@ -102,7 +102,7 @@ export async function loImportante(
   sql: Ejecutor,
   opts: { limite?: number } = {},
 ): Promise<FilaEvento[]> {
-  return (await sql`
+  return sanear((await sql`
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
@@ -117,7 +117,7 @@ export async function loImportante(
     where e.importance_score is not null
     order by e.importance_score desc, e.first_seen_at desc
     limit ${techo(opts.limite, 10)}
-  `) as FilaEvento[];
+  `) as FilaEvento[]);
 }
 
 export interface FiltrosEventos {
@@ -160,7 +160,7 @@ export async function listarEventos(
   const desde = filtros.desde ?? null;
   const hasta = filtros.hasta ?? null;
 
-  return (await sql`
+  return sanear((await sql`
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
@@ -181,7 +181,7 @@ export async function listarEventos(
       and (${hasta}::timestamptz is null or e.first_seen_at < ${hasta}::timestamptz)
     order by e.first_seen_at desc
     limit ${techo(filtros.limite, 50)} offset ${desplazamiento(filtros.offset)}
-  `) as FilaEvento[];
+  `) as FilaEvento[]);
 }
 
 /**
@@ -204,7 +204,7 @@ export async function historialAlertas(
   const desde = filtros.desde ?? null;
   const hasta = filtros.hasta ?? null;
 
-  return (await sql`
+  return sanear((await sql`
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
@@ -218,7 +218,7 @@ export async function historialAlertas(
       and (${hasta}::timestamptz is null or a.sent_at < ${hasta}::timestamptz)
     order by a.sent_at desc
     limit ${techo(filtros.limite, 50)} offset ${desplazamiento(filtros.offset)}
-  `) as FilaEvento[];
+  `) as FilaEvento[]);
 }
 
 /**
@@ -230,7 +230,7 @@ export async function historialAlertas(
  */
 export async function ultimasSeries(sql: Ejecutor, seriesIds: string[]): Promise<FilaEvento[]> {
   if (seriesIds.length === 0) return [];
-  return (await sql`
+  return sanear((await sql`
     select distinct on (e.series_id)
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
@@ -244,7 +244,7 @@ export async function ultimasSeries(sql: Ejecutor, seriesIds: string[]): Promise
     from events e left join alerts a on a.event_id = e.id
     where e.series_id = any(${seriesIds}::text[]) and e.kind = 'macro_release'
     order by e.series_id, e.observed_at desc
-  `) as FilaEvento[];
+  `) as FilaEvento[]);
 }
 
 export interface UltimoMovimiento {
@@ -294,6 +294,26 @@ export async function recuento(sql: Ejecutor): Promise<Recuento> {
       (select max(first_seen_at) from events) as ultimo
   `) as Recuento[];
   return filas[0] ?? { eventos: 0, puntuados: 0, alertas: 0, ultimo: null };
+}
+
+/**
+ * Deja a null el análisis que no tenga la forma esperada.
+ *
+ * No es paranoia: el `as FilaEvento[]` de estas consultas es un cast y el `jsonb`
+ * no lo valida nadie al volver. Aguas abajo la ficha de detalle entra a los
+ * campos sin red, y las tres listas —`/news`, `/alerts` y el Home— pintan el
+ * mismo componente, así que **una sola fila mala dejaría las tres en error**, no
+ * solo su tarjeta. Un análisis con otra forma no es un análisis: se enseña como
+ * lo que es, un hueco.
+ *
+ * Se hace aquí, en el borde por donde el dato entra en la aplicación, y no en el
+ * componente: así una pantalla nueva no tiene que acordarse.
+ */
+function sanear(filas: FilaEvento[]): FilaEvento[] {
+  for (const f of filas) {
+    if (f.analysis != null && !esAnalisisProfundo(f.analysis)) f.analysis = null;
+  }
+  return filas;
 }
 
 /** Un límite que llega de una URL no puede pedir la tabla entera. */
