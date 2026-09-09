@@ -216,7 +216,11 @@ async function procesar(
     throw new Error(`Telegram rechazó el mensaje: ${sent.description ?? "sin detalle"}`);
   }
 
-  await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text });
+  // `analysis` viaja entero a la base, además de formateado dentro de `text`.
+  // Antes solo iba la prosa: se pagaba Opus por un análisis que la base no podía
+  // consultar y la ficha de detalle no tenía de dónde sacar catalizadores,
+  // riesgos ni activos afectados.
+  await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text, analysis });
   await marcarDuplicados(seen, grupo);
   log("  ✓ Enviada a Telegram y registrada.");
   return { enviada: true, deep: analysis !== null };

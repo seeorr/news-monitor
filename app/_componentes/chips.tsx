@@ -54,6 +54,53 @@ export function ChipFuente({ evento, ahora }: { evento: FilaEvento; ahora: Date 
   );
 }
 
+/**
+ * Un activo que el análisis del paso 4 señala como afectado, con su dirección y
+ * su confianza.
+ *
+ * No es lo mismo que `ChipActivo` y por eso no es el mismo componente: aquel
+ * pinta el activo **del que va** el evento —`series_id`, cuando de verdad es un
+ * ticker— y este los que el modelo dice que se ven afectados. Hasta hoy no
+ * tenían de dónde salir: vivían dentro de la prosa de `alerts.body`, y sacarlos
+ * de ahí con expresiones regulares era la adivinanza que el hueco G2 prohibía.
+ *
+ * El color va en la flecha y no en la píldora. `ChipActivo` no lleva color
+ * porque un activo no es ni importancia ni sentimiento; una **dirección** sí lo
+ * es, y verde y rojo significan aquí lo mismo que en el resto de la app.
+ *
+ * La flecha se repite tantas veces como la confianza, igual que `arrows()`
+ * repite el círculo en la alerta de Telegram. La misma confianza del mismo
+ * activo leída de dos formas sería el fallo de coherencia que ya obligó a
+ * unificar `sorpresa()`.
+ */
+export function ChipActivoAfectado({
+  activo,
+}: {
+  activo: { symbol: string; direction: string; confidence: number };
+}) {
+  const simbolo = activo.symbol.trim();
+  if (simbolo === "") return null;
+
+  const veces = Math.max(1, Math.min(3, Math.round(activo.confidence)));
+  const sube = activo.direction === "up";
+  const baja = activo.direction === "down";
+  const color = sube ? "text-success-text" : baja ? "text-danger-text" : "text-txt-3";
+  const dice = sube ? "sube" : baja ? "baja" : "sin dirección clara";
+  const flecha = sube ? "↑".repeat(veces) : baja ? "↓".repeat(veces) : "·";
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-chip bg-raised px-1.5 py-0.5 text-meta font-medium text-txt-2"
+      title={`${simbolo}: ${dice}${sube || baja ? ` · confianza ${veces} de 3` : ""}`}
+    >
+      {simbolo}
+      <span className={color} aria-label={dice}>
+        {flecha}
+      </span>
+    </span>
+  );
+}
+
 export function ChipTipo({ kind }: { kind: string }) {
   return (
     <span className="inline-flex items-center rounded-chip bg-raised px-1.5 py-0.5 text-meta text-txt-2">

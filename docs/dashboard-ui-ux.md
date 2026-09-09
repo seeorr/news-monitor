@@ -96,6 +96,7 @@ Una fila por evento anunciado. `alerts_un_evento` es un índice **único** sobre
 | `sentiment` | text | `bullish` · `bearish` · `neutral` |
 | `deep_analysis` | bool | Si corrió el paso 4 (Opus) o se quedó en el resumen barato |
 | `body` | text | **El texto plano de la alerta de Telegram, tal cual** |
+| `analysis` | jsonb null | La salida entera del paso 4: `why_it_matters`, `catalysts`, `risks`, `affected_assets`, `what_to_watch`. Null si no hubo paso 4 **y en todo lo enviado antes del 9 de septiembre**, que se formateó y se tiró (hueco G2) |
 
 Aquí hay dos cosas que condicionan medio dashboard y conviene entender antes de
 diseñar nada:
@@ -106,11 +107,14 @@ diseñar nada:
    `one_liner`—, alerte o no. Para jerarquizar se lee `events`; `alerts` dice qué
    se envió, con qué nota y con qué texto. Lo que sigue a null es lo que nunca se
    puntuó: lo que no pasó el filtro por reglas, y los duplicados de un grupo.
-2. **El análisis profundo no se persiste estructurado.** `analyzeEvent()`
-   devuelve `why_it_matters`, `catalysts`, `risks`, `affected_assets` y
-   `what_to_watch` (`src/ai/cascade.ts`), pero lo único que llega a la base es la
-   prosa ya formateada dentro de `alerts.body`. No hay tabla de catalizadores, ni
-   de riesgos, ni de activos afectados.
+2. ~~**El análisis profundo no se persiste estructurado.**~~ **Ya no** (9 de
+   septiembre, hueco G2 cerrado). `saveAlert()` escribe la salida entera de
+   `analyzeEvent()` en `alerts.analysis`, un `jsonb`, además de la prosa que va
+   en `body`. Las dos cosas son ciertas y ninguna sustituye a la otra: `analysis`
+   es lo que dijo el modelo y `body` es el texto literal que salió a Telegram.
+   Sigue sin haber tabla de catalizadores, de riesgos ni de activos afectados, y
+   es deliberado: se explica en G2. **Lo enviado antes de esa fecha tiene la
+   columna a null** y no se puede reconstruir sin inventarlo.
 
 ## `watchlist` — qué se vigila
 
@@ -280,10 +284,16 @@ Click → vista de ese activo.
 **Datos**: `events.series_id` cuando `kind` es `filing` o `market_move`, que es
 donde de verdad es un ticker. Para `macro_release` es una serie de FRED y para
 `news` es el id del feed: **en esos dos casos no es un activo y no se pinta como
-chip de activo**. Los "activos afectados" que produce el análisis profundo no
-están en la base (hueco G2): hoy solo se pueden leer dentro del texto de
-`alerts.body`, y parsear prosa para sacar chips es exactamente el tipo de
-adivinanza que aquí no se hace.
+chip de activo**.
+
+Los "activos afectados" que produce el análisis profundo ya sí están en la base
+—`alerts.analysis -> 'affected_assets'`, hueco G2 cerrado— y son **otro
+componente**, `ChipActivoAfectado`: aquel dice de qué activo va el evento y este,
+cuáles se ven afectados según el modelo. Lleva la dirección y la confianza que el
+modelo dio, con la flecha repetida tantas veces como confianza, igual que la
+alerta de Telegram. El color va en la flecha —una dirección sí es semántica— y no
+en la píldora. Nunca se saca de la prosa de `body`: parsear texto para pintar
+chips es exactamente el tipo de adivinanza que aquí no se hace.
 
 ### `SourceChip`
 
@@ -422,8 +432,10 @@ Click → panel con el texto íntegro de alerts.body
 `alerts.body` es texto plano formateado para Telegram, con emojis y saltos de
 línea. En el panel de detalle se renderiza **tal cual, en un bloque preformateado
 y monoespaciado**, sin intentar reconstruir sus secciones con expresiones
-regulares. Es una degradación consciente y se nota poco; parsearlo se rompería en
-silencio la primera vez que cambie `formatAlert()`.
+regulares: parsearlo se rompería en silencio la primera vez que cambie
+`formatAlert()`. Desde el 9 de septiembre tampoco hace falta, porque las
+secciones salen de `alerts.analysis` (hueco G2 cerrado) y `body` se queda con el
+papel que de verdad tiene: ser la copia de lo que se envió.
 
 ## `/news` — todo lo ingerido
 
@@ -454,10 +466,21 @@ siempre vacío es peor que su ausencia: enseña que el sistema tiene un agujero
 justo donde promete precisión.
 
 **Ficha de detalle**: `events.title`, `summary`, `source_url`, la línea de cifras
-(`actual`, `previous`, `consensus`, `unit`, `surprise_value`, `surprise_basis`) y,
-si hay alerta, `alerts.body`. La spec pedía enseñar aquí "AI analysis completo,
-catalysts, risks" como campos separados: **no se puede** (hueco G2). Van dentro de
-la prosa de `body` o no van.
+(`actual`, `previous`, `consensus`, `unit`, `surprise_value`, `surprise_basis`),
+las secciones del análisis profundo si las hay y, si hay alerta, `alerts.body`.
+
+La spec pedía enseñar aquí "AI analysis completo, catalysts, risks" como campos
+separados y durante un tiempo **no se pudo** (hueco G2). Ahora sí: salen de
+`alerts.analysis`, con una sección por campo —por qué importa, activos afectados,
+catalizadores, riesgos, qué vigilar— y **cada una se pinta solo si tiene
+contenido**. Un "Riesgos" con nada debajo diría que el sistema ha perdido algo
+cuando lo que pasa es que no había nada que decir.
+
+`alerts.body` **se sigue enseñando entero y debajo**, no en lugar de las
+secciones: es el registro literal de lo que salió a Telegram y no se reconstruye
+desde el análisis. Que su prosa repita parte de lo de arriba es el precio, y es
+barato: el día que cambie `formatAlert()`, las secciones seguirán diciendo la
+verdad y el registro también.
 
 La línea de cifras sigue la regla de `formatAlert()`: solo aparece lo que existe.
 Y la sorpresa **siempre declara su base** —"vs anterior", "vs media 3m"—, porque
@@ -819,21 +842,41 @@ se envió y para leer `body`.
 puntuó y no tiene nota: sus cuatro columnas son null y esa es la verdad. Los
 componentes siguen sin pintar badge cuando falta, tal como dice la sección 3.
 
-### G2 · El análisis profundo no se guarda estructurado
+### G2 · ~~El análisis profundo no se guarda estructurado~~ · **CERRADO**
 
-**Qué falta.** `Analysis` —`why_it_matters`, `catalysts`, `risks`,
-`affected_assets`, `what_to_watch`— se genera, se formatea y se tira. Lo único que
-persiste es la prosa dentro de `alerts.body`.
+**Cerrado el 9 de septiembre de 2026.** `saveAlert()` escribe la salida entera de
+`analyzeEvent()` en `alerts.analysis`, un `jsonb` con las mismas claves del
+esquema Zod de `Analysis` (migración `20260909_salida_del_analisis.sql`). Hasta
+hoy ese objeto se generaba, se formateaba a prosa y moría con la función: de las
+ocho alertas del histórico, **seis corrieron el paso 4** y las seis tienen la
+columna a null, porque su análisis ya no existe en ninguna parte y reconstruirlo
+sería inventarlo.
 
-**Consecuencia.** El panel de detalle de `/news` no puede tener secciones de
-catalizadores y riesgos, y los `AssetChip` de activos afectados no tienen fuente. Se
-paga un modelo caro por un análisis que la base no puede consultar.
+**Una columna y no tres tablas, y este es el motivo.** `event_assets (event_id,
+symbol, direction, confidence)` sería lo correcto el día que exista un filtro por
+activo en `/news`; hoy ese filtro no existe —la fila de filtros solo enseña los
+que funcionan— y una tabla que nadie consulta es esquema muerto que además hay que
+mantener en sincronía con su fuente. El `jsonb` no cierra esa puerta: guarda los
+mismos cuatro campos por activo, se consulta desde ya con
+`analysis -> 'affected_assets' @> '[{"symbol":"ACME"}]'` —comprobado contra la
+base—, y el día que la tabla se gane su sitio se rellena desde aquí sin haber
+perdido nada. Lo que no se recupera es lo que se estaba tirando.
 
-**Veredicto: la página sale degradada** —se enseña `body` en preformateado—, pero
-esto es una pérdida de información real y merece arreglarse pronto. Una columna
-`analysis jsonb` en `alerts`, rellenada en `saveAlert()`, lo resuelve sin tocar el
-esquema de nadie. Una tabla `event_assets (event_id, symbol, direction, confidence)`
-sería lo correcto para los chips y para el filtro por activo.
+Sin índice GIN por lo mismo: ocho filas y ninguna consulta que lo use. Se añade en
+una línea cuando haya volumen y filtro.
+
+**Qué cambia para el dashboard.** La ficha de detalle de `/news`, `/alerts` y Home
+—es el mismo componente, `TarjetaEvento`— tiene secciones de por qué importa,
+activos afectados, catalizadores, riesgos y qué vigilar. Los activos afectados son
+chips de verdad (`ChipActivoAfectado`), con la dirección y la confianza que dio el
+modelo, y no se sacan de la prosa. `alerts.body` se sigue enseñando entero y
+debajo: es el registro de lo que salió a Telegram, y las secciones no lo
+sustituyen.
+
+**Lo que sigue sin existir.** El filtro por activo de `/news` —el dato ya está,
+falta el filtro— y cualquier sección para un evento sin análisis, que son casi
+todos: el paso 4 solo corre por encima de `DEEP_ANALYSIS_THRESHOLD` y solo después
+de que el evento merezca alerta. Donde no hay análisis, no se pinta nada.
 
 ### G3 · No hay régimen de mercado
 
@@ -948,7 +991,7 @@ column if not exists`, como todas— y es el hueco más barato de cerrar de los 
 | Hueco | Bloquea | Sale degradada | Coste de cerrarlo |
 |---|---|---|---|
 | ~~G1 puntuación de lo no anunciado~~ | — | — | **cerrado el 9 de septiembre** |
-| G2 análisis estructurado | — | detalle de `/news` | Bajo |
+| ~~G2 análisis estructurado~~ | — | — | **cerrado el 9 de septiembre** |
 | G3 régimen de mercado | `RegimeBanner`, `/regime` | — | Alto |
 | G4 precios y universo de activos | `/markets` | Home, `/watchlist` | Medio |
 | G5 resultados y consenso | `/earnings` | `/calendar` | Alto |

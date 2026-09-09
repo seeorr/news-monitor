@@ -76,15 +76,29 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
      * La puntuación viaja a las dos tablas a propósito: `alerts` guarda con qué
      * nota se anunció y `events` deja ordenar todo lo puntuado por la misma
      * columna, haya alerta o no.
+     *
+     * El análisis del paso 4 se guarda **entero y estructurado**, no solo
+     * formateado dentro de `body`. Hasta hoy se pagaba el modelo caro, se montaba
+     * la prosa y el objeto moría con la función: era el hueco G2. `body` se sigue
+     * escribiendo igual y no es una copia redundante de esto —es el registro
+     * literal de lo que salió a Telegram, y eso no se reconstruye desde el
+     * análisis— pero deja de ser el único sitio donde vive lo que dijo el modelo.
+     *
+     * Va como texto con un `::jsonb` explícito porque el driver escapa cada hueco
+     * de la plantilla como parámetro: mandar el objeto a pelo dejaría en manos de
+     * la serialización del driver algo que aquí se decide en una línea.
      */
     async saveAlert(event: NormalizedEvent, alert: AlertRecord) {
       await mark(event, alert);
+      const analisis = alert.analysis === null ? null : JSON.stringify(alert.analysis);
       await sql`
         insert into alerts (
-          event_id, importance_score, market_impact_score, sentiment, deep_analysis, body
+          event_id, importance_score, market_impact_score, sentiment, deep_analysis, body,
+          analysis
         ) values (
           ${event.id}, ${Math.round(alert.importance)}, ${Math.round(alert.impact)},
-          ${alert.sentiment}, ${alert.deep}, ${alert.body}
+          ${alert.sentiment}, ${alert.deep}, ${alert.body},
+          ${analisis}::jsonb
         )
         on conflict (event_id) do nothing
       `;

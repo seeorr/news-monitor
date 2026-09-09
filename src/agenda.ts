@@ -75,6 +75,9 @@ async function main(): Promise<number> {
     sentiment: "neutral",
     oneLiner: `Agenda macro: ${citas.length} cita(s) en los proximos ${dias} dias.`,
     deep: false,
+    // Por lo mismo: no hay paso 4 que analice una lista de fechas. Se declara el
+    // hueco en vez de dejar el campo fuera y que parezca un olvido.
+    analysis: null,
     body: texto,
   });
   log(`✓ Agenda enviada y registrada (${citas.length} cita(s)).`);

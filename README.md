@@ -200,6 +200,15 @@ formularios.
 - **Un hueco antes que un cero de relleno.** Si un dato no existe, no se imprime.
 - **El análisis caro solo corre por encima del umbral** (`DEEP_ANALYSIS_THRESHOLD`,
   7 por defecto). Ahí está el ahorro de la cascada.
+- **Y cuando corre, se guarda estructurado, no solo en prosa.** Hasta el 9 de
+  septiembre la salida del paso 4 se formateaba y se tiraba: lo único que llegaba
+  a la base era el texto ya montado dentro de `alerts.body`. Se pagaba el modelo
+  caro por un análisis que la base no podía consultar. Ahora va entera a
+  `alerts.analysis`, un `jsonb`, y `body` se queda con el papel que de verdad
+  tiene: ser la copia literal de lo que salió a Telegram. Una columna y no tres
+  tablas —los activos afectados se consultan con `@>` sobre el `jsonb`— porque
+  una tabla que hoy no consulta nadie es esquema muerto, y el `jsonb` guarda lo
+  suficiente para rellenarla el día que se gane su sitio.
 - **El estado vive en Neon, no en disco.** El job de Actions arranca con el disco
   vacío: sin base de datos remota, el cron no recuerda nada y repite la alerta
   en cada vuelta. El archivo local queda solo para desarrollo.

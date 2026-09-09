@@ -89,6 +89,7 @@ describe("idempotencia", () => {
       oneLiner: "Frase del paso 3.",
       deep: true,
       body: "cuerpo de la alerta",
+      analysis: null,
     });
     expect(await seen.has(base.id)).toBe(true);
     expect(seen.alerts).toHaveLength(1);

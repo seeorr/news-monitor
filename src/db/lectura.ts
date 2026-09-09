@@ -29,6 +29,12 @@
 import { neon } from "@neondatabase/serverless";
 import type { Ejecutor } from "./cliente.ts";
 import { KINDS, SOURCES } from "../schema/event.ts";
+// El análisis se lee con el mismo tipo con el que se escribe. Declararlo dos
+// veces —una para guardar y otra para leer— es garantizar que un día digan cosas
+// distintas y que nadie lo note hasta que una sección de la ficha salga vacía.
+import type { AnalisisProfundo } from "../pipeline/seen.ts";
+
+export type { AnalisisProfundo };
 
 /**
  * Una fila de `events` tal y como sale de la base, más lo que aporta el join con
@@ -65,6 +71,19 @@ export interface FilaEvento {
   sent_at: Date | null;
   deep_analysis: boolean | null;
   body: string | null;
+  /**
+   * El análisis del paso 4, tal y como lo escribió `saveAlert()`. Es el mismo
+   * tipo con el que se guarda —una sola forma de punta a punta— y el driver de
+   * Neon devuelve el `jsonb` ya deserializado, así que aquí no se parsea nada.
+   *
+   * Null por tres motivos distintos y los tres ciertos: el evento no se anunció,
+   * se anunció sin llegar al umbral del paso 4, o se anunció antes del 9 de
+   * septiembre de 2026, cuando el análisis se formateaba y se tiraba. Todas las
+   * alertas del histórico son de ese tercer caso —seis de las ocho llegaron a
+   * correr el paso 4— y no se les puede reconstruir sin inventarlo: su prosa
+   * sigue entera en `body`, que es lo que hay.
+   */
+  analysis: AnalisisProfundo | null;
 }
 
 export function cliente(databaseUrl: string): Ejecutor {
@@ -93,7 +112,7 @@ export async function loImportante(
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
       coalesce(e.sentiment, a.sentiment)                     as sentiment,
       e.one_liner,
-      a.sent_at, a.deep_analysis, a.body
+      a.sent_at, a.deep_analysis, a.body, a.analysis
     from events e left join alerts a on a.event_id = e.id
     where e.importance_score is not null
     order by e.importance_score desc, e.first_seen_at desc
@@ -151,7 +170,7 @@ export async function listarEventos(
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
       coalesce(e.sentiment, a.sentiment)                     as sentiment,
       e.one_liner,
-      a.sent_at, a.deep_analysis, a.body
+      a.sent_at, a.deep_analysis, a.body, a.analysis
     from events e left join alerts a on a.event_id = e.id
     where (cardinality(${kinds}::text[]) = 0 or e.kind = any(${kinds}::text[]))
       and (cardinality(${sources}::text[]) = 0 or e.source = any(${sources}::text[]))
@@ -192,7 +211,7 @@ export async function historialAlertas(
       e.actual, e.previous, e.consensus, e.unit, e.surprise_value, e.surprise_basis,
       e.stale, e.official,
       a.importance_score, a.market_impact_score, a.sentiment, e.one_liner,
-      a.sent_at, a.deep_analysis, a.body
+      a.sent_at, a.deep_analysis, a.body, a.analysis
     from alerts a join events e on e.id = a.event_id
     where (${importanciaMin}::int is null or a.importance_score >= ${importanciaMin}::int)
       and (${desde}::timestamptz is null or a.sent_at >= ${desde}::timestamptz)
@@ -221,7 +240,7 @@ export async function ultimasSeries(sql: Ejecutor, seriesIds: string[]): Promise
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
       coalesce(e.sentiment, a.sentiment)                     as sentiment,
       e.one_liner,
-      a.sent_at, a.deep_analysis, a.body
+      a.sent_at, a.deep_analysis, a.body, a.analysis
     from events e left join alerts a on a.event_id = e.id
     where e.series_id = any(${seriesIds}::text[]) and e.kind = 'macro_release'
     order by e.series_id, e.observed_at desc

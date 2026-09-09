@@ -1,0 +1,43 @@
+-- La salida del paso 4 deja de tirarse a la basura.
+--
+-- `analyzeEvent()` devuelve `why_it_matters`, `catalysts`, `risks`,
+-- `affected_assets` y `what_to_watch`. Hasta hoy `formatAlert()` lo convertia en
+-- prosa y el objeto moria con la funcion: lo unico que llegaba a la base era ese
+-- texto ya montado, dentro de `alerts.body`. Se paga el modelo caro por un
+-- analisis que la base no puede consultar. De ahi salen tres consecuencias que
+-- se ven: la ficha de /news y /alerts no puede tener secciones de catalizadores
+-- y riesgos, los "activos afectados" no tienen de donde salir —el chip solo se
+-- pinta para `filing` y `market_move`, donde `series_id` si es un ticker— y "que
+-- se dijo de tal valor el mes pasado" solo se responde leyendo prosa a mano. Es
+-- el hueco G2 de `docs/dashboard-ui-ux.md`.
+--
+-- Va en `alerts` y no en `events` porque el paso 4 solo corre despues de
+-- `mereceAlerta()`: un evento sin alerta no tiene analisis y nunca lo tendra.
+-- En `events` seria una columna a null en mas del 95 % de las filas.
+--
+-- Una columna y no tres tablas, y este es el motivo. `event_assets (event_id,
+-- symbol, direction, confidence)` seria lo correcto el dia que exista un filtro
+-- por activo en /news; hoy ese filtro no existe —la fila de filtros solo enseña
+-- los que funcionan— y una tabla que nadie consulta es esquema muerto que hay
+-- que mantener en sincronia con la fuente. El jsonb no cierra esa puerta: guarda
+-- los mismos cuatro campos por activo, se consulta desde ya con
+-- `analysis -> 'affected_assets' @> '[{"symbol":"ACME"}]'`, y el dia que la tabla
+-- se gane su sitio se rellena desde aqui sin haber perdido nada. Lo que no se
+-- puede recuperar es lo que hoy se tira.
+--
+-- Sin indice GIN a proposito: hoy la tabla tiene ocho filas y ninguna consulta
+-- que lo use. Un indice sobre ocho filas no acelera nada y se paga en cada
+-- insert. Cuando haya filtro por activo y volumen, se añade en una linea.
+--
+-- Idempotente como las demas: `add column if not exists`, nada de `drop`, y la
+-- columna nace anulable y sin valor por defecto, asi que Postgres no reescribe
+-- ninguna fila existente. Las ocho alertas ya enviadas se quedan a null, que es
+-- la verdad: seis de ellas corrieron el paso 4 —`deep_analysis` a true— y su
+-- analisis se formateo y se perdio. No se puede reconstruir sin inventarlo. Solo
+-- lo tendran las nuevas.
+--
+-- El nombre cae detras de las cinco migraciones que ya existen por orden
+-- alfabetico, que es el orden en que las aplica el migrador. Al elegir el de la
+-- siguiente, mirar que siga cayendo detras de `20260908_inicial.sql`, que es la
+-- que crea esta tabla.
+alter table alerts add column if not exists analysis jsonb;

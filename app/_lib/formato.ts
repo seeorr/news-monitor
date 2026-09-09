@@ -147,6 +147,22 @@ export function cifras(e: FilaEvento): Cifra[] {
 }
 
 /**
+ * Los puntos de una lista del análisis profundo, listos para pintar.
+ *
+ * El modelo escribe cada punto como una frase y alguna vez suelta uno que es
+ * solo un punto o solo espacios: pasó en la primera alerta real, y por eso
+ * `formatAlert()` ya los filtra antes de unirlos. Aquí hace falta igual, porque
+ * una viñeta vacía en una lista parece un dato que se ha perdido por el camino.
+ *
+ * El punto final **no** se quita, al revés que en la alerta: allí estorba porque
+ * los puntos se unen con separadores dentro de una línea; en una lista con
+ * viñetas cada uno es una frase suelta y se lee mejor con él.
+ */
+export function puntos(lista: string[]): string[] {
+  return lista.map((p) => p.trim()).filter((p) => /[\p{L}\p{N}]/u.test(p));
+}
+
+/**
  * Si el `series_id` de este evento es de verdad un activo.
  *
  * Para `filing` y `market_move` lo es. Para `macro_release` es una serie de FRED

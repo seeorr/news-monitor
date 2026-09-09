@@ -97,12 +97,92 @@ describe("registro de un evento", () => {
       ...puntuacion,
       deep: true,
       body: "texto de la alerta",
+      analysis: null,
     });
 
     expect(consultas).toHaveLength(2);
     expect(consultas[0]?.sql).toContain("insert into events");
     expect(consultas[0]?.valores.slice(-4)).toEqual([7, 4, "neutral", "El IPC afloja una decima."]);
     expect(consultas[1]?.sql).toContain("insert into alerts");
-    expect(consultas[1]?.valores).toEqual([evento.id, 7, 4, "neutral", true, "texto de la alerta"]);
+    expect(consultas[1]?.valores).toEqual([
+      evento.id,
+      7,
+      4,
+      "neutral",
+      true,
+      "texto de la alerta",
+      null,
+    ]);
+  });
+});
+
+/**
+ * El hueco G2: `analyzeEvent()` devolvía el análisis, `formatAlert()` lo pasaba a
+ * prosa y el objeto moría con la función. Se pagaba el modelo caro por algo que
+ * la base no podía consultar. El fallo vivía entero en esta consulta —la columna
+ * no estaba en la lista— y por eso se mira aquí.
+ */
+describe("analisis del paso 4", () => {
+  const analisis = {
+    why_it_matters: "Un recorte de tipos abarata el credito.",
+    catalysts: ["Actas del FOMC la semana que viene."],
+    risks: ["Un IPC al alza revierte la expectativa."],
+    affected_assets: [
+      { symbol: "ACME", direction: "up", confidence: 2 },
+      { symbol: "GLOBX", direction: "unclear", confidence: 1 },
+    ],
+    what_to_watch: ["El bono a 2 anos.", "El dolar."],
+  };
+
+  it("el analisis viaja a la base entero y como jsonb", async () => {
+    const { consultas, ejecutor } = espia();
+    await neonSeenStore(URL_FALSA, ejecutor).saveAlert(evento, {
+      ...puntuacion,
+      deep: true,
+      body: "texto de la alerta",
+      analysis: analisis,
+    });
+
+    const { sql, valores } = consultas[1]!;
+    // `\b` a los dos lados a proposito: sin el, "deep_analysis" haria pasar la
+    // prueba con la columna nueva sin escribir, que es justo el fallo que caza.
+    expect(sql).toMatch(/\banalysis\b/);
+    expect(sql).toContain("::jsonb");
+
+    // Se guarda la forma entera, no un resumen ni tres campos sueltos: es lo que
+    // permite releerla sin volver a pagar el modelo.
+    expect(JSON.parse(String(valores.at(-1)))).toEqual(analisis);
+  });
+
+  // Un objeto vacio diria "el modelo analizo esto y no encontro nada", y es
+  // mentira: lo que pasa es que el paso 4 no corrio.
+  it("una alerta sin analisis escribe null, no un objeto vacio", async () => {
+    const { consultas, ejecutor } = espia();
+    await neonSeenStore(URL_FALSA, ejecutor).saveAlert(evento, {
+      ...puntuacion,
+      deep: false,
+      body: "texto de la alerta",
+      analysis: null,
+    });
+
+    expect(consultas[1]?.valores.at(-1)).toBeNull();
+    expect(consultas[1]?.valores.at(-1)).not.toEqual({});
+    expect(consultas[1]?.valores.at(-1)).not.toBe("{}");
+  });
+
+  // El analisis solo existe cuando hubo alerta: el paso 4 corre despues de
+  // `mereceAlerta()`. En `events` seria una columna a null casi siempre.
+  it("el analisis no se cuela en la tabla de eventos", async () => {
+    const { consultas, ejecutor } = espia();
+    await neonSeenStore(URL_FALSA, ejecutor).saveAlert(evento, {
+      ...puntuacion,
+      deep: true,
+      body: "texto de la alerta",
+      analysis: analisis,
+    });
+
+    expect(consultas[0]?.sql).toContain("insert into events");
+    expect(consultas[0]?.sql).not.toMatch(/\banalysis\b/);
+    expect(consultas[0]?.valores).not.toContain(JSON.stringify(analisis));
   });
 });

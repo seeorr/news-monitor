@@ -28,11 +28,41 @@ export interface Puntuacion {
   oneLiner: string;
 }
 
+/**
+ * La salida del paso 4, sin tipos de la cascada, igual que `Puntuacion`: esto no
+ * sabe de LLMs.
+ *
+ * Las claves son las del esquema Zod de `Analysis`, en inglés, que es como las
+ * escribe el modelo. Traducirlas aquí obligaría a una capa de mapeo entre lo que
+ * se genera, lo que se guarda y lo que se lee, y esa capa es justo donde las tres
+ * formas se separan sin que nadie lo note. Una sola forma de punta a punta:
+ * `analyzeEvent()` la produce, `saveAlert()` la escribe tal cual en el `jsonb` y
+ * `lectura.ts` la relee con este mismo tipo.
+ */
+export interface AnalisisProfundo {
+  why_it_matters: string;
+  catalysts: string[];
+  risks: string[];
+  /** `direction` es `up` · `down` · `unclear`; `confidence`, de 0 a 3. */
+  affected_assets: Array<{ symbol: string; direction: string; confidence: number }>;
+  what_to_watch: string[];
+}
+
 /** Lo que se guarda de una alerta enviada. Es una puntuación con lo que se mandó. */
 export interface AlertRecord extends Puntuacion {
   /** Si corrió el paso 4 de la cascada o se quedó en el resumen barato. */
   deep: boolean;
   body: string;
+  /**
+   * El análisis estructurado, o null si no lo hubo.
+   *
+   * **Obligatorio y anulable, no opcional**, y la diferencia es la lección del
+   * hueco G2: el objeto se generaba, se formateaba y nadie lo escribía en ningún
+   * sitio. Un campo que se puede omitir se omite, y el compilador no dice nada.
+   * Así, cada sitio que guarda una alerta tiene que declarar si hubo análisis; la
+   * agenda, que no pasa por la cascada, declara que no.
+   */
+  analysis: AnalisisProfundo | null;
 }
 
 export interface SeenStore {
@@ -56,10 +86,10 @@ export interface SeenStore {
  * Estado en un archivo JSON. Para desarrollo local: **no sobrevive a un job de
  * GitHub Actions**, que arranca con el disco limpio. En producción va Neon.
  *
- * Solo guarda ids: el historial de alertas y las notas del paso 3 necesitan una
- * base de datos, así que aquí `saveAlert` se limita a dar por procesado el
- * evento y la puntuación que reciba `mark` se descarta. Es una degradación
- * consciente del modo local, no un olvido.
+ * Solo guarda ids: el historial de alertas, las notas del paso 3 y el análisis
+ * del paso 4 necesitan una base de datos, así que aquí `saveAlert` se limita a
+ * dar por procesado el evento y la puntuación que reciba `mark` se descarta. Es
+ * una degradación consciente del modo local, no un olvido.
  */
 export function fileSeenStore(stateDir: string): SeenStore {
   const path = join(stateDir, "seen.json");

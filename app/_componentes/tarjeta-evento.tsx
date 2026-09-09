@@ -11,7 +11,7 @@
  * componente de cliente. Esta app es una lista larga de tarjetas; que abrir una
  * no obligue a volver es la diferencia entre revisarla y abandonarla.
  */
-import { ChipActivo, ChipFuente, ChipTipo } from "./chips.tsx";
+import { ChipActivo, ChipActivoAfectado, ChipFuente, ChipTipo } from "./chips.tsx";
 import {
   InsigniaEnviada,
   InsigniaImportancia,
@@ -19,8 +19,8 @@ import {
   InsigniaSentimiento,
   MedidorImpacto,
 } from "./insignias.tsx";
-import { SIN_CONSENSO, cifras, fechaYHora, observado } from "../_lib/formato.ts";
-import type { FilaEvento } from "../../src/db/lectura.ts";
+import { SIN_CONSENSO, cifras, fechaYHora, observado, puntos } from "../_lib/formato.ts";
+import type { AnalisisProfundo, FilaEvento } from "../../src/db/lectura.ts";
 
 export function TarjetaEvento({
   evento,
@@ -110,11 +110,19 @@ function Detalle({ evento }: { evento: FilaEvento }) {
       ) : null}
 
       {/*
-        `alerts.body` se enseña tal cual, en preformateado. Parsear su prosa para
-        reconstruir secciones se rompería en silencio la primera vez que cambie
-        `formatAlert()`, y los catalizadores, riesgos y activos afectados del
-        análisis profundo no están en ninguna columna: viven dentro de este texto
-        o no viven (hueco G2).
+        El análisis del paso 4, si lo hay. La inmensa mayoría de eventos no lo
+        tiene —solo corre por encima del umbral, y las alertas anteriores al 9 de
+        septiembre lo perdieron al formatearlo—, así que el componente entero
+        desaparece en vez de dejar cinco titulillos sin nada debajo.
+      */}
+      {evento.analysis ? <Analisis analisis={evento.analysis} /> : null}
+
+      {/*
+        `alerts.body` se sigue enseñando tal cual, en preformateado, y **debajo**
+        del análisis: es el registro literal de lo que salió a Telegram, no un
+        resumen de lo de arriba, y por eso no lo sustituye ninguna sección. Lo que
+        ya no hace falta es sacarle los catalizadores y los riesgos parseando su
+        prosa, que se habría roto en silencio en cuanto cambiara `formatAlert()`.
       */}
       {evento.body ? (
         <div className="mt-3 rounded-chip border border-linea bg-raised p-3">
@@ -140,4 +148,73 @@ function Detalle({ evento }: { evento: FilaEvento }) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Las cinco secciones del análisis profundo (`alerts.analysis`).
+ *
+ * Cada una se pinta **solo si tiene contenido**. No es defensa contra un dato
+ * roto: el modelo devuelve listas y alguna vez las devuelve vacías, y un
+ * "Riesgos" con nada debajo dice que el sistema ha perdido algo, cuando lo que
+ * pasó es que no había nada que decir. Es el principio del backend en pantalla:
+ * un hueco declarado —aquí, callándose— antes que un cero de relleno.
+ *
+ * Van encima de `alerts.body` y no en su lugar. Esto es la lectura del evento;
+ * `body` es el registro de lo que se envió, y los dos son ciertos.
+ */
+function Analisis({ analisis }: { analisis: AnalisisProfundo }) {
+  const porque = analisis.why_it_matters.trim();
+  const activos = analisis.affected_assets.filter((a) => a.symbol.trim() !== "");
+  const catalizadores = puntos(analisis.catalysts);
+  const riesgos = puntos(analisis.risks);
+  const vigilar = puntos(analisis.what_to_watch);
+
+  return (
+    <div className="mt-3 space-y-3">
+      {porque !== "" ? (
+        <section>
+          <Titulillo>Por qué importa</Titulillo>
+          <p className="mt-1 text-secundario text-txt-2">{porque}</p>
+        </section>
+      ) : null}
+
+      {activos.length > 0 ? (
+        <section>
+          <Titulillo>Activos afectados</Titulillo>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {/*
+              La clave es la posición y no el símbolo: nada impide que el modelo
+              nombre dos veces el mismo activo, la lista es estática y no se
+              reordena nunca.
+            */}
+            {activos.map((a, i) => (
+              <ChipActivoAfectado key={i} activo={a} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <Lista titulo="Catalizadores" items={catalizadores} />
+      <Lista titulo="Riesgos" items={riesgos} />
+      <Lista titulo="Qué vigilar" items={vigilar} />
+    </div>
+  );
+}
+
+function Lista({ titulo, items }: { titulo: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section>
+      <Titulillo>{titulo}</Titulillo>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-secundario text-txt-2">
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Titulillo({ children }: { children: React.ReactNode }) {
+  return <h4 className="text-meta font-medium text-txt-3">{children}</h4>;
 }

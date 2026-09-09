@@ -141,6 +141,57 @@ describe("series macro", () => {
   });
 });
 
+/**
+ * El otro lado del hueco G2: guardar el analisis no sirve de nada si la consulta
+ * no lo pide. Y son cuatro consultas con la lista de columnas escrita entera,
+ * porque el driver escapa cada hueco de la plantilla como parametro y un
+ * `${COLUMNAS}` mandaria la lista como si fuera un dato: olvidarla en una sola de
+ * las cuatro es el fallo que esto caza.
+ */
+describe("analisis del paso 4 al releerlo", () => {
+  it("las cuatro consultas que hacen join con alerts lo piden", async () => {
+    const { consultas, ejecutor } = espia();
+    await loImportante(ejecutor);
+    await listarEventos(ejecutor);
+    await historialAlertas(ejecutor);
+    await ultimasSeries(ejecutor, ["CPIAUCSL"]);
+
+    expect(consultas).toHaveLength(4);
+    for (const { sql } of consultas) expect(sql).toContain("a.analysis");
+  });
+
+  // El driver devuelve el `jsonb` ya deserializado: aqui no se parsea nada, y
+  // esta prueba fija la forma con la que cuenta la ficha de detalle.
+  it("la fila llega con el analisis ya deserializado", async () => {
+    const analisis = {
+      why_it_matters: "Un recorte de tipos abarata el credito.",
+      catalysts: ["Actas del FOMC la semana que viene."],
+      risks: ["Un IPC al alza revierte la expectativa."],
+      affected_assets: [{ symbol: "ACME", direction: "up", confidence: 2 }],
+      what_to_watch: ["El bono a 2 anos."],
+    };
+    const ejecutor: Ejecutor = async () => [{ id: "fred:CPIAUCSL:2026-08-01", analysis: analisis }];
+
+    const [fila] = await historialAlertas(ejecutor);
+    expect(fila?.analysis?.affected_assets[0]?.symbol).toBe("ACME");
+    expect(fila?.analysis?.risks).toEqual(["Un IPC al alza revierte la expectativa."]);
+    expect(fila?.analysis?.what_to_watch).toHaveLength(1);
+  });
+
+  // Las alertas anteriores al 9 de septiembre formatearon su analisis y lo
+  // tiraron. Su columna es null y no se puede reconstruir sin inventarla; lo que
+  // si conservan es su `body`, que es el texto que de verdad salio.
+  it("una alerta sin analisis lo devuelve a null, no como objeto vacio", async () => {
+    const ejecutor: Ejecutor = async () => [
+      { id: "fred:CPIAUCSL:2026-08-01", body: "texto de la alerta", analysis: null },
+    ];
+
+    const [fila] = await historialAlertas(ejecutor);
+    expect(fila?.analysis).toBeNull();
+    expect(fila?.body).toBe("texto de la alerta");
+  });
+});
+
 describe("ultimo movimiento por valor", () => {
   // El precio de hoy no esta en la base: solo se persiste la sesion que supera el
   // umbral. Lo unico que se puede enseñar es el ultimo que si llego a ser evento.
