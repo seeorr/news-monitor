@@ -123,73 +123,65 @@ sirve y **dónde** conseguirlo, y sale con código 1.
 
 ## Producción
 
-`.github/workflows/monitor.yml` ejecuta el ciclo **cada 30 minutos**, y
-`agenda.yml` manda la agenda macro **a primera hora, de lunes a viernes**. Eso
-solo es posible porque el repositorio es público: en uno privado, las
-ejecuciones de un mes no caben en los 2.000 minutos del free tier.
+El monitor pide dos disparos por hora, en los minutos :07 y :37, y ejecuta
+**un ciclo corto por disparo**. GitHub puede retrasarlos o descartarlos. No hay
+un runner reservado durante cinco horas: ese experimento se revirtió.
 
-**El cron de GitHub no cumple lo que se le pide, y este workflow está escrito
-alrededor de ese hecho.** El 9 de septiembre de 2026, con `*/15`, hubo **tres**
-ejecuciones programadas en catorce horas cuando tocaban ~56; el mismo día, el
-cron *diario* de la agenda no disparó ni una vez. El planificador es *best
-effort* y descarta disparos —también los de una vez al día— y la documentación
-de GitHub lo dice: bajo carga, "some queued jobs may be dropped", y la franja de
-más carga es el arranque de cada hora.
+Un hueco **puede perder noticias**: los feeds tienen una ventana limitada y el
+filtro descarta titulares y documentos de más de 72 horas. El índice único de
+alertas evita filas duplicadas en Neon, pero no deshace un mensaje ya enviado:
+si Telegram acepta y la escritura posterior falla, el ciclo puede reenviarlo.
+La concurrencia del workflow reduce solapamientos; no es una garantía de entrega
+exactamente una vez.
 
-La respuesta no es pedir más disparos, porque el disparo es justo lo que escasea:
+Los horarios son UTC. La agenda tiene tres intentos matinales y el latido dos
+fechas al mes, días 1 y 15. El aviso de fallo existente enlaza la ejecución de
+Actions. Para una vuelta manual: `gh workflow run monitor.yml`.
 
-- **Cada disparo que sobrevive compra un bloque de ~5 horas.** El job se queda
-  vivo repitiendo el ciclo cada 30 minutos hasta agotar su presupuesto, por
-  debajo del límite duro de 6 horas por job. Hacen falta ~4 disparos útiles al
-  día en vez de 48.
-- **Los bloques se encadenan solos.** Mientras uno vive, el disparo siguiente
-  queda pendiente por `concurrency` y arranca en cuanto el anterior termina.
-  Basta con que uno entre para que la cadena se sostenga.
-- **Se lanzan 24 intentos al día**, en dos entradas `cron` distintas y en
-  minutos que no son ni `:00` ni un cuarto. Los sobrantes se cancelan solos: en
-  el historial de Actions aparecerán ~20 ejecuciones `cancelled` al día, que no
-  son fallos ni gastan minutos. `gh run list --status success` filtra el ruido.
+Secretos: `FRED_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID` y `DATABASE_URL`. `SEC_USER_AGENT` es el contacto exigido
+por la SEC. La watchlist vive en Neon; las variables de watchlist son respaldo.
 
-Lo que **sigue sin garantizarse** es el instante: si un bloque muere y todos los
-disparos de las horas siguientes se descartan, hay un hueco. Esto es un monitor
-de media hora de resolución, no de alertas al segundo, y no lo pretende.
+### Régimen y resumen matinal
 
-Dos cosas más del cron de GitHub que conviene no olvidar:
+`npm run regimen -- --dry --preview` consulta cuatro series de FRED y deja
+una vista privada en `.cache/regimen.txt`. Sin `--dry`, persiste una fotografía
+diaria en `market_regimes`. No usa modelos ni envía mensajes.
 
-- **Va en UTC**, siempre, sin horario de verano.
-- **Se desactiva solo** tras 60 días sin actividad en el repositorio, y sin
-  avisar. Por eso existe `keepalive.yml`, que hace dos commits al mes —dos y no
-  uno porque a él también le descartan disparos, y ese es el único fallo que
-  apaga el sistema entero sin ruido.
+La clasificación descriptiva `riesgo-us-v1` exige unanimidad de VIX, tendencia
+del S&P 500 frente a su media de 200 sesiones y spread HY. VIX <20 y spread <4%
+son favorables; VIX >=30 y spread >=6% son adversos; los intervalos son mixtos.
+La tendencia vota según el cierre esté por encima o debajo de la media.
+Sin las tres señales válidas se declara `insufficient_data`. El dólar amplio
+de la Fed es contexto: no es DXY. La liquidez sigue sin cubrirse. Estos umbrales
+son una heurística explícita, sin validación predictiva ni recomendaciones de
+operación. Cada fotografía guarda las observaciones usadas, las fechas y las
+reglas para recalcularla.
 
-Si el ciclo falla, el propio workflow manda un aviso a Telegram con el enlace de
-la ejecución: un monitor que se cae en silencio es peor que no tener monitor. Un
-fallo no tumba el bloque —las vueltas siguientes se intentan igual— y solo se
-avisa del primer fallo de una racha: once mensajes idénticos en cinco horas no
-dicen más que uno.
+`npm run brief -- --dry --preview` compone el resumen: eventos ya puntuados de
+las últimas 24 horas, agenda y régimen. La vista queda en
+`.cache/morning-brief.txt`. Sin `--dry`, se guarda en `daily_briefs`.
+El envío requiere `--send` explícito. El workflow `brief.yml` sólo genera y
+guarda; no tiene credenciales de Telegram ni activa entregas. Sus horarios
+siguen dependiendo de GitHub. Aplicar `npm run db:migrate` antes de activarlo.
 
-Para probar algo a mano, `gh workflow run monitor.yml` da **una sola vuelta** por
-defecto; con `-f vueltas=` (vacío) da el bloque entero.
+En PowerShell, usar `npm.cmd` en estos comandos para conservar los argumentos
+que siguen a `--`. Un resumen vacío no demuestra que el mercado esté tranquilo:
+puede significar que el monitor no ha ingerido o puntuado eventos.
 
-Los secretos que hay que dar de alta en el repositorio: `FRED_API_KEY`,
-`ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` y `DATABASE_URL`.
-
-Tres más, opcionales, que **no pueden vivir en el código porque el repositorio es
-público**: `SEC_USER_AGENT` (el contacto que la SEC exige; sin él EDGAR responde
-403 y la fuente se salta), `SEC_WATCHLIST` y `WATCHLIST` (qué empresas se
-vigilan, que es exactamente el dato que dice en qué inviertes).
+Los datos de ICE BofA son para uso interno y no se publican en logs, fixtures ni
+repositorios. Consultar [las condiciones de la serie](https://fred.stlouisfed.org/series/BAMLH0A0HYM2).
+El código público sólo contiene reglas y ejemplos sintéticos. Las vistas locales
+se guardan en `.cache/`, que está excluida de git, y se rechazan en Actions.
 
 ### El dashboard, si se despliega
 
-**Se despliega con protección de acceso.** Enseña la watchlist, y una URL
-adivinable con una cartera dentro es una filtración aunque nadie enlace a ella.
-En Vercel: Deployment Protection → Vercel Authentication, incluida en el plan
-Hobby.
-
-Necesita `DATABASE_URL` —sin ella no hay nada que leer— y `FRED_API_KEY`, que la
-agenda consulta en vivo. Ninguna de las dos es `NEXT_PUBLIC_`, y ninguna consulta
-sale del servidor: el driver de Neon es de servidor y el navegador solo manda
-formularios.
+Necesita `DATABASE_URL` y `FRED_API_KEY`, siempre del lado servidor.
+**La protección estándar de Vercel no protege el dominio de producción**;
+activar Vercel Authentication en Hobby no basta para publicar una cartera allí.
+Antes de exponerlo hay que implementar acceso en la aplicación o comprobar una
+protección que cubra todas sus URLs, incluidas acciones de escritura.
+[Documentación oficial de protección](https://vercel.com/academy/optimize-your-vercel-account/deployment-protection).
 
 ## Decisiones que condicionan el código
 
@@ -221,7 +213,7 @@ formularios.
 - **Una fuente caída no tumba el ciclo, y un evento fallido no tumba a los que
   quedan.** Se recogen todas las fuentes, se dice cuál falló y se sigue. El
   siguiente evento puede ser el que importaba.
-- **Hay techo de llamadas al modelo por ciclo.** El ciclo corre cada 30 minutos y
+- **Hay techo de llamadas al modelo por ciclo.** El ciclo solicita una ejecución cada 30 minutos y
   un feed suelta treinta elementos el primer día. Se atiende lo más reciente y el
   resto espera a la vuelta siguiente, que llega en media hora.
 - **El corte por antigüedad no se aplica a los datos macro.** Un titular de hace

@@ -1122,3 +1122,21 @@ Variables que necesita el despliegue: `DATABASE_URL` —sin ella no hay nada que
 leer— y `FRED_API_KEY`, que la agenda consulta en vivo. `SEC_USER_AGENT` es
 opcional y solo la usa el alta de un valor para resolver su CIK. Ninguna es
 `NEXT_PUBLIC_`.
+
+
+## Actualización del backend · 9 de septiembre, continuación
+
+G3 deja de estar completamente vacío: existe un régimen descriptivo US en
+`src/sources/regimen.ts`, persistido en `market_regimes`. VIX, S&P 500 y spread
+HY votan; el dólar amplio de la Fed aporta contexto. Se guardan observaciones,
+fechas y versión de regla. La liquidez y la página `/regime` siguen pendientes.
+No debe presentarse esta clasificación como régimen macro global ni como DXY.
+
+El resumen matinal se genera con `npm run brief`, vive en `daily_briefs` y
+reutiliza los eventos puntuados de las últimas 24 horas. Su envío requiere
+`--send`; el workflow nuevo sólo lo prepara. No hay todavía un selector de hora
+ni una página para leer el resumen. La ausencia de eventos no demuestra calma.
+
+La protección estándar de Vercel deja público el dominio de producción. Antes
+de desplegar datos de cartera hace falta proteger las rutas y las acciones;
+activar Vercel Authentication en Hobby no basta por sí solo.
