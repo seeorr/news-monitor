@@ -28,13 +28,25 @@ import {
 import { describeMissing, loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
 import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
-import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
+import { collectEvents, porFecha, recientes, taparTickers } from "./pipeline/collect.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import { fileSeenStore, type Puntuacion, type SeenStore } from "./pipeline/seen.ts";
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
 
-const log = (...a: unknown[]) => console.log(...a);
+/**
+ * La unica salida del proceso, y por eso es `let`.
+ *
+ * Se reasigna **una sola vez**, en cuanto la ingesta devuelve la watchlist que
+ * de verdad se ha usado, para que a partir de ahi ningun ticker salga en claro.
+ * No es una precaucion abstracta: el repositorio es publico y los logs de
+ * Actions tambien, y de aqui abajo se imprime el titular de cada evento y el
+ * cuerpo entero de la alerta. Un movimiento de precio se titula "ACME +4,20 % en
+ * la sesion" y un documento "ACME · 8-K": el ticker va dentro del texto, no al
+ * lado, asi que taparlo en el origen exigiria auditar cada fuente. Se tapa aqui,
+ * que es por donde sale todo.
+ */
+let log = (...a: unknown[]) => console.log(...a);
 
 async function main(): Promise<number> {
   const dry = process.argv.includes("--dry");
@@ -52,6 +64,10 @@ async function main(): Promise<number> {
 
   // ── Ingesta ────────────────────────────────────────────────────────────────
   const { events, failures, ok, vigilados } = await collectEvents(config, { retrievedAt, log });
+  // Desde aqui, todo lo que se imprima pasa por la red. `collectEvents` tapa su
+  // propia salida porque conoce la watchlist antes que nadie; esta es la otra
+  // mitad, la que cubre el resto del ciclo.
+  log = taparTickers(log, vigilados);
   if (ok === 0) {
     log("\n✕ Ninguna fuente ha respondido. No hay nada que analizar: se aborta el ciclo.");
     return 1;

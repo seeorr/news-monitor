@@ -75,8 +75,16 @@ export async function watchlistEfectiva(
  *
  * En local, con la watchlist a la vista en Neon, se pierde poco: el numero de
  * tarea basta para saber cual fallo mirando el orden de `vigilados`.
+ *
+ * Se exporta porque **la red tiene que estar en el borde de salida del proceso,
+ * no dentro de una funcion**. Puesta solo aqui cubria la ingesta y dejaba fuera
+ * todo lo que `main.ts` imprime despues: el titular de cada evento y el cuerpo
+ * entero de la alerta. Y los titulos de precios y de documentos llevan el ticker
+ * dentro por construccion —"ACME +4,20 % en la sesion", "ACME · 8-K"—, asi que
+ * la primera sesion que superara un umbral habria publicado el valor en un log
+ * que cualquiera puede leer.
  */
-function taparTickers(
+export function taparTickers(
   log: (...a: unknown[]) => void,
   vigilados: Vigilado[],
 ): (...a: unknown[]) => void {
