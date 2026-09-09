@@ -9,40 +9,62 @@
  * el proyecto no se pausa mientras el cron lo toque. Mismo driver HTTP que allí.
  */
 import { neon } from "@neondatabase/serverless";
-import type { AlertRecord, SeenStore } from "../pipeline/seen.ts";
+import type { Ejecutor } from "./cliente.ts";
+import type { AlertRecord, Puntuacion, SeenStore } from "../pipeline/seen.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
-export function neonSeenStore(databaseUrl: string): SeenStore {
-  const sql = neon(databaseUrl);
-
-  const mark = async (event: NormalizedEvent): Promise<void> => {
+/**
+ * El cliente SQL entra por parámetro —con el de verdad por defecto— para poder
+ * mirar en un test la consulta que sale de casa. No es un lujo: los dos fallos
+ * que ha tenido este esquema vivían enteros en el texto de la consulta y en sus
+ * parámetros, y ninguno se veía leyendo el código con atención.
+ */
+export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(databaseUrl)): SeenStore {
+  const mark = async (event: NormalizedEvent, puntuacion?: Puntuacion | null): Promise<void> => {
+    const p = puntuacion ?? null;
     await sql`
       insert into events (
         id, source, source_url, kind, title, summary, country, series_id,
         observed_at, retrieved_at,
         actual, previous, consensus, unit, surprise_value, surprise_basis,
-        stale, official
+        stale, official,
+        importance_score, market_impact_score, sentiment, one_liner
       ) values (
         ${event.id}, ${event.source}, ${event.source_url}, ${event.kind},
         ${event.title}, ${event.summary}, ${event.country}, ${event.series_id},
         ${event.observed_at}, ${event.retrieved_at},
         ${event.actual}, ${event.previous}, ${event.consensus}, ${event.unit},
         ${event.surprise?.value ?? null}, ${event.surprise?.basis ?? null},
-        ${event.stale}, ${event.official}
+        ${event.stale}, ${event.official},
+        ${p === null ? null : Math.round(p.importance)},
+        ${p === null ? null : Math.round(p.impact)},
+        ${p?.sentiment ?? null}, ${p?.oneLiner ?? null}
       )
-      on conflict (id) do nothing
+      on conflict (id) do update set
+        importance_score    = coalesce(excluded.importance_score, events.importance_score),
+        market_impact_score = coalesce(excluded.market_impact_score, events.market_impact_score),
+        sentiment           = coalesce(excluded.sentiment, events.sentiment),
+        one_liner           = coalesce(excluded.one_liner, events.one_liner)
     `;
   };
 
   return {
     async has(id) {
-      const rows = await sql`select 1 from events where id = ${id} limit 1`;
-      return rows.length > 0;
+      const filas = (await sql`select 1 from events where id = ${id} limit 1`) as unknown[];
+      return filas.length > 0;
     },
 
     /**
-     * `on conflict do nothing` es la idempotencia entera: dos ejecuciones
-     * simultáneas del cron no se pisan y la segunda no reescribe el dato.
+     * El evento en sí no se reescribe nunca: el `do update` toca **solo** las
+     * cuatro columnas del paso 3, y con `coalesce` para que un marcado sin
+     * puntuación no borre la que ya hubiera. Titular, cifras y fechas siguen
+     * siendo lo que se vio la primera vez, que es lo que hace idempotente la
+     * alerta cuando dos ejecuciones del cron se pisan.
+     *
+     * Por qué la nota se guarda aquí y no solo en `alerts`: con el umbral en 7,
+     * la mayoría de lo que se puntúa no se anuncia. Si vive solo en la alerta,
+     * se paga el modelo y se tira el resultado, y cualquier pantalla que ordene
+     * "lo más importante" ordena en realidad el subconjunto de lo anunciado.
      */
     mark,
 
@@ -50,9 +72,13 @@ export function neonSeenStore(databaseUrl: string): SeenStore {
      * El evento se guarda primero: `alerts.event_id` tiene clave foránea y una
      * alerta sin su evento no debe existir. El índice único de `alerts` es la
      * segunda red contra el reenvío, por si el registro de vistos falla.
+     *
+     * La puntuación viaja a las dos tablas a propósito: `alerts` guarda con qué
+     * nota se anunció y `events` deja ordenar todo lo puntuado por la misma
+     * columna, haya alerta o no.
      */
     async saveAlert(event: NormalizedEvent, alert: AlertRecord) {
-      await mark(event);
+      await mark(event, alert);
       await sql`
         insert into alerts (
           event_id, importance_score, market_impact_score, sentiment, deep_analysis, body
@@ -65,8 +91,8 @@ export function neonSeenStore(databaseUrl: string): SeenStore {
     },
 
     async size() {
-      const rows = (await sql`select count(*)::int as n from events`) as Array<{ n: number }>;
-      return rows[0]?.n ?? 0;
+      const filas = (await sql`select count(*)::int as n from events`) as Array<{ n: number }>;
+      return filas[0]?.n ?? 0;
     },
   };
 }

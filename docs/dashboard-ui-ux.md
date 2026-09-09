@@ -71,10 +71,16 @@ eventos que llegan a la cascada, alerten o no.
 | `surprise_value` / `surprise_basis` | float / text null | Solo macro. La base es `consensus`, `previous` o `mean_3m`, y en la práctica nunca es la primera |
 | `stale` | bool | El dato es el último válido conocido, no uno fresco. **La UI debe decirlo, igual que la alerta** |
 | `official` | bool | Fuente primaria (Fed, BCE, SEC, FRED). Pasa el filtro por reglas siempre |
+| `importance_score` | int 0-10 null | Nota del paso 3, alerte o no. Null = nunca se puntuó |
+| `market_impact_score` | int 0-10 null | Ídem |
+| `sentiment` | text null | `bullish` · `bearish` · `neutral`. Ídem |
+| `one_liner` | text null | La frase del paso 3. **Es el único resumen propio de un evento sin alerta**: el `title` y el `summary` los escribe la fuente |
 
 Índices que ya existen y que conviene respetar al escribir las consultas:
-`events_por_serie (series_id, observed_at desc)` y
-`events_por_fuente (source, first_seen_at desc)`.
+`events_por_serie (series_id, observed_at desc)`,
+`events_por_fuente (source, first_seen_at desc)` y
+`events_por_importancia (importance_score desc, first_seen_at desc)`, que es el que
+sirve al "lo importante" del Home.
 
 ## `alerts` — lo que de verdad se envió
 
@@ -94,11 +100,12 @@ Una fila por evento anunciado. `alerts_un_evento` es un índice **único** sobre
 Aquí hay dos cosas que condicionan medio dashboard y conviene entender antes de
 diseñar nada:
 
-1. **La puntuación solo sobrevive si hubo alerta.** Un evento que se puntúa y no
-   llega al umbral se registra en `events` con `mark()`, y su
-   `importance_score`, su `sentiment` y su `one_liner` se pierden. No hay columna
-   donde guardarlos. Cualquier pantalla que ordene "por importancia" está
-   ordenando, en realidad, el subconjunto de lo anunciado.
+1. ~~**La puntuación solo sobrevive si hubo alerta.**~~ **Ya no** (9 de septiembre,
+   hueco G1 cerrado). `mark()` escribe la nota del paso 3 en las cuatro columnas
+   de `events` —`importance_score`, `market_impact_score`, `sentiment`,
+   `one_liner`—, alerte o no. Para jerarquizar se lee `events`; `alerts` dice qué
+   se envió, con qué nota y con qué texto. Lo que sigue a null es lo que nunca se
+   puntuó: lo que no pasó el filtro por reglas, y los duplicados de un grupo.
 2. **El análisis profundo no se persiste estructurado.** `analyzeEvent()`
    devuelve `why_it_matters`, `catalysts`, `risks`, `affected_assets` y
    `what_to_watch` (`src/ai/cascade.ts`), pero lo único que llega a la base es la
@@ -150,8 +157,8 @@ mejor cumpla esto:
    página en dos o tres segundos sin leer una frase entera: badges, chips, bordes
    de color, iconos.
 3. **Jerarquía es importancia real, no orden cronológico.** Lo importante arriba
-   y más grande, no lo reciente. Con el matiz de que hoy la importancia solo
-   existe para lo anunciado (ver §0); donde no la haya, la jerarquía la dan
+   y más grande, no lo reciente. La importancia existe para todo lo que pasó por
+   el paso 3 (§0); donde no la haya —lo que ni se puntuó— la jerarquía la dan
    `kind` y `official`, y se dice.
 4. **Contexto antes que detalle.** Primero el panorama —totales, resumen—, luego
    el listado.
@@ -241,25 +248,27 @@ Se construyen **antes** que ninguna página: se repiten en `/`, `/news`,
 0-3  → --muted-bg   / --muted-text     noise (normalmente ni se muestra)
 ```
 
-**Datos**: `alerts.importance_score`. Solo existe para eventos anunciados. Para un
-evento sin fila en `alerts`, el componente **no se pinta**; no se inventa un 5 de
-relleno ni se enseña un guion sin explicación. Un aviso de umbral: `ALERT_THRESHOLD`
-vale 7 por defecto y `DEEP_ANALYSIS_THRESHOLD` también, así que en la práctica casi
-todo lo que tenga badge estará entre 7 y 10. Los rangos bajos son para el día en
-que se guarde el scoring de lo no anunciado (hueco G1).
+**Datos**: `events.importance_score`, con `alerts.importance_score` como origen
+equivalente cuando la consulta ya trae el join. Existe para **todo lo que pasó por
+el paso 3**, alerte o no (hueco G1, cerrado). Cuando es null —lo que nunca se
+puntuó: lo descartado por el filtro por reglas y los duplicados de un grupo— el
+componente **no se pinta**; no se inventa un 5 de relleno ni se enseña un guion sin
+explicación. Los cuatro rangos se usan de verdad: con `ALERT_THRESHOLD` en 7, lo
+anunciado vive entre 7 y 10 y lo ingerido llena los tramos de abajo.
 
 ### `SentimentBadge`
 
 "Bullish" / "Neutral" / "Bearish" → `--success` / `--accent` / `--danger`.
 
-**Datos**: `alerts.sentiment`, valores exactos `bullish` · `bearish` · `neutral`
-(el enum de `Scoring` en `src/ai/cascade.ts`). Mismas condiciones que el badge de
-importancia: sin alerta, sin sentimiento.
+**Datos**: `events.sentiment` —o `alerts.sentiment`, que es el mismo valor—, con
+los valores exactos `bullish` · `bearish` · `neutral` (el enum de `Scoring` en
+`src/ai/cascade.ts`). Mismas condiciones que el badge de importancia: si es null,
+no se pinta.
 
 ### `ImpactMeter` (añadido)
 
-`alerts.market_impact_score` existe, es 0-10 y hoy no lo enseña nadie: la alerta
-de Telegram solo imprime la importancia. Un medidor pequeño de tres o cuatro
+`market_impact_score` existe en las dos tablas, es 0-10 y hoy no lo enseña nadie:
+la alerta de Telegram solo imprime la importancia. Un medidor pequeño de tres o cuatro
 tramos junto al `ImportanceBadge` lo aprovecha sin pedirle nada al backend. Es la
 mejora más barata de todo el documento.
 
@@ -433,8 +442,8 @@ Click → acordeón en línea o panel lateral con el detalle
 | Fuente | **existe** | `events.source` más `events.series_id` (el feed concreto) |
 | Solo fuentes oficiales | **existe** | `events.official` — no estaba en la spec y separa señal de ruido mejor que ningún otro |
 | Fecha | **existe, con cuidado** | Filtrar por `first_seen_at` (timestamptz), no por `observed_at`, que es texto de precisión mixta |
-| Importancia | **parcial** | `alerts.importance_score`: filtra solo dentro de lo anunciado |
-| Sentimiento | **parcial** | `alerts.sentiment`, misma limitación |
+| Importancia | **existe** | `events.importance_score`, sobre todo lo puntuado (G1 cerrado). Null en lo que nunca pasó por el paso 3 |
+| Sentimiento | **existe** | `events.sentiment`, misma condición |
 | Activo | **parcial** | `events.series_id` sirve para documentos y movimientos; una noticia no dice a qué activo afecta |
 | País | **degradado** | `events.country` es un emoji del feed, no del contenido: `🇺🇸`, `🇪🇺`, `🌐`. Vale como chip visual, **no como faceta seria** |
 | Sector | **no existe** | Hueco G6 |
@@ -470,8 +479,10 @@ Grid de 2 columnas, proporción aproximada 1,7 : 1
     Bloque "Agenda"    → próximas citas de la ventana
 ```
 
-**Datos**: la columna principal es `alerts` cruzada con `events`, ordenada por
-`importance_score desc, sent_at desc` y con techo. El bloque macro, la última fila
+**Datos**: la columna principal sale de `events` ordenada por `importance_score
+desc, first_seen_at desc` —con `importance_score is not null`, que es lo que usa el
+índice `events_por_importancia`— y con techo. El join con `alerts` sirve para
+marcar lo que además se envió y para abrir su `body`, no para jerarquizar. El bloque macro, la última fila
 de `events` por cada `series_id` de `SERIES`. El de agenda, ver `/calendar`.
 
 Dos cambios respecto a la spec original: **no hay `RegimeBanner`** arriba (hueco
@@ -788,22 +799,24 @@ Todo lo que la spec original pide y **hoy no se puede pintar porque nadie lo
 genera**. Comprobado en el código, no supuesto. Para cada uno: qué falta, si es
 trabajo de backend previo o si la página puede salir degradada, y qué costaría.
 
-### G1 · La puntuación solo existe para lo anunciado
+### G1 · ~~La puntuación solo existe para lo anunciado~~ · **CERRADO**
 
-**Qué falta.** `importance_score`, `market_impact_score`, `sentiment` y
-`one_liner` solo se guardan cuando hay alerta: `saveAlert()` escribe en `alerts`, y
-un evento que no llega al umbral pasa por `mark()`, que solo toca `events`. Todo lo
-puntuado y no anunciado pierde su puntuación.
+**Cerrado el 9 de septiembre de 2026.** `mark()` acepta la nota del paso 3 y la
+escribe en `events.importance_score`, `market_impact_score`, `sentiment` y
+`one_liner` (migración `20260908_puntuacion.sql`). El `on conflict` pasó de `do
+nothing` a un `do update` que toca **solo esas cuatro columnas** y con `coalesce`,
+de forma que un marcado sin nota —un duplicado de grupo, que nadie puntuó— no borra
+la que ya hubiera, y el resto del evento sigue sin reescribirse nunca.
 
-**Consecuencia.** "Lo importante" en el Home y los filtros de importancia y
-sentimiento en `/news` operan sobre el subconjunto anunciado, no sobre lo ingerido.
-Con `ALERT_THRESHOLD` en 7, eso son unos pocos eventos al día.
+**Qué cambia para el dashboard.** "Lo importante" en el Home y los filtros de
+importancia y sentimiento de `/news` ordenan **todo lo puntuado**, no solo lo
+anunciado. Las consultas de esas dos páginas salen de `events` y ya no necesitan el
+join con `alerts` para jerarquizar; el join sigue haciendo falta para saber si algo
+se envió y para leer `body`.
 
-**Veredicto: se lanza degradada, pero el arreglo es pequeño y rinde mucho.** Bastan
-tres columnas anulables en `events` (`importance_score`, `market_impact_score`,
-`sentiment`) rellenadas tras el paso 3, y un `update` en vez de un insert cuando el
-evento ya estaba. Media hora de backend que convierte `/news` de un buzón
-cronológico en una página priorizada de verdad.
+**Lo que sigue sin existir.** Un evento que no pasó el filtro por reglas nunca se
+puntuó y no tiene nota: sus cuatro columnas son null y esa es la verdad. Los
+componentes siguen sin pintar badge cuando falta, tal como dice la sección 3.
 
 ### G2 · El análisis profundo no se guarda estructurado
 
@@ -887,8 +900,9 @@ natural para meterlo, y la columna ya está esperando en la tabla.
   esquema Zod de `Scoring` y una columna más.
 - **Horizonte temporal** (inmediato / semanas / estructural): tampoco existe. Mismo
   arreglo posible, un campo más en `Scoring`. Con cuidado de que ese campo no
-  arrastre el problema de G1: si solo se guarda al alertar, filtra sobre el
-  subconjunto anunciado.
+  arrastre el problema que tuvo G1: cualquier campo nuevo del paso 3 se escribe en
+  `events` desde `mark()`, no solo al alertar. Si no, filtra sobre el subconjunto
+  anunciado.
 - **País**: `events.country` existe, pero es **un emoji heredado del feed**, no del
   contenido. Una noticia de CNBC sobre el BCE lleva `🌐` porque así está declarado
   el feed. Sirve de adorno informativo; **no sirve como faceta de filtrado** y no
@@ -932,7 +946,7 @@ column if not exists`, como todas— y es el hueco más barato de cerrar de los 
 
 | Hueco | Bloquea | Sale degradada | Coste de cerrarlo |
 |---|---|---|---|
-| G1 puntuación de lo no anunciado | — | Home, `/news` | Bajo |
+| ~~G1 puntuación de lo no anunciado~~ | — | — | **cerrado el 9 de septiembre** |
 | G2 análisis estructurado | — | detalle de `/news` | Bajo |
 | G3 régimen de mercado | `RegimeBanner`, `/regime` | — | Alto |
 | G4 precios y universo de activos | `/markets` | Home, `/watchlist` | Medio |

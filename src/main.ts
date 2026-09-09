@@ -30,7 +30,7 @@ import { neonSeenStore } from "./db/neon.ts";
 import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
 import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
-import { fileSeenStore, type SeenStore } from "./pipeline/seen.ts";
+import { fileSeenStore, type Puntuacion, type SeenStore } from "./pipeline/seen.ts";
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
 
@@ -167,9 +167,16 @@ async function procesar(
     `\n▸ ${event.title}\n  ${scoring.importance_score}/10 · ${scoring.sentiment} · ${event.source}`,
   );
 
+  const puntuacion: Puntuacion = {
+    importance: scoring.importance_score,
+    impact: scoring.market_impact_score,
+    sentiment: scoring.sentiment,
+    oneLiner: scoring.one_liner,
+  };
+
   if (!mereceAlerta(event, scoring, config.alertThreshold)) {
-    log("  · No merece alerta. Registrado y a otra cosa.");
-    if (!dry) await marcarGrupo(seen, grupo);
+    log("  · No merece alerta. Registrado con su nota y a otra cosa.");
+    if (!dry) await marcarGrupo(seen, grupo, puntuacion);
     return { enviada: false, deep: false };
   }
 
@@ -209,13 +216,7 @@ async function procesar(
     throw new Error(`Telegram rechazó el mensaje: ${sent.description ?? "sin detalle"}`);
   }
 
-  await seen.saveAlert(event, {
-    importance: scoring.importance_score,
-    impact: scoring.market_impact_score,
-    sentiment: scoring.sentiment,
-    deep: analysis !== null,
-    body: text,
-  });
+  await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text });
   await marcarDuplicados(seen, grupo);
   log("  ✓ Enviada a Telegram y registrada.");
   return { enviada: true, deep: analysis !== null };
@@ -229,11 +230,16 @@ async function procesar(
  * separado. El agrupamiento habría servido para retrasar el ruido quince
  * minutos.
  */
-async function marcarGrupo(seen: SeenStore, grupo: Grupo): Promise<void> {
-  await seen.mark(grupo.representante);
+async function marcarGrupo(seen: SeenStore, grupo: Grupo, puntuacion: Puntuacion): Promise<void> {
+  await seen.mark(grupo.representante, puntuacion);
   await marcarDuplicados(seen, grupo);
 }
 
+/**
+ * Los duplicados se marcan **sin** nota. Se parecen al representante lo bastante
+ * para no anunciarse dos veces, pero nadie los ha puntuado: copiarle la suya
+ * sería inventar una nota que ningún modelo dio.
+ */
 async function marcarDuplicados(seen: SeenStore, grupo: Grupo): Promise<void> {
   for (const duplicado of grupo.duplicados) await seen.mark(duplicado);
 }

@@ -86,12 +86,16 @@ describe("idempotencia", () => {
       importance: 9,
       impact: 8,
       sentiment: "bullish",
+      oneLiner: "Frase del paso 3.",
       deep: true,
       body: "cuerpo de la alerta",
     });
     expect(await seen.has(base.id)).toBe(true);
     expect(seen.alerts).toHaveLength(1);
     expect(seen.alerts[0]?.deep).toBe(true);
+    // La nota vive tambien en el evento: es lo que deja ordenar por importancia
+    // sin quedarse solo con el subconjunto de lo anunciado.
+    expect(seen.puntuaciones.get(base.id)?.importance).toBe(9);
   });
 });
 

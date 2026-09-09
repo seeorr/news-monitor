@@ -7,6 +7,7 @@
  * pero mandan las filas de la tabla.
  */
 import { neon } from "@neondatabase/serverless";
+import type { Ejecutor } from "./cliente.ts";
 
 export interface Vigilado {
   ticker: string;
@@ -25,9 +26,11 @@ export interface Vigilado {
  *
  * Existe para poder mirar la consulta del alta en un test sin una base delante:
  * su `on conflict` decide qué se conserva de una fila que ya estaba, y eso es
- * justo lo que no puede comprobarse leyendo el código y confiando.
+ * justo lo que no puede comprobarse leyendo el código y confiando. Se declara
+ * una sola vez, en `cliente.ts`, y se reexporta aquí para no partir en dos el
+ * mismo tipo el día que cambie.
  */
-export type Ejecutor = (strings: TemplateStringsArray, ...valores: unknown[]) => Promise<unknown>;
+export type { Ejecutor } from "./cliente.ts";
 
 interface Fila {
   ticker: string;

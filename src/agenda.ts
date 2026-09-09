@@ -66,10 +66,14 @@ async function main(): Promise<number> {
     return 1; // Sin registrar: mañana se reintenta.
   }
 
+  // La agenda no pasa por la cascada —no hay nada que interpretar en una lista de
+  // fechas—, así que su frase la escribe este código y es descriptiva: cuántas
+  // citas hay y en qué ventana. No es un resumen de modelo y no finge serlo.
   await seen.saveAlert(event, {
     importance: citas.length > 0 ? 5 : 1,
     impact: 5,
     sentiment: "neutral",
+    oneLiner: `Agenda macro: ${citas.length} cita(s) en los proximos ${dias} dias.`,
     deep: false,
     body: texto,
   });
