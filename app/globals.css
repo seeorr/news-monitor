@@ -1,0 +1,224 @@
+@import "tailwindcss";
+
+/*
+ * Los tokens de la sección 2 de `docs/dashboard-ui-ux.md`, y nada más.
+ *
+ * Regla que gobierna todo el archivo: **ningún color suelto dentro de un
+ * componente**. En cuanto hay dos, el principio 1 —el color significa siempre lo
+ * mismo en toda la app— deja de poder cumplirse, y verde deja de querer decir
+ * "bullish" para querer decir "me apetecía verde aquí".
+ *
+ * El modo oscuro está desde el primer token y no como un añadido: cada variable
+ * tiene su variante antes de que exista el primer componente. Ponerlo después
+ * es repasar cada archivo del proyecto.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Superficies */
+  --surface-page: #fbfbfa;
+  --surface-card: #ffffff;
+  --surface-raised: #f2f2f0;
+  --border-default: #e3e3df;
+  --border-strong: #d2d2cc;
+
+  /* Texto */
+  --text-primary: #1a1a17;
+  --text-secondary: #5c5c55;
+  --text-muted: #8a8a80;
+
+  /* Verde: bullish, variación positiva, risk-on */
+  --success-bg: #e6f4ea;
+  --success-text: #1a6b36;
+  --success-border: #b7dfc4;
+  --success-strong: #2e9e56;
+
+  /* Rojo: bearish, variación negativa, risk-off, importancia crítica */
+  --danger-bg: #fdeaea;
+  --danger-text: #a52020;
+  --danger-border: #f2c2c2;
+  --danger-strong: #d13434;
+
+  /* Ámbar: importancia media/alta, neutral con matiz, eventos próximos */
+  --warning-bg: #fdf3e0;
+  --warning-text: #8a5a08;
+  --warning-border: #efd9ab;
+  --warning-strong: #c98a12;
+
+  /* Azul: interactivo, sentimiento neutral, navegación activa */
+  --accent-bg: #e8f0fd;
+  --accent-text: #1d4f9c;
+  --accent-border: #bdd3f4;
+  --accent-strong: #2b6cd4;
+
+  /* Gris: texto secundario, metadatos, elementos inertes */
+  --muted-bg: #f0f0ed;
+  --muted-text: #6b6b63;
+  --muted-border: #dedeD8;
+
+  /*
+   * El sexto estado, que la spec original no contemplaba y este backend sí
+   * produce: `events.stale`. No es un color nuevo, es el ámbar en su variante
+   * más apagada. Un dato viejo pintado como uno fresco es la clase de mentira
+   * que este sistema no se permite.
+   */
+  --stale-bg: #f6f1e6;
+  --stale-text: #7a6a45;
+  --stale-border: #e4dac2;
+
+  --radio-chip: 8px;
+  --radio-tarjeta: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema="claro"]) {
+    color-scheme: dark;
+
+    --surface-page: #0f1113;
+    --surface-card: #16191c;
+    --surface-raised: #1e2226;
+    --border-default: #272c31;
+    --border-strong: #363c42;
+
+    --text-primary: #e8e9ea;
+    --text-secondary: #a3a8ad;
+    --text-muted: #757b81;
+
+    --success-bg: #10281a;
+    --success-text: #6fd394;
+    --success-border: #1f4a30;
+    --success-strong: #3fb069;
+
+    --danger-bg: #2c1416;
+    --danger-text: #f08d8d;
+    --danger-border: #532427;
+    --danger-strong: #e05a5a;
+
+    --warning-bg: #2a2110;
+    --warning-text: #e8b95f;
+    --warning-border: #4d3d1c;
+    --warning-strong: #d69f2e;
+
+    --accent-bg: #131f33;
+    --accent-text: #8ab4f2;
+    --accent-border: #24395c;
+    --accent-strong: #4a8ce0;
+
+    --muted-bg: #1c2024;
+    --muted-text: #8b9197;
+    --muted-border: #2b3035;
+
+    --stale-bg: #241f14;
+    --stale-text: #b8a273;
+    --stale-border: #3d3524;
+  }
+}
+
+/*
+ * Los tokens se exponen a Tailwind con `@theme inline` —y no con `@theme`— para
+ * que las utilidades apunten a la variable y no a su valor. Es lo que hace que
+ * el mismo `bg-surface-card` cambie con el modo del sistema sin duplicar
+ * ninguna clase.
+ */
+@theme inline {
+  --color-page: var(--surface-page);
+  --color-card: var(--surface-card);
+  --color-raised: var(--surface-raised);
+  --color-linea: var(--border-default);
+  --color-linea-fuerte: var(--border-strong);
+
+  --color-txt: var(--text-primary);
+  --color-txt-2: var(--text-secondary);
+  --color-txt-3: var(--text-muted);
+
+  --color-success-bg: var(--success-bg);
+  --color-success-text: var(--success-text);
+  --color-success-border: var(--success-border);
+  --color-success: var(--success-strong);
+
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-text: var(--danger-text);
+  --color-danger-border: var(--danger-border);
+  --color-danger: var(--danger-strong);
+
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-text: var(--warning-text);
+  --color-warning-border: var(--warning-border);
+  --color-warning: var(--warning-strong);
+
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-text: var(--accent-text);
+  --color-accent-border: var(--accent-border);
+  --color-accent: var(--accent-strong);
+
+  --color-muted-bg: var(--muted-bg);
+  --color-muted-text: var(--muted-text);
+  --color-muted-border: var(--muted-border);
+
+  --color-stale-bg: var(--stale-bg);
+  --color-stale-text: var(--stale-text);
+  --color-stale-border: var(--stale-border);
+
+  /* Sección 2, tipografía: 12 metadatos · 13 secundario · 15 cuerpo · 16-18 cifras · 20-22 headers */
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1.1rem;
+  --text-secundario: 0.8125rem;
+  --text-secundario--line-height: 1.25rem;
+  --text-cuerpo: 0.9375rem;
+  --text-cuerpo--line-height: 1.4rem;
+  --text-cifra: 1.0625rem;
+  --text-cifra--line-height: 1.5rem;
+  --text-titulo: 1.3125rem;
+  --text-titulo--line-height: 1.75rem;
+
+  --radius-chip: var(--radio-chip);
+  --radius-tarjeta: var(--radio-tarjeta);
+}
+
+@layer base {
+  body {
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-size: 0.9375rem;
+    font-weight: 400;
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Cifras tabulares en todo lo que se lea en columna. Sin esto, los números de
+   * `/calendar` y de las tarjetas de métrica bailan de fila en fila.
+   */
+  table,
+  .cifra {
+    font-variant-numeric: tabular-nums;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  /* El foco se ve siempre: se navega esto con teclado o no se navega. */
+  :focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+/*
+ * `alerts.body` es texto plano formateado para Telegram, con emojis y saltos de
+ * línea. Se enseña **tal cual**, en preformateado: reconstruir sus secciones con
+ * expresiones regulares se rompería en silencio la primera vez que cambie
+ * `formatAlert()`, y es una degradación que se nota poco.
+ */
+.cuerpo-alerta {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  font-size: var(--text-secundario);
+  line-height: 1.55;
+}

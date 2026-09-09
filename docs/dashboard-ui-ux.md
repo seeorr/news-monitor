@@ -669,13 +669,14 @@ Lo que hace `add`, paso a paso:
 `quitar()` hace un `delete ... returning ticker` y devuelve si borró algo, para
 poder distinguir "quitado" de "no estaba".
 
-**Una trampa del `on conflict` que la UI tiene que conocer**: `nombre`, `cik` y
-`quote_symbol` se actualizan con `coalesce`, así que un null no pisa lo que ya
-había — pero `umbral_movimiento = excluded.umbral_movimiento`, **sin `coalesce`**.
-Es decir: un alta repetida sin umbral explícito **devuelve el valor a 3 en
-silencio**. La UI debe enviar siempre el umbral vigente cuando reescriba una fila
-existente, o usar un `update` propio para editarlo. Es el fallo silencioso más
-fácil de cometer en toda esta sección.
+**Una trampa del `on conflict` que ya no existe, y conviene saber por qué**: hasta
+el 8 de septiembre `umbral_movimiento = excluded.umbral_movimiento` iba **sin
+`coalesce`**, así que un alta repetida sin umbral explícito devolvía el valor a 3
+en silencio. Está arreglado: los cuatro campos van con `coalesce` y un alta sin
+umbral no toca el que hubiera. Aun así, **editar el umbral desde la UI es un
+`update` de esa columna** —`actualizar()` en `src/db/watchlist.ts`— y no un alta
+repetida: un `insert ... on conflict` obliga a mandar la fila entera para tocar un
+solo valor, que es exactamente el camino por el que se perdía.
 
 ## Qué construye la app
 
@@ -1021,3 +1022,60 @@ usables, por encima de que una sola tenga visualizaciones sofisticadas.**
 Y la regla que cierra el documento, porque es la que decide las discusiones que
 este texto no ha previsto: **si una página necesita un campo que la sección 0 no
 lista, no se rellena. Se declara el hueco y se sigue.**
+
+---
+
+# 10. Lo construido (9 de septiembre de 2026)
+
+Los diez pasos de la sección 9, hechos. Lo que se apartó de este documento y por
+qué, que es lo único que este apartado añade:
+
+- **Sin shadcn/ui ni sus primitivos.** La sección 9 los proponía como base. No se
+  han usado, y el motivo es el principio 1: shadcn trae su propia capa de tokens
+  semánticos (`--background`, `--primary`, `--muted`…) que se solaparía con la de
+  la sección 2, y dos sistemas de color en la misma app es exactamente cómo se
+  rompe "el color siempre significa lo mismo". Los tokens de la sección 2 están en
+  `app/globals.css` como variables CSS expuestas a Tailwind v4 con `@theme
+  inline`, y los primitivos que esta versión necesita —desplegable, campo,
+  interruptor, acordeón— son elementos nativos: `select`, `input`, un `button` con
+  `aria-pressed` y `details`. Accesibles de serie y cero dependencias, que es la
+  misma decisión que ya se tomó con el lector de RSS. **Es reversible**: si algún
+  día hace falta un componente que de verdad cueste (un combobox, un date range),
+  se añade encima de estos tokens.
+- **El dashboard vive en el mismo paquete que el ciclo**, en `app/`, y no en un
+  paquete aparte. Sus páginas leen `src/db/lectura.ts` y su formulario llama a
+  `src/db/watchlist.ts`; con dos paquetes habría que duplicar ese SQL —incluido el
+  `on conflict` que ya tuvo un fallo silencioso— o montar un truco de resolución
+  entre carpetas. El precio es que el cron instala también React: sale gratis
+  —Actions ilimitadas en repositorio público— y `npm ci` instala lo que diga el
+  lockfile, así que el árbol del dashboard solo cambia cuando alguien lo cambia.
+- **No hay página `/dev-components`.** El paso 3 la pedía para ver los componentes
+  en aislamiento. Con datos reales en la base desde el primer momento, `/alerts` y
+  `/news` ya enseñan todos los estados —con nota y sin ella, obsoleto, enviado,
+  con análisis profundo y sin él— contra filas de verdad, que es mejor prueba que
+  una página de muestras.
+- **Los filtros son un `form` GET, sin JavaScript.** El estado vive en la URL: se
+  comparte, se recarga y se vuelve atrás. Los dos únicos componentes de cliente
+  son la navegación —necesita saber la ruta actual— y el alta de la watchlist, que
+  necesita las mayúsculas en vivo y el estado "Comprobando…".
+- **`sorpresa()` se movió a `src/notify/telegram.ts`** y la usan la alerta y las
+  tres pantallas que imprimen una sorpresa. Se descubrió al mirar la página: la
+  misma cifra del mismo evento salía como "-0,2 pp (vs anterior)" en Telegram y
+  como "-0,2% vs anterior" en la ficha.
+
+Lo que **no** entra, como estaba previsto: `/markets`, `/earnings` y `/regime`.
+Sus huecos son de backend (G3, G4, G5) y no están en la navegación, porque un
+enlace a una página que no puede tener contenido promete un dato que el sistema no
+produce.
+
+## Lo que falta antes de desplegarlo
+
+**El dashboard enseña una cartera y el repositorio es público.** Si se sube a
+Vercel, se sube con protección de acceso (Deployment Protection → Vercel
+Authentication, que está en el plan Hobby). Una URL adivinable con la watchlist
+dentro es una filtración aunque nadie enlace a ella.
+
+Variables que necesita el despliegue: `DATABASE_URL` —sin ella no hay nada que
+leer— y `FRED_API_KEY`, que la agenda consulta en vivo. `SEC_USER_AGENT` es
+opcional y solo la usa el alta de un valor para resolver su CIK. Ninguna es
+`NEXT_PUBLIC_`.

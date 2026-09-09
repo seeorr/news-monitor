@@ -117,3 +117,31 @@ function deFila(f: Fila): Vigilado {
     umbralMovimiento: Number(f.umbral_movimiento),
   };
 }
+
+/**
+ * Cambia lo que se puede cambiar de una fila que ya existe.
+ *
+ * Es un `update` de columnas y **no un alta repetida**, que es la forma
+ * equivocada de editar aquí: un `insert ... on conflict` que no traiga un campo
+ * lo deja como estaba —bien— pero obliga a mandar la fila entera para tocar un
+ * solo valor, y ese es justo el camino por el que el umbral se perdía.
+ *
+ * Cada campo lleva su `coalesce`: lo que no llega, no se toca. Devuelve si la
+ * fila existía, para poder distinguir "cambiado" de "ese ticker no está".
+ */
+export async function actualizar(
+  databaseUrl: string,
+  ticker: string,
+  cambios: { umbral?: number | null; vigilarFilings?: boolean | null; vigilarPrecio?: boolean | null },
+  sql: Ejecutor = neon(databaseUrl),
+): Promise<boolean> {
+  const filas = (await sql`
+    update watchlist set
+      umbral_movimiento = coalesce(${cambios.umbral ?? null}::double precision, umbral_movimiento),
+      vigilar_filings   = coalesce(${cambios.vigilarFilings ?? null}::boolean, vigilar_filings),
+      vigilar_precio    = coalesce(${cambios.vigilarPrecio ?? null}::boolean, vigilar_precio)
+    where ticker = ${ticker.toUpperCase()}
+    returning ticker
+  `) as unknown[];
+  return filas.length > 0;
+}

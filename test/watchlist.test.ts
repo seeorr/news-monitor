@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anadir, desdeEntorno, type Ejecutor } from "../src/db/watchlist.ts";
+import { actualizar, anadir, desdeEntorno, type Ejecutor } from "../src/db/watchlist.ts";
 
 /**
  * Un cliente SQL de mentira que solo apunta lo que se le pide.
@@ -84,5 +84,45 @@ describe("watchlist de respaldo", () => {
 
   it("hereda el 3 por defecto, que es lo mismo que dice la tabla", () => {
     expect(desdeEntorno(["ACME"], []).map((v) => v.umbralMovimiento)).toEqual([3]);
+  });
+});
+
+/**
+ * Editar el umbral es un `update` de esa columna y **no un alta repetida**. La
+ * diferencia importa: un `insert ... on conflict` obliga a mandar la fila entera
+ * para tocar un solo valor, y ese es el camino por el que el umbral se perdia.
+ */
+describe("cambios sobre una fila que ya existe", () => {
+  it("lo que no llega no se toca", async () => {
+    const { consultas, ejecutor } = espia();
+    await actualizar(URL_FALSA, "ACME", { umbral: 8 }, ejecutor);
+
+    const { sql, valores } = consultas[0]!;
+    expect(sql).toContain("update watchlist set");
+    expect(sql).toContain("umbral_movimiento = coalesce(?::double precision, umbral_movimiento)");
+    expect(sql).toContain("vigilar_filings   = coalesce(?::boolean, vigilar_filings)");
+    expect(sql).toContain("vigilar_precio    = coalesce(?::boolean, vigilar_precio)");
+    expect(valores).toEqual([8, null, null, "ACME"]);
+  });
+
+  it("normaliza el ticker igual que el alta", async () => {
+    const { consultas, ejecutor } = espia();
+    await actualizar(URL_FALSA, "globx", { vigilarPrecio: false }, ejecutor);
+    expect(consultas[0]?.valores.at(-1)).toBe("GLOBX");
+  });
+
+  // Un `false` es un valor, no una ausencia: apagar un interruptor tiene que
+  // viajar, y con `??` en vez de `||` no se convierte en null por el camino.
+  it("apagar un interruptor viaja como false y no como null", async () => {
+    const { consultas, ejecutor } = espia();
+    await actualizar(URL_FALSA, "ACME", { vigilarFilings: false }, ejecutor);
+    expect(consultas[0]?.valores[1]).toBe(false);
+  });
+
+  it("distingue cambiado de no estaba", async () => {
+    const vacio: Ejecutor = async () => [];
+    expect(await actualizar(URL_FALSA, "ACME", { umbral: 4 }, vacio)).toBe(false);
+    const conFila: Ejecutor = async () => [{ ticker: "ACME" }];
+    expect(await actualizar(URL_FALSA, "ACME", { umbral: 4 }, conFila)).toBe(true);
   });
 });

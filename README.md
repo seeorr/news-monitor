@@ -33,16 +33,34 @@ Aparte del ciclo, una vez al dia: la **agenda macro** (`npm run agenda`), que
 dice lo que se publica esta semana. No pasa por la cascada porque no hay nada que
 interpretar en una lista de fechas.
 
-Falta el dashboard. Su especificación de UI/UX está en
+Y un **dashboard** en Next.js sobre las mismas tablas, en `app/`: `/alerts`,
+`/news`, `/watchlist` —la única página que escribe—, Home, `/calendar` y
+`/settings`. Su especificación de UI/UX está en
 [docs/dashboard-ui-ux.md](docs/dashboard-ui-ux.md), anclada a lo que el sistema
 produce de verdad: dice de qué tabla y de qué columna sale cada cosa y, sobre
-todo, qué pide el diseño que el backend todavía no genera.
+todo, qué pide el diseño que el backend todavía no genera. `/markets`,
+`/earnings` y `/regime` no existen ni salen en la navegación, porque sus datos
+tampoco.
+
+El dashboard vive en **este mismo paquete** y no en uno aparte: sus páginas leen
+`src/db/lectura.ts` y su formulario llama a `src/db/watchlist.ts`. Con dos
+paquetes habría que duplicar ese SQL o montar un truco de resolución entre
+carpetas, y el SQL de este proyecto está en un sitio.
 
 ## Stack
 
-Node 22 + TypeScript en ESM, sin transpilar (`tsx`). Tres dependencias de
-runtime —`zod`, el SDK de Anthropic y el driver de Neon— y ninguna más; el HTTP
-es `fetch` nativo con timeout y reintentos propios.
+Node 22 + TypeScript en ESM, sin transpilar (`tsx`). El ciclo tiene tres
+dependencias de runtime —`zod`, el SDK de Anthropic y el driver de Neon— y
+ninguna más; el HTTP es `fetch` nativo con timeout y reintentos propios.
+
+El dashboard añade Next.js, React y Tailwind, y **nada más**: sin librería de
+componentes. Los tokens de color, tipografía y espaciado están en
+`app/globals.css` como variables CSS, y los primitivos que hacen falta
+—desplegable, campo, interruptor, acordeón— son elementos nativos (`select`,
+`input`, un `button` con `aria-pressed`, `details`): accesibles de serie y cero
+dependencias. El motivo no es solo el peso: una librería trae su propia capa de
+tokens semánticos, y dos sistemas de color en la misma app es exactamente cómo se
+rompe la regla de que verde significa siempre lo mismo.
 
 **Todo va por HTTPS, incluidas las migraciones.** El puerto 5432 de Postgres está
 bloqueado en algunas redes (la de casa, por ejemplo), así que el migrador usa el
@@ -60,7 +78,8 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 | `src/sources/sec-edgar.ts` | Documentos ante la SEC de la watchlist: resuelve ticker→CIK, filtra por tipo y reconoce los resultados por su apartado |
 | `src/sources/mercado.ts` | Precios de Yahoo. Solo es evento la sesion que se sale del umbral de ese valor |
 | `src/sources/calendario.ts` | Agenda macro desde FRED: que se publica y cuando |
-| `src/db/watchlist.ts` | La watchlist en Neon, con umbral por valor |
+| `src/db/watchlist.ts` | La watchlist en Neon, con umbral por valor. Alta, baja y edición por columna |
+| `src/db/lectura.ts` | Las consultas de lectura del dashboard. El SQL vive aquí, no en las páginas |
 | `src/lib/feed.ts` | Lector de RSS 2.0 y Atom sin dependencias: CDATA, entidades, prefijos |
 | `src/pipeline/collect.ts` | Recolecta todas las fuentes y corta por frescura. Una caída no tumba el ciclo |
 | `src/pipeline/rules.ts` | Paso 1 de la cascada: filtro gratis, sin LLM. Y la puerta de la alerta |
@@ -70,7 +89,8 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 | `src/lib/sql.ts` | Trocea un archivo SQL en sentencias respetando cadenas y comentarios |
 | `src/ai/cascade.ts` | Pasos 3 y 4: scoring barato y análisis profundo, con salida estructurada |
 | `src/lib/fabrication.ts` | Control anti-fabricación: toda cifra en prosa existe en los datos |
-| `src/notify/telegram.ts` | Formato de la alerta (función pura) y envío |
+| `src/notify/telegram.ts` | Formato de la alerta (función pura) y envío. También escribe la sorpresa que imprime el dashboard |
+| `app/` | El dashboard. Páginas de servidor; los dos únicos componentes de cliente son la navegación y el alta de la watchlist |
 
 ## Uso
 
@@ -90,7 +110,13 @@ npm run watchlist                     # que se vigila
 npm run watchlist -- add NVDA         # añadir (resuelve el CIK si hay SEC_USER_AGENT)
 npm run watchlist -- add EUNL --simbolo EUNL.DE --umbral 2
 npm run watchlist -- rm NVDA
+
+npm run dashboard         # el dashboard en local, http://localhost:3000
+npm run dashboard:build   # build de producción
 ```
+
+La watchlist también se gestiona desde el dashboard, en `/watchlist`, sin tocar
+la terminal: es el mismo `anadir()` / `quitar()` / `actualizar()` por detrás.
 
 Sin credenciales el programa no falla a ciegas: dice **qué** falta, **para qué**
 sirve y **dónde** conseguirlo, y sale con código 1.
@@ -119,6 +145,18 @@ Tres más, opcionales, que **no pueden vivir en el código porque el repositorio
 público**: `SEC_USER_AGENT` (el contacto que la SEC exige; sin él EDGAR responde
 403 y la fuente se salta), `SEC_WATCHLIST` y `WATCHLIST` (qué empresas se
 vigilan, que es exactamente el dato que dice en qué inviertes).
+
+### El dashboard, si se despliega
+
+**Se despliega con protección de acceso.** Enseña la watchlist, y una URL
+adivinable con una cartera dentro es una filtración aunque nadie enlace a ella.
+En Vercel: Deployment Protection → Vercel Authentication, incluida en el plan
+Hobby.
+
+Necesita `DATABASE_URL` —sin ella no hay nada que leer— y `FRED_API_KEY`, que la
+agenda consulta en vivo. Ninguna de las dos es `NEXT_PUBLIC_`, y ninguna consulta
+sale del servidor: el driver de Neon es de servidor y el navegador solo manda
+formularios.
 
 ## Decisiones que condicionan el código
 
@@ -163,6 +201,12 @@ vigilan, que es exactamente el dato que dice en qué inviertes).
   y en un repositorio público eso no puede estar ni en el código ni a la vista.
   Además cada valor lleva su propio umbral de movimiento: un 3 % en una utility
   no es lo mismo que un 3 % en una biotecnológica.
+- **El dashboard no rellena un hueco con un cero.** Es el mismo principio del
+  backend aplicado a la pantalla: la insignia de importancia no se pinta si el
+  evento nunca se puntuó, la fila de la watchlist dice "ninguna sesión ha superado
+  su umbral" en vez de un 0,0 %, y donde falta el consenso se dice que ninguna
+  fuente gratuita lo publica. Un guion mudo parece un descuido; un hueco
+  declarado, no.
 - **De los resultados nos enteramos por el apartado 2.02 de un 8-K.** Es la vía
   gratuita y oficial: los calendarios de earnings de pago no hacen falta para
   saber que una empresa acaba de presentar cuentas.

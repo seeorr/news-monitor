@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAlert } from "../src/notify/telegram.ts";
+import { formatAlert, sorpresa } from "../src/notify/telegram.ts";
 import type { Analysis, Scoring } from "../src/ai/cascade.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 
@@ -110,5 +110,32 @@ describe("formato de la alerta", () => {
     const t = formatAlert(event, { ...scoring, importance_score: 5 }, null);
     expect(t).toContain("Resumen: Inflacion por debajo de lo esperado.");
     expect(t).not.toContain("Por qué importa:");
+  });
+});
+
+/**
+ * La sorpresa la escribe una sola funcion, y la usan la alerta de Telegram y el
+ * dashboard. Antes eran dos: la alerta decia "-0,2 pp (vs anterior)" y la
+ * pantalla "-0,2% vs anterior" para la misma cifra del mismo evento.
+ */
+describe("la sorpresa se escribe en un solo sitio", () => {
+  it("una diferencia entre porcentajes son puntos porcentuales", () => {
+    expect(sorpresa({ value: -0.19, basis: "previous", unit: "%" })).toBe("-0,2 pp (vs anterior)");
+  });
+
+  it("con signo, tambien cuando sube", () => {
+    expect(sorpresa({ value: 0.4, basis: "consensus", unit: "%" })).toBe("+0,4 pp (vs consenso)");
+  });
+
+  // "pp" solo es cierto entre porcentajes. Con cualquier otra unidad se escribe
+  // esa unidad, que es lo unico que se puede afirmar.
+  it("con otra unidad, la unidad y no pp", () => {
+    expect(sorpresa({ value: 12, basis: "mean_3m", unit: " puntos" })).toBe("+12,0 puntos (vs media 3m)");
+  });
+
+  it("la base se declara siempre: sin ella la cifra miente por omision", () => {
+    for (const basis of ["consensus", "previous", "mean_3m"] as const) {
+      expect(sorpresa({ value: 1, basis, unit: "%" })).toContain("vs ");
+    }
   });
 });

@@ -5,7 +5,7 @@
  * toca la red.
  */
 import type { Analysis, Scoring } from "../ai/cascade.ts";
-import type { NormalizedEvent, SurpriseBasis } from "../schema/event.ts";
+import type { NormalizedEvent, Surprise, SurpriseBasis } from "../schema/event.ts";
 
 const IMPACT: Record<Scoring["sentiment"], string> = {
   bullish: "🟢 BULLISH",
@@ -13,12 +13,38 @@ const IMPACT: Record<Scoring["sentiment"], string> = {
   neutral: "⚪ NEUTRAL",
 };
 
-/** Contra qué se compara la sorpresa. Se dice SIEMPRE: sin base, la cifra miente por omisión. */
-const BASIS_LABEL: Record<SurpriseBasis, string> = {
+/**
+ * Contra qué se compara la sorpresa. Se dice SIEMPRE: sin base, la cifra miente
+ * por omisión.
+ *
+ * Se exporta porque el dashboard imprime la misma línea de cifras y esa etiqueta
+ * no es opcional allí tampoco. Tres cadenas duplicadas son tres cadenas que un
+ * día dicen cosas distintas en el móvil y en la pantalla.
+ */
+export const BASIS_LABEL: Record<SurpriseBasis, string> = {
   consensus: "vs consenso",
   previous: "vs anterior",
   mean_3m: "vs media 3m",
 };
+
+/**
+ * La sorpresa, escrita entera: signo, magnitud, unidad y base.
+ *
+ * Existe como funcion —y no como dos lineas repetidas— porque la escriben dos
+ * sitios, la alerta de Telegram y el dashboard, y ya se habian separado: la
+ * alerta decia "-0,2 pp (vs anterior)" y la pantalla "-0,2% vs anterior" para la
+ * misma cifra del mismo evento. La misma cifra leida de dos formas es un fallo
+ * de coherencia, y de los que nadie reporta porque cada pantalla, por separado,
+ * parece correcta.
+ *
+ * La diferencia entre dos porcentajes son **puntos porcentuales**, no un
+ * porcentaje: por eso `pp` cuando la unidad es `%`. Con cualquier otra unidad se
+ * escribe esa unidad, que es lo unico que se puede afirmar.
+ */
+export function sorpresa(s: Surprise): string {
+  const unidad = s.unit === "%" ? " pp" : s.unit;
+  return `${signo(s.value)}${unidad} (${BASIS_LABEL[s.basis]})`;
+}
 
 /** Número en formato español: coma decimal. */
 export function es(n: number, decimals = 1): string {
@@ -43,9 +69,7 @@ export function formatAlert(
   if (event.actual !== null) cifras.push(`Actual: ${es(event.actual)}${unit}`);
   if (event.consensus !== null) cifras.push(`Consenso: ${es(event.consensus)}${unit}`);
   else if (event.previous !== null) cifras.push(`Anterior: ${es(event.previous)}${unit}`);
-  if (event.surprise) {
-    cifras.push(`Sorpresa: ${signo(event.surprise.value)} pp (${BASIS_LABEL[event.surprise.basis]})`);
-  }
+  if (event.surprise) cifras.push(`Sorpresa: ${sorpresa(event.surprise)}`);
   if (cifras.length > 0) lines.push(cifras.join(" | "));
 
   lines.push(
