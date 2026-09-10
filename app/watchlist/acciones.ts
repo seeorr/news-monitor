@@ -10,12 +10,23 @@
  *
  * **Ninguna consulta a la watchlist sale del servidor.** Estas funciones son
  * acciones de servidor: el navegador manda el formulario, no la consulta.
+ *
+ * **Las cuatro empiezan comprobando la sesión, y esa es su primera línea.** Una
+ * acción de servidor no es una ruta: es un POST a `/watchlist`. `proxy.ts` lo
+ * bloquea, pero un `matcher` que cambie o una acción que se mude de página la
+ * dejan fuera de cobertura sin que nada avise, y entonces un POST bien formado
+ * escribe en la base de datos de alguien. La comprobación de aquí es lo que hace
+ * que la puerta no se pueda rodear, y va **antes** que la de `DATABASE_URL`:
+ * quien no ha entrado no tiene por qué enterarse de si esto tiene base de datos
+ * configurada. Cualquier acción que se añada mañana empieza igual.
  */
 import { revalidatePath } from "next/cache";
 import { actualizar, anadir, quitar } from "../../src/db/watchlist.ts";
 import { resolveTickers } from "../../src/sources/sec-edgar.ts";
 import { fetchCotizacion } from "../../src/sources/mercado.ts";
 import { urlBaseDeDatos } from "../_lib/servidor.ts";
+import { haySesion } from "../_lib/guardia.ts";
+import { MENSAJE_SESION_CADUCADA } from "../_lib/sesion.ts";
 import type { Estado } from "./estado.ts";
 
 // `Estado` y `ESTADO_INICIAL` viven en `estado.ts`: este modulo lleva
@@ -23,6 +34,8 @@ import type { Estado } from "./estado.ts";
 // objeto constante exportado desde aqui llega al cliente como `undefined`.
 
 export async function anadirTicker(_previo: Estado, datos: FormData): Promise<Estado> {
+  if (!(await haySesion())) return fallo(MENSAJE_SESION_CADUCADA);
+
   const url = urlBaseDeDatos();
   if (!url) return fallo("Falta DATABASE_URL: sin base de datos no hay watchlist que gestionar.");
 
@@ -113,6 +126,8 @@ export async function anadirTicker(_previo: Estado, datos: FormData): Promise<Es
 }
 
 export async function quitarTicker(_previo: Estado, datos: FormData): Promise<Estado> {
+  if (!(await haySesion())) return fallo(MENSAJE_SESION_CADUCADA);
+
   const url = urlBaseDeDatos();
   if (!url) return fallo("Falta DATABASE_URL.");
 
@@ -136,6 +151,8 @@ export async function quitarTicker(_previo: Estado, datos: FormData): Promise<Es
 }
 
 export async function cambiarUmbral(_previo: Estado, datos: FormData): Promise<Estado> {
+  if (!(await haySesion())) return fallo(MENSAJE_SESION_CADUCADA);
+
   const url = urlBaseDeDatos();
   if (!url) return fallo("Falta DATABASE_URL.");
 
@@ -158,6 +175,8 @@ export async function cambiarUmbral(_previo: Estado, datos: FormData): Promise<E
 }
 
 export async function cambiarVigilancia(_previo: Estado, datos: FormData): Promise<Estado> {
+  if (!(await haySesion())) return fallo(MENSAJE_SESION_CADUCADA);
+
   const url = urlBaseDeDatos();
   if (!url) return fallo("Falta DATABASE_URL.");
 

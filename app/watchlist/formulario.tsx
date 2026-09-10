@@ -15,14 +15,20 @@
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { anadirTicker } from "./acciones.ts";
+import { conAvisoDeSesion } from "./cliente.ts";
 import { ESTADO_INICIAL, type Estado } from "./estado.ts";
+
+// Se envuelve una vez al cargar el módulo y no en cada render: `useActionState`
+// no gana nada con una acción nueva cada vez. El porqué del envoltorio está
+// entero en `cliente.ts`.
+const ANADIR = conAvisoDeSesion(anadirTicker);
 
 const CAMPO =
   "w-full rounded-chip border border-linea bg-card px-2.5 py-1.5 text-secundario text-txt";
 const ETIQUETA = "block text-meta text-txt-3 mb-1";
 
 export function FormularioAlta() {
-  const [estado, accion] = useActionState(anadirTicker, ESTADO_INICIAL);
+  const [estado, accion] = useActionState(ANADIR, ESTADO_INICIAL);
   const [ticker, setTicker] = useState("");
 
   return (

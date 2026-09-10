@@ -36,7 +36,8 @@ interpretar en una lista de fechas.
 
 Y un **dashboard** en Next.js sobre las mismas tablas, en `app/`: `/alerts`,
 `/news`, `/watchlist` —la única página que escribe—, Home, `/calendar` y
-`/settings`. Su especificación de UI/UX está en
+`/settings`, todas **detrás de una clave** (`proxy.ts`, y otra vez dentro de cada
+acción de escritura). Su especificación de UI/UX está en
 [docs/dashboard-ui-ux.md](docs/dashboard-ui-ux.md), anclada a lo que el sistema
 produce de verdad: dice de qué tabla y de qué columna sale cada cosa y, sobre
 todo, qué pide el diseño que el backend todavía no genera. `/markets`,
@@ -92,7 +93,9 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 | `src/ai/cascade.ts` | Pasos 3 y 4: scoring barato y análisis profundo, con salida estructurada |
 | `src/lib/fabrication.ts` | Control anti-fabricación: toda cifra en prosa existe en los datos |
 | `src/notify/telegram.ts` | Formato de la alerta (función pura) y envío. También escribe la sorpresa que imprime el dashboard |
-| `app/` | El dashboard. Páginas de servidor; los dos únicos componentes de cliente son la navegación y el alta de la watchlist |
+| `app/` | El dashboard. Páginas de servidor; de cliente sólo lo que necesita estado en vivo: la navegación, el alta y los controles de la watchlist y el formulario de acceso |
+| `app/_lib/sesion.ts` | Firmar, verificar y decidir quién pasa. Puro y sin Next dentro: por eso lo usan igual el proxy y las acciones |
+| `proxy.ts` | La puerta. Traduce esa decisión a una respuesta HTTP; en Next 16 el antiguo `middleware.ts` se llama así |
 
 ## Uso
 
@@ -121,6 +124,11 @@ npm run watchlist -- rm NVDA
 npm run dashboard         # el dashboard en local, http://localhost:3000
 npm run dashboard:build   # build de producción
 ```
+
+El dashboard pide clave desde el primer arranque: sin `DASHBOARD_PASSWORD` en el
+`.env` responde 503 en todas sus URLs y dice qué falta. No hay clave por defecto
+y no la habrá; el porqué está en
+[El dashboard, si se despliega](#el-dashboard-si-se-despliega).
 
 La watchlist también se gestiona desde el dashboard, en `/watchlist`, sin tocar
 la terminal: es el mismo `anadir()` / `quitar()` / `actualizar()` por detrás.
@@ -230,12 +238,48 @@ se guardan en `.cache/`, que está excluida de git, y se rechazan en Actions.
 
 ### El dashboard, si se despliega
 
-Necesita `DATABASE_URL` y `FRED_API_KEY`, siempre del lado servidor.
+Necesita `DATABASE_URL` y `FRED_API_KEY`, siempre del lado servidor, y
+`DASHBOARD_PASSWORD`, que es lo que lo protege.
+
 **La protección estándar de Vercel no protege el dominio de producción**;
-activar Vercel Authentication en Hobby no basta para publicar una cartera allí.
-Antes de exponerlo hay que implementar acceso en la aplicación o comprobar una
-protección que cubra todas sus URLs, incluidas acciones de escritura.
-[Documentación oficial de protección](https://vercel.com/academy/optimize-your-vercel-account/deployment-protection).
+activar Vercel Authentication en Hobby no basta para publicar una cartera allí
+([documentación oficial](https://vercel.com/academy/optimize-your-vercel-account/deployment-protection)).
+Por eso el acceso está **dentro de la aplicación**, en `proxy.ts` y en
+`app/_lib/sesion.ts`.
+
+Qué hay que hacer a mano antes de desplegar:
+
+1. Generar una clave larga al azar y guardarla en el gestor de contraseñas. No
+   hay ninguna por defecto y no debe haberla: este repositorio es público.
+2. Ponerla en Vercel → Settings → Environment Variables como
+   `DASHBOARD_PASSWORD`, marcada para **Production, Preview y Development**. Los
+   despliegues de vista previa tienen su propia URL y enseñan lo mismo.
+3. Ponerla también en el `.env` local, o `npm run dashboard` responderá 503.
+4. Comprobar tras el primer despliegue que `/` redirige a `/acceso` estando sin
+   sesión. Es una comprobación de diez segundos y es la que de verdad cierra esto.
+
+Cómo funciona, en cuatro líneas:
+
+- **Todo es privado menos `/acceso`.** La lista blanca es la excepción, no la
+  regla: una página que se añada mañana nace protegida sin que nadie la apunte
+  en ninguna lista.
+- **Sin `DASHBOARD_PASSWORD` no se sirve nada**, ni siquiera la pantalla de
+  acceso: 503 diciendo qué falta. Un despliegue al que se le olvidó la variable
+  es justo el caso que esto tiene que cubrir.
+- **La sesión es una cookie firmada** con HMAC-SHA256 (Web Crypto), `HttpOnly`,
+  `Secure`, `SameSite=Lax` y doce horas de vida. La caducidad viaja **dentro de
+  lo firmado**: editarla en el navegador invalida la cookie en vez de alargarla.
+  Todas las comparaciones —clave y firma— son de tiempo constante.
+- **Las escrituras se comprueban dos veces.** Una acción de servidor es un POST a
+  la ruta de su página, así que el proxy lo bloquea *y* la acción lo vuelve a
+  mirar. No es duplicación: el proxy es la puerta y la comprobación de dentro es
+  lo que impide rodearla.
+
+**Cerrar sesión** borra la cookie del navegador. Lo que no hace —porque no hay
+dónde guardarlo gratis— es invalidar una copia que alguien se hubiera llevado
+antes: esa vale hasta su hora. Para cerrar **todas** las sesiones vivas de golpe
+se cambia `DASHBOARD_PASSWORD`, que cambia la clave de firma y deja sin verificar
+todo lo emitido.
 
 ## Diagnóstico de fuentes y criterios de selección
 
@@ -287,6 +331,21 @@ el SHA remoto y el ejecutado en Actions, y comprobar la fila de entrega en Neon.
 
 ## Decisiones que condicionan el código
 
+- **El dashboard falla cerrado, y una escritura se comprueba dos veces.** La
+  protección no puede vivir sólo en el render: una acción de servidor es un POST
+  a la ruta de su página, y con la comprobación únicamente en el proxy basta un
+  `matcher` que cambie o una acción que se mude de archivo para que un POST bien
+  formado escriba en la base de datos de alguien. Están las dos. Y sin
+  `DASHBOARD_PASSWORD` no se sirve nada en vez de servirse abierto, porque el
+  despliegue al que se le olvida la variable es el caso más probable de todos.
+  La pantalla de acceso no dice qué hay detrás —ni el nombre del proyecto, ni las
+  secciones— pero tampoco finge un 404: eso sería teatro contra quien mire el
+  bundle, y estorbo para el único que la usa.
+- **Una sesión caducada a mitad de un formulario avisa y no borra lo escrito.**
+  El proxy corta la escritura con un 403 y el formulario lo convierte en un error
+  suyo: el campo conserva lo tecleado y el mensaje dice que **no se ha guardado
+  nada**. La alternativa —dejar pasar el POST para poder contestar bonito desde
+  dentro— es rebajar la puerta para mejorar un mensaje.
 - **La sorpresa declara siempre contra qué se compara.** FRED no publica
   consenso de analistas y no hay fuente gratuita fiable, así que la alerta dice
   `vs consenso`, `vs anterior` o `vs media 3m`. Un porcentaje de sorpresa sin

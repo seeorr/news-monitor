@@ -370,6 +370,10 @@ componente en la primera versión** y el layout global no reserva su franja: un
 banner con datos falsos en la cabecera de todas las páginas contamina la app
 entera, que es justo lo contrario de lo que hace un banner de contexto.
 
+> **Revisado el 10 de septiembre**: ya hay datos, pero el componente sigue sin ir
+> en el layout global, ahora por otra razón. Ver `RegimeBanner: sigue sin ir en el
+> layout global`, en la sección de `/regime`.
+
 ### `EmptyState` (añadido, y no es decorativo)
 
 Un componente de vacío que dice **por qué** está vacío y qué falta para que no lo
@@ -401,6 +405,9 @@ Dos diferencias con el layout original, y su motivo:
 
 - **No hay franja de `RegimeBanner`** bajo la barra. No hay régimen que mostrar
   (hueco G3). Cuando lo haya, se añade sin tocar el resto.
+> **Revisado el 10 de septiembre**: `/regime` sí entra en la navegación, porque
+> sus datos existen. `/markets` y `/earnings` siguen fuera.
+
 - **`/markets`, `/earnings` y `/regime` no entran en la navegación de la primera
   versión.** Un enlace a una página que no puede tener contenido es peor que no
   tenerlo: promete un dato que el sistema no produce. Se añaden cuando el backend
@@ -612,7 +619,117 @@ pantalla.
 
 ## `/regime`
 
-**No se construye.** Ver el hueco G3.
+**Se construye.** El hueco G3 dejó de estar vacío el 9 de septiembre:
+`src/sources/regimen.ts` calcula un régimen descriptivo US y `market_regimes`
+guarda una fotografía diaria con su versión de regla. Esta sección se escribe el
+10 de septiembre contra lo que ese módulo produce de verdad, columna por columna.
+
+```text
+Cabecera: estado + fecha del cálculo + versión de la regla
+  Favorable al riesgo · Aversión al riesgo · Señales mixtas · Datos insuficientes
+  "Regla descriptiva, no una predicción" — en la página, no en un tooltip
+
+Tabla de señales, una fila por serie:
+  Serie | Último valor + unidad | Fecha | Voto | Por qué
+  Las que votan y la que no, separadas y etiquetadas como tales
+
+Pie: enlace a cada serie en FRED + qué falta por cubrir
+```
+
+**Datos**: `market_regimes` —`day`, `as_of`, `version`, `state`, `payload`—, con
+el `payload` que serializa `Regimen`: `signals[]` con `id`, `label`, `sourceUrl`,
+`date`, `value`, `unit`, `stale`, `vote` y `detail`. El SQL vive en
+`src/db/lectura.ts`, no en la página.
+
+Reglas que la página **no puede** contradecir, porque son del backend y están ahí
+por un motivo:
+
+- **La unanimidad es la regla.** `state` es `risk_on` solo si los tres votos son
+  1, `risk_off` solo si los tres son −1, y `insufficient_data` en cuanto uno
+  falta. Decidir con dos de tres produce justo el dato que nadie vuelve a
+  comprobar: una etiqueta con aspecto de conclusión y media base debajo. La
+  pantalla enseña `insufficient_data` **como un estado de primera**, con la misma
+  tipografía que los otros tres y diciendo cuál falta. No es un error de carga.
+- **El dólar amplio de la Fed no vota, y no se le llama DXY en ningún sitio.** Es
+  el índice amplio nominal (`DTWEXBGS`), con otra cesta y otros pesos. Va en la
+  tabla, en su propio grupo, etiquetado *contexto*. Una cifra correcta con el
+  nombre de otra es el error que sobrevive a todas las revisiones porque el número
+  cuadra.
+- **`stale` se pinta.** Una señal antigua no vota, y la pantalla tiene que decir
+  por qué no vota, no limitarse a dejar la casilla vacía. El margen no es el mismo
+  para todas: cinco días naturales, y diez para el dólar, que se publica con más
+  retraso.
+- **`detail` ya viene escrito.** Es la frase que explica el voto —"Regla VIX: <20
+  favorable; >=30 adverso"—, la calcula el backend y la página **la enseña, no la
+  reescribe**. Si la pantalla redactara la suya, dos textos dirían la misma regla
+  de dos formas y llegaría el día en que dejan de coincidir. Es la misma decisión
+  que `sorpresa()`.
+- **La versión de la regla se enseña.** Cada fotografía guarda con qué versión se
+  calculó (`riesgo-us-v1`). Sin ella a la vista, el histórico es una serie que
+  cambia de significado por el medio y nadie se entera.
+
+Lo que **no** se pinta, y por qué:
+
+- **Nada de gráfico del histórico de regímenes** en esta versión. Hay una fila por
+  día desde el 9 de septiembre: dos puntos no son una serie, y una línea de dos
+  puntos promete una tendencia que no existe.
+- **Nada de "confianza" en porcentaje.** La regla es unanimidad de tres votos: la
+  confianza que hay es cuántos votaron y cuántos faltaron, y eso ya está en la
+  tabla. Un 78 % inventado sería exactamente el tipo de cifra que este proyecto no
+  se permite.
+- **El spread HY es de ICE BofA y es de uso interno.** Se enseña dentro del
+  dashboard, que está protegido; no se exporta, no se publica y no sale del
+  repositorio privado de datos.
+
+**Navegación**: `/regime` entra en la barra. Es la única de las tres páginas
+ausentes que gana su sitio, porque sus datos existen; `/markets` y `/earnings`
+siguen fuera.
+
+### `RegimeBanner`: sigue sin ir en el layout global
+
+Sí hay régimen que enseñar, así que la razón de antes —no hay datos— ya no vale.
+La razón que queda es otra y basta: el estado más probable de un día cualquiera es
+`mixed` o `insufficient_data`, y una franja que repite "señales mixtas" en la
+cabecera de las seis páginas no informa, se convierte en decoración y encima roba
+altura en todas ellas.
+
+En su lugar, **una tarjeta en el Home** con el estado, la fecha y un enlace a
+`/regime`. Un dato que se consulta una vez al día vive en un sitio, no en todos.
+
+## Liquidez · qué entra y qué NO hace
+
+La liquidez era el cuarto componente que el hueco G3 daba por pendiente. Entra
+como **contexto, y no como voto**, con `NFCI` —el índice de condiciones
+financieras del Fed de Chicago—, semanal.
+
+Por qué contexto y no voto, que es la decisión de verdad:
+
+1. **Cambiar el número de votos cambia el significado de la unanimidad**, y
+   `market_regimes` ya tiene filas escritas con `riesgo-us-v1`. Un cuarto voto
+   haría más difícil llegar a `risk_on` y a `risk_off` sin que nadie lo notara:
+   las fotografías de antes y las de después dejarían de ser comparables aunque la
+   tabla parezca la misma.
+2. **Es semanal, y los tres votos son diarios.** `NFCI` se publica una vez por
+   semana y con retraso: dejarle vetar la clasificación de hoy es dejar que un
+   número de hace trece días decida sobre un mercado que abrió esta mañana.
+3. **Es un índice compuesto, no un precio.** Ya resume más de cien series. Meterlo
+   como un voto igual al del VIX mezcla dos cosas de naturaleza distinta.
+
+Se elige `NFCI` y **no** una "liquidez neta" calculada como `WALCL − WTREGEN −
+RRPONTSYD`. Las tres series están vivas y comprobadas, pero esa resta es una
+construcción popular, no una serie publicada: tiene tres frecuencias distintas
+dentro, ninguna autoridad detrás y ningún sitio donde comprobar si el número
+salió bien. `NFCI` lo publica el Fed de Chicago con su metodología, y el enlace de
+la tabla lleva a ella.
+
+Su signo se declara en la pantalla, porque es contraintuitivo: **negativo =
+condiciones más laxas que la media histórica**, positivo = más restrictivas. Sin
+esa frase al lado, la mitad de la gente lee el número al revés.
+
+El día que se decida que la liquidez vote, eso es una **versión nueva de la
+regla** (`riesgo-us-v2`), no un retoque: las fotografías viejas se quedan con la
+suya y el histórico sigue siendo legible. Ese es justo el motivo por el que la
+versión se guarda.
 
 ## `/settings`
 
@@ -1143,3 +1260,27 @@ La ausencia de eventos no demuestra calma.
 La protección estándar de Vercel deja público el dominio de producción. Antes
 de desplegar datos de cartera hace falta proteger las rutas y las acciones;
 activar Vercel Authentication en Hobby no basta por sí solo.
+
+
+## Actualización · 10 de septiembre
+
+`/regime` pasa de "no se construye" a tener especificación propia, arriba, escrita
+contra lo que `src/sources/regimen.ts` produce de verdad. Entra en la navegación;
+`/markets` y `/earnings` no.
+
+La liquidez entra como **contexto y no como voto**, con `NFCI` del Fed de Chicago.
+El motivo está desarrollado en la sección de arriba, y el resumen es que un cuarto
+voto cambiaría en silencio el significado de la unanimidad para las fotografías ya
+escritas.
+
+`RegimeBanner` sigue sin entrar en el layout global, pero por una razón distinta a
+la de la primera versión: ya no es que falten datos, es que el estado más probable
+de un día cualquiera es `mixed`, y una franja que lo repite en las seis páginas no
+informa. Va como tarjeta en el Home.
+
+El resto del backend que ha cambiado desde la última actualización, y que estas
+páginas pueden dar por bueno: la macro europea entra por FRED y por Eurostat, cada
+sorpresa declara contra qué base se mide —`previous` y `mean_3m`, y `consensus` si
+alguna vez lo hay—, y las tres entregas a Telegram —alerta, resumen y agenda—
+reclaman antes de enviar, así que `alerts` sigue significando lo que de verdad
+salió.

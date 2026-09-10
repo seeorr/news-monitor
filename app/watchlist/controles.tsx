@@ -7,11 +7,19 @@
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { cambiarUmbral, cambiarVigilancia, quitarTicker } from "./acciones.ts";
+import { conAvisoDeSesion } from "./cliente.ts";
 import { ESTADO_INICIAL } from "./estado.ts";
 import { es } from "../_lib/formato.ts";
 
+// Envueltas una vez al cargar el módulo. El porqué está en `cliente.ts`: sin
+// esto, una sesión caducada rompe el render entero de la fila en vez de decir
+// que no se ha guardado nada.
+const CAMBIAR_UMBRAL = conAvisoDeSesion(cambiarUmbral);
+const CAMBIAR_VIGILANCIA = conAvisoDeSesion(cambiarVigilancia);
+const QUITAR = conAvisoDeSesion(quitarTicker);
+
 export function Umbral({ ticker, valor }: { ticker: string; valor: number }) {
-  const [estado, accion] = useActionState(cambiarUmbral, ESTADO_INICIAL);
+  const [estado, accion] = useActionState(CAMBIAR_UMBRAL, ESTADO_INICIAL);
   return (
     <form action={accion} className="flex items-center gap-1.5">
       <input type="hidden" name="ticker" value={ticker} />
@@ -48,9 +56,9 @@ export function Interruptor({
   activo: boolean;
   texto: string;
 }) {
-  const [, accion] = useActionState(cambiarVigilancia, ESTADO_INICIAL);
+  const [estado, accion] = useActionState(CAMBIAR_VIGILANCIA, ESTADO_INICIAL);
   return (
-    <form action={accion}>
+    <form action={accion} className="flex flex-wrap items-center gap-1.5">
       <input type="hidden" name="ticker" value={ticker} />
       <input type="hidden" name="campo" value={campo} />
       <input type="hidden" name="valor" value={activo ? "0" : "1"} />
@@ -66,13 +74,21 @@ export function Interruptor({
         <span aria-hidden>{activo ? "●" : "○"}</span>
         {texto}
       </button>
+      {/*
+        El interruptor se pinta con lo que dice el servidor, así que cuando algo
+        falla se queda como estaba y no miente. Pero quedarse quieto sin decir
+        nada se parece demasiado a no haber pulsado: el error se enseña.
+      */}
+      {estado.tipo === "error" ? (
+        <span className="text-meta text-danger-text">{estado.mensaje}</span>
+      ) : null}
     </form>
   );
 }
 
 export function Borrar({ ticker }: { ticker: string }) {
   const [confirmando, setConfirmando] = useState(false);
-  const [estado, accion] = useActionState(quitarTicker, ESTADO_INICIAL);
+  const [estado, accion] = useActionState(QUITAR, ESTADO_INICIAL);
 
   if (!confirmando) {
     return (
