@@ -106,7 +106,8 @@ npm start -- --force      # ignora el registro de vistos y el reclamo de entrega
 npm run check             # typecheck + tests
 
 npm run agenda            # agenda macro de la semana a Telegram
-npm run agenda -- --dry   # la compone y la enseña, sin enviar
+npm run agenda -- --dry   # la compone y la enseña, sin reclamar ni enviar
+npm run agenda -- --force # la manda aunque la de hoy ya se enviara
 
 npm run brief                  # compone el resumen y lo guarda en Neon
 npm run brief -- --send        # además lo entrega a los destinos configurados
@@ -134,11 +135,11 @@ El monitor pide dos disparos por hora, en los minutos :07 y :37, y ejecuta
 un runner reservado durante cinco horas: ese experimento se revirtió.
 
 Un hueco **puede perder noticias**: los feeds tienen una ventana limitada y el
-filtro descarta titulares y documentos de más de 72 horas. El índice único de
-alertas evita filas duplicadas en Neon, pero no deshace un mensaje ya enviado:
-si Telegram acepta y la escritura posterior falla, el ciclo puede reenviarlo.
-La concurrencia del workflow reduce solapamientos; no es una garantía de entrega
-exactamente una vez.
+filtro descarta titulares y documentos de más de 72 horas. Lo que ya no pasa es
+reenviar: desde el 10 de septiembre la alerta, el resumen y la agenda **reclaman
+antes de enviar**, así que si Telegram acepta y la escritura posterior falla, la
+entrega se queda sin cerrar y nadie la libera. La concurrencia del workflow
+reduce solapamientos; la garantía de no repetir la da el reclamo, no ella.
 
 Los horarios son UTC. La agenda tiene tres intentos matinales y el latido dos
 fechas al mes, días 1 y 15. El aviso de fallo existente enlaza la ejecución de
@@ -267,7 +268,9 @@ protección que cubra todas sus URLs, incluidas acciones de escritura.
   `--force`, que es una persona decidiendo. El log dice cuál de los cuatro finales
   fue (`ALERT_SENT`, `ALERT_BLOCKED`, `ALERT_REJECTED`, `ALERT_UNCERTAIN`,
   `ALERT_RECORD_FAILED`) y `alerts` se sigue escribiendo solo cuando Telegram
-  acepta, así que sigue significando lo que de verdad salió.
+  acepta, así que sigue significando lo que de verdad salió. **La agenda usa la
+  misma máquina** (`src/agenda.ts`): arrastraba el defecto original y el reintento
+  matinal de GitHub era justo quien lo disparaba.
 - **El estado vive en Neon, no en disco.** El job de Actions arranca con el disco
   vacío: sin base de datos remota, el cron no recuerda nada y repite la alerta
   en cada vuelta. El archivo local queda solo para desarrollo.
