@@ -1,6 +1,6 @@
 # Noticias en dos niveles - entrega local del 10-09-2026
 
-Implementado en este repositorio, sin commits ni activación remota. Esta guía
+Implementado en este repositorio, sin ejecutar comandos de commit ni activación remota. Esta guía
 complementa [la cola](captura-persistente.md), [las fuentes](fuentes-cobertura.md)
 y [el disparador externo](disparador-externo.md). Sustituye sus afirmaciones
 anteriores de que una primaria siempre pasa o de que la espera nunca caduca.
@@ -215,6 +215,16 @@ se suman. No hay purga automática: revisar consumo, retención y límites del p
 antes de escalar. La caducidad funcional no libera almacenamiento.
 
 ## Verificación y procedimientos
+
+Resultado final local: **621 pruebas en 40 archivos, todas correctas**, y
+TypeScript sin errores. Además, 10 escenarios de cola y 7 de control/destinos
+verificados con PostgreSQL real en WASM. Los [ejemplos ficticios de Telegram](evaluacion/ejemplos-telegram.md)
+se generan con los formateadores reales: 281 caracteres el breve y 924 el importante.
+No se ha creado un PDF, siguiendo la última indicación del usuario.
+
+Durante el trabajo apareció en el historial el guardado de sesión `f0e0ee2`,
+fechado a las 15:39:55 +02:00. No procede de un comando de commit ejecutado en
+esta tarea y no se ha revertido ni reescrito. Hay cambios posteriores a ese guardado.
 
 Pruebas sin servicios reales: `npm run typecheck`,
 `npx vitest run --pool=threads --maxWorkers=3`, `npm run verify:queue:postgres`

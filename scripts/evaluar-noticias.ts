@@ -72,7 +72,8 @@ if(publicPath){
 console.log(JSON.stringify({calibration:report.calibration,holdout:report.holdout,grouping:report.grouping},null,2));
 
 // Ejemplos inventados, producidos por los mismos formateadores. Cero transporte.
-const briefEvent=makeEvent({...dataset.cases[0]!,id:"contrato-ficticio",title:"Orion signs copper supply contract"});
+const briefEvent={...makeEvent({...dataset.cases[0]!,id:"contrato-ficticio",title:"Orion signs copper supply contract"}),
+  summary:"Orion confirma un contrato de suministro de cobre para su planta industrial. El comunicado no indica importe ni duración."};
 const briefScore={importance_score:5,market_impact_score:5,sentiment:"neutral" as const,needs_alert:false,
   one_liner:"Orion firma un contrato de suministro de cobre para su planta industrial. La fuente confirma el acuerdo, pero no publica su importe ni la duración."};
 const importantEvent={...makeEvent({...dataset.cases[0]!,id:"produccion-ficticia",title:"Altair suspends copper production at its northern mine"}),
