@@ -42,7 +42,7 @@ describe("feeds → eventos", () => {
   it("no rellena con ceros las cifras que una noticia no tiene", () => {
     expect(eventos[0]?.actual).toBeNull();
     expect(eventos[0]?.previous).toBeNull();
-    expect(eventos[0]?.surprise).toBeNull();
+    expect(eventos[0]?.surprises).toEqual([]);
     expect(eventos[0]?.unit).toBeNull();
   });
 
@@ -71,6 +71,42 @@ describe("feeds → eventos", () => {
       { title: "Sin fecha", link: "https://x.test/3", guid: "g3", date: null, summary: null, raw: "" },
     ];
     expect(feedEvents(sinFecha, spec, { retrievedAt })).toHaveLength(0);
+  });
+});
+
+/**
+ * Investing.com no publica como los demás: ni `guid` ni `description`, y la fecha
+ * sin zona. Las tres cosas tienen que sobrevivir al contrato, porque las tres son
+ * formas de perder la noticia en silencio.
+ */
+describe("Investing → eventos", () => {
+  const investing = FEEDS["investing-economy"]!;
+  const eventos = feedEvents(parseFeed(fixture("investing-economy.xml")), investing, { retrievedAt });
+
+  it("no pierde ningún elemento del feed", () => {
+    expect(eventos).toHaveLength(2);
+    for (const e of eventos) expect(() => NormalizedEvent.parse(e)).not.toThrow();
+  });
+
+  it("fecha el elemento en UTC y no en la zona de la máquina", () => {
+    expect(eventos[0]?.observed_at).toBe("2026-09-10T08:00:02.000Z");
+    expect(eventos[1]?.observed_at).toBe("2026-09-10T07:47:48.000Z");
+  });
+
+  // Sin `guid`, el identificador estable es el enlace, que lleva el número de
+  // artículo. Si no lo fuera, la misma noticia se anunciaría en cada vuelta.
+  it("identifica el elemento por su enlace", () => {
+    const otraVuelta = feedEvents(
+      parseFeed(fixture("investing-economy.xml")), investing, { retrievedAt: "2026-09-10T12:00:00Z" },
+    );
+    expect(otraVuelta[0]?.id).toBe(eventos[0]?.id);
+    expect(eventos[1]?.id).not.toBe(eventos[0]?.id);
+  });
+
+  it("deja el resumen en null porque el feed no lo trae, y no es fuente oficial", () => {
+    expect(eventos[0]?.summary).toBeNull();
+    expect(eventos[0]?.official).toBe(false);
+    expect(eventos[0]?.series_id).toBe("investing-economy");
   });
 });
 

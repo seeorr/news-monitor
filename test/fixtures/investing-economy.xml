@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Economy News</title>
+    <link>https://www.investing.com</link>
+    <item>
+      <enclosure url="https://content-media.investing.com/news/LYNXNPEAB40B1_M.jpg" length="38526" type="image/jpeg"/>
+      <title>U.S. consumer price growth seen rising 0.3% month-on-month in August - Truflation</title>
+      <pubDate>2026-09-10 08:00:02</pubDate>
+      <author>Investing.com</author>
+      <link>https://www.investing.com/news/economy-news/us-consumer-price-growth-seen-rising-03-monthonmonth-in-august--truflation-4893960</link>
+    </item>
+    <item>
+      <enclosure url="https://content-media.investing.com/news/LYNXMPEM521KY_1200_L.jpg" length="134352" type="image/jpeg"/>
+      <title>Trump on Iran war; Oracle, Adobe to report - what’s moving markets</title>
+      <pubDate>2026-09-10 07:47:48</pubDate>
+      <author>Investing.com</author>
+      <link>https://www.investing.com/news/economy-news/trump-on-iran-war-oracle-adobe-to-report--whats-moving-markets-4895065</link>
+    </item>
+  </channel>
+</rss>

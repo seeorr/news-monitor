@@ -22,7 +22,7 @@ const noticia = (id: string, observedAt: string, title = "El BCE recorta 25 punt
   previous: null,
   consensus: null,
   unit: null,
-  surprise: null,
+  surprises: [],
   stale: false,
   official: true,
 });
@@ -42,7 +42,7 @@ const macro: NormalizedEvent = {
   previous: 3.73,
   consensus: null,
   unit: "%",
-  surprise: { value: -0.19, basis: "previous", unit: "%" },
+  surprises: [{ value: -0.19, basis: "previous", unit: "%" }],
   stale: false,
   official: true,
 };

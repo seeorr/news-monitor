@@ -17,6 +17,11 @@ export interface RuleDecision {
 export const MACRO_KEYWORDS = [
   "cpi", "inflation", "inflación", "fomc", "fed", "rate decision", "tipos",
   "payrolls", "unemployment", "paro", "gdp", "pib", "ecb", "bce",
+  // La macro europea entra por su nombre y no solo por el del banco central: un
+  // "euro area inflation" o un "eurozone GDP" son exactamente el tipo de titular
+  // que estas reglas existen para no tirar, y con la lista pensada para EE. UU.
+  // solo pasaban por casualidad, si el titular repetia ademas "inflation".
+  "eurozone", "euro area", "zona euro", "eurostat",
   "guidance", "earnings", "merger", "acquisition", "ipo", "bankruptcy",
   "downgrade", "upgrade", "sanctions", "tariff", "arancel",
 ];

@@ -28,7 +28,7 @@
  */
 import { neon } from "@neondatabase/serverless";
 import type { Ejecutor } from "./cliente.ts";
-import { KINDS, SOURCES } from "../schema/event.ts";
+import { KINDS, SOURCES, Surprise } from "../schema/event.ts";
 // El análisis se lee con el mismo tipo con el que se escribe. Declararlo dos
 // veces —una para guardar y otra para leer— es garantizar que un día digan cosas
 // distintas y que nadie lo note hasta que una sección de la ficha salga vacía.
@@ -58,8 +58,15 @@ export interface FilaEvento {
   previous: number | null;
   consensus: number | null;
   unit: string | null;
-  surprise_value: number | null;
-  surprise_basis: string | null;
+  /**
+   * Todas las sorpresas del evento, de más a menos informativa. Cada una
+   * declara su base. Lista vacía: no había nada contra lo que comparar.
+   *
+   * Sale del `jsonb` `events.surprises` y se valida en `sanear()` antes de
+   * llegar a la pantalla, por lo mismo que `analysis`: el `as FilaEvento[]` es
+   * un cast y nadie comprueba la forma del jsonb al volver.
+   */
+  surprises: Surprise[];
   stale: boolean;
   official: boolean;
   /** Nota del paso 3. Null si el evento nunca se puntuó: no es un cero. */
@@ -106,7 +113,7 @@ export async function loImportante(
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
-      e.actual, e.previous, e.consensus, e.unit, e.surprise_value, e.surprise_basis,
+      e.actual, e.previous, e.consensus, e.unit, e.surprises,
       e.stale, e.official,
       coalesce(e.importance_score, a.importance_score)       as importance_score,
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
@@ -164,7 +171,7 @@ export async function listarEventos(
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
-      e.actual, e.previous, e.consensus, e.unit, e.surprise_value, e.surprise_basis,
+      e.actual, e.previous, e.consensus, e.unit, e.surprises,
       e.stale, e.official,
       coalesce(e.importance_score, a.importance_score)       as importance_score,
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
@@ -208,7 +215,7 @@ export async function historialAlertas(
     select
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
-      e.actual, e.previous, e.consensus, e.unit, e.surprise_value, e.surprise_basis,
+      e.actual, e.previous, e.consensus, e.unit, e.surprises,
       e.stale, e.official,
       a.importance_score, a.market_impact_score, a.sentiment, e.one_liner,
       a.sent_at, a.deep_analysis, a.body, a.analysis
@@ -234,7 +241,7 @@ export async function ultimasSeries(sql: Ejecutor, seriesIds: string[]): Promise
     select distinct on (e.series_id)
       e.id, e.source, e.source_url, e.kind, e.title, e.summary, e.country, e.series_id,
       e.observed_at, e.first_seen_at,
-      e.actual, e.previous, e.consensus, e.unit, e.surprise_value, e.surprise_basis,
+      e.actual, e.previous, e.consensus, e.unit, e.surprises,
       e.stale, e.official,
       coalesce(e.importance_score, a.importance_score)       as importance_score,
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
@@ -312,9 +319,17 @@ export async function recuento(sql: Ejecutor): Promise<Recuento> {
 function sanear(filas: FilaEvento[]): FilaEvento[] {
   for (const f of filas) {
     if (f.analysis != null && !esAnalisisProfundo(f.analysis)) f.analysis = null;
+    // Una sorpresa sin base declarada no se pinta a medias: se descarta la lista
+    // entera. Es la misma regla del contrato —un porcentaje sin base miente por
+    // omisión— aplicada al borde por donde el dato entra en la pantalla, y el
+    // esquema de zod es el mismo con el que se escribió, no una copia.
+    const lista = Sorpresas.safeParse(f.surprises);
+    f.surprises = lista.success ? lista.data : [];
   }
   return filas;
 }
+
+const Sorpresas = Surprise.array();
 
 /** Un límite que llega de una URL no puede pedir la tabla entera. */
 function techo(valor: number | undefined, porDefecto: number): number {

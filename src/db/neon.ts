@@ -26,7 +26,7 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
       insert into events (
         id, source, source_url, kind, title, summary, country, series_id,
         observed_at, retrieved_at,
-        actual, previous, consensus, unit, surprise_value, surprise_basis,
+        actual, previous, consensus, unit, surprises,
         stale, official,
         importance_score, market_impact_score, sentiment, one_liner
       ) values (
@@ -34,7 +34,7 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
         ${event.title}, ${event.summary}, ${event.country}, ${event.series_id},
         ${event.observed_at}, ${event.retrieved_at},
         ${event.actual}, ${event.previous}, ${event.consensus}, ${event.unit},
-        ${event.surprise?.value ?? null}, ${event.surprise?.basis ?? null},
+        ${JSON.stringify(event.surprises)}::jsonb,
         ${event.stale}, ${event.official},
         ${p === null ? null : Math.round(p.importance)},
         ${p === null ? null : Math.round(p.impact)},
@@ -55,6 +55,17 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
     },
 
     /**
+     * Las sorpresas van enteras a `surprises`, un `jsonb`, y las dos columnas
+     * `surprise_value` / `surprise_basis` ya no se escriben: solo cabía una
+     * cifra en ellas y ahora un evento lleva varias. Las filas anteriores a la
+     * migración conservan las suyas, ya copiadas al array; el motivo de elegir
+     * un array y no seis columnas está escrito en `20260909_sorpresas.sql`.
+     *
+     * Va como texto con un `::jsonb` explícito por lo mismo que `analysis`: el
+     * driver escapa cada hueco de la plantilla como parámetro, y mandar el array
+     * a pelo dejaría en manos de su serialización algo que aquí se decide en una
+     * línea.
+     *
      * El evento en sí no se reescribe nunca: el `do update` toca **solo** las
      * cuatro columnas del paso 3, y con `coalesce` para que un marcado sin
      * puntuación no borre la que ya hubiera. Titular, cifras y fechas siguen

@@ -18,7 +18,7 @@ const CODES = [
   "GROUP_SENT", "GROUP_REJECTED", "GROUP_FAILED",
   "UNHANDLED", "LOG_SUPPRESSED",
 ] as const;
-const SOURCES = ["fred", "rss", "sec-edgar", "yahoo", "coingecko", "neon", "file"] as const;
+const SOURCES = ["fred", "eurostat", "rss", "sec-edgar", "yahoo", "coingecko", "neon", "file"] as const;
 const STAGES = ["startup", "watchlist", "collect", "freshness", "rules", "dedupe",
   "group", "scoring", "analysis", "format", "telegram", "persist", "cycle"] as const;
 const COUNTS = ["count", "total", "discarded", "ok", "failed", "deep", "sent", "index", "attempt"] as const;
@@ -75,7 +75,12 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
           record.status = status;
         } else if (typeof errorCode === "string" &&
           ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
-            "28P01", "42P01", "42703", "53300", "57P01"].includes(errorCode)) {
+            "28P01", "42P01", "42703", "53300", "57P01",
+            // Eurostat responde 200 a una consulta que no vigila nada: sin estos
+            // codigos, "no responde" y "responde y no trae nada" se leerian
+            // igual en el log, y es justo la diferencia que hay que ver.
+            "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
+            "EUROSTAT_SHAPE"].includes(errorCode)) {
           record.error = errorCode;
         }
       }

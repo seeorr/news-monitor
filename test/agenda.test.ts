@@ -83,7 +83,7 @@ describe("la agenda como evento", () => {
 
   it("no lleva cifras: es una lista de fechas", () => {
     expect(event.actual).toBeNull();
-    expect(event.surprise).toBeNull();
+    expect(event.surprises).toEqual([]);
   });
 });
 

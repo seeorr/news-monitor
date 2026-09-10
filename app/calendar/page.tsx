@@ -27,8 +27,7 @@ import { numero, type Parametros } from "../_lib/parametros.ts";
 import { ultimasSeries, type FilaEvento } from "../../src/db/lectura.ts";
 import { SERIES } from "../../src/sources/fred.ts";
 import { fetchAgenda, type Cita } from "../../src/sources/calendario.ts";
-import { sorpresa } from "../../src/notify/telegram.ts";
-import type { SurpriseBasis } from "../../src/schema/event.ts";
+import { sorpresas } from "../../src/notify/telegram.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -169,14 +168,8 @@ function UltimoDato({ serie }: { serie: FilaEvento }) {
       <span className="cifra font-medium text-txt-2">
         {serie.actual === null ? "—" : `${es(serie.actual)}${serie.unit ?? ""}`}
       </span>
-      {serie.surprise_value !== null && serie.surprise_basis !== null ? (
-        <span className="cifra ml-1">
-          {sorpresa({
-            value: serie.surprise_value,
-            basis: serie.surprise_basis as SurpriseBasis,
-            unit: serie.unit ?? "",
-          })}
-        </span>
+      {sorpresas(serie.surprises) !== null ? (
+        <span className="cifra ml-1">{sorpresas(serie.surprises)}</span>
       ) : null}
     </span>
   );

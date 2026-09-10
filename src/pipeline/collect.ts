@@ -11,6 +11,11 @@
 import type { Config } from "../config.ts";
 import { desdeEntorno, leerWatchlist, type Vigilado } from "../db/watchlist.ts";
 import { applyTransform, fetchObservations, SERIES, toEvent } from "../sources/fred.ts";
+import {
+  DATASETS,
+  fetchSerie as fetchEurostat,
+  toEvent as eurostatEvent,
+} from "../sources/eurostat.ts";
 import { FEEDS, fetchFeed, toEvents as feedEvents } from "../sources/rss.ts";
 import { fetchCotizacion, toEvent as movimientoEvent } from "../sources/mercado.ts";
 import {
@@ -38,7 +43,7 @@ export interface Collected {
 
 interface Task {
   name: string;
-  source: "fred" | "rss" | "sec-edgar" | "yahoo";
+  source: "fred" | "eurostat" | "rss" | "sec-edgar" | "yahoo";
   run: () => Promise<NormalizedEvent[]>;
 }
 
@@ -98,6 +103,25 @@ export async function collectEvents(
         },
       });
     }
+  }
+
+  // ── Eurostat ───────────────────────────────────────────────────────────────
+  // Sin clave: la API es pública. Una tarea por dataset y no una sola, por lo
+  // mismo que en Yahoo: si un dataset retira su agregado de zona euro, se pierde
+  // ese y no la macro europea entera.
+  //
+  // El agregado (`EA21` hoy) se resuelve dentro, preguntándoselo al propio
+  // dataset. Una respuesta sin filas —que Eurostat sirve con un 200 y cara de
+  // normalidad— lanza y cae aquí como `SOURCE_FAILED`, igual que una caída.
+  for (const spec of Object.values(DATASETS)) {
+    tasks.push({
+      name: `eurostat:${spec.id}`,
+      source: "eurostat",
+      run: async () => {
+        const { geo, obs } = await fetchEurostat(spec);
+        return [eurostatEvent(obs, spec, { geo, retrievedAt })];
+      },
+    });
   }
 
   // ── Feeds ──────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyRules } from "../src/pipeline/rules.ts";
 import { memorySeenStore } from "../src/pipeline/seen.ts";
-import { computeSurprise, NormalizedEvent } from "../src/schema/event.ts";
+import { computeSurprises, NormalizedEvent } from "../src/schema/event.ts";
 import { checkFabrication } from "../src/lib/fabrication.ts";
 
 const base: NormalizedEvent = {
@@ -19,7 +19,7 @@ const base: NormalizedEvent = {
   previous: 3.4,
   consensus: null,
   unit: "%",
-  surprise: { value: -0.19, basis: "previous", unit: "%" },
+  surprises: [{ value: -0.19, basis: "previous", unit: "%" }],
   stale: false,
   official: true,
 };
@@ -37,15 +37,48 @@ describe("contrato del evento", () => {
 });
 
 describe("sorpresa", () => {
-  it("prefiere el consenso cuando existe", () => {
-    expect(computeSurprise(3.2, { consensus: 3.4, previous: 3.0 }, "%")?.basis).toBe("consensus");
+  const bases = (s: ReturnType<typeof computeSurprises>) => s.map((x) => x.basis);
+
+  it("calcula todas las bases disponibles, no la primera", () => {
+    const s = computeSurprises(3.2, { consensus: 3.4, previous: 3.0, mean3m: 3.1 }, "%");
+    expect(bases(s)).toEqual(["consensus", "previous", "mean_3m"]);
+    expect(s[0]?.value).toBeCloseTo(-0.2, 2);
+    expect(s[1]?.value).toBeCloseTo(0.2, 2);
+    expect(s[2]?.value).toBeCloseTo(0.1, 2);
   });
-  it("cae al anterior cuando no hay consenso", () => {
-    expect(computeSurprise(3.2, { consensus: null, previous: 3.0 }, "%")?.basis).toBe("previous");
+
+  it("pone el consenso primero: es la mejor base y no se tira por ser rara", () => {
+    const s = computeSurprises(3.2, { consensus: 3.4, previous: 3.0 }, "%");
+    expect(bases(s)).toEqual(["consensus", "previous"]);
   });
-  it("devuelve null antes que un cero de relleno", () => {
-    expect(computeSurprise(3.2, {}, "%")).toBeNull();
-    expect(computeSurprise(null, { previous: 3.0 }, "%")).toBeNull();
+
+  it("con una sola base disponible devuelve una, no un hueco ni un relleno", () => {
+    const soloAnterior = computeSurprises(3.2, { previous: 3.0 }, "%");
+    expect(bases(soloAnterior)).toEqual(["previous"]);
+
+    // El caso real de una serie recién estrenada: hay dato anterior pero todavía
+    // no hay tres periodos con los que hacer la media.
+    const sinMedia = computeSurprises(3.2, { consensus: null, previous: 3.0, mean3m: null }, "%");
+    expect(bases(sinMedia)).toEqual(["previous"]);
+
+    // Y al revés: hueco en el periodo anterior, media disponible.
+    const soloMedia = computeSurprises(3.2, { previous: null, mean3m: 3.1 }, "%");
+    expect(bases(soloMedia)).toEqual(["mean_3m"]);
+  });
+
+  it("devuelve la lista vacía antes que un cero de relleno", () => {
+    expect(computeSurprises(3.2, {}, "%")).toEqual([]);
+    expect(computeSurprises(null, { previous: 3.0 }, "%")).toEqual([]);
+    expect(computeSurprises(3.2, { previous: Number.NaN }, "%")).toEqual([]);
+  });
+
+  it("cada sorpresa declara su base y su unidad, siempre", () => {
+    const s = computeSurprises(3.2, { consensus: 3.4, previous: 3.0, mean3m: 3.1 }, "%");
+    expect(s).toHaveLength(3);
+    for (const x of s) {
+      expect(x.basis).toBeTruthy();
+      expect(x.unit).toBe("%");
+    }
   });
 });
 

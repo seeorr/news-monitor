@@ -1,0 +1,234 @@
+{
+ "version": "2.0",
+ "class": "dataset",
+ "label": "Turnover and volume of sales in wholesale and retail trade - monthly data",
+ "source": "ESTAT",
+ "updated": "2026-09-05T11:00:00+0200",
+ "value": {
+  "0": 0,
+  "1": 0.2,
+  "2": -0.4,
+  "3": 0.9,
+  "4": -0.4,
+  "5": 0.3,
+  "6": 0.2,
+  "7": -0.6,
+  "8": 0.1,
+  "9": 0.3,
+  "10": -0.2,
+  "11": 1.8,
+  "12": 0,
+  "13": 0.4,
+  "14": -0.2,
+  "15": 0
+ },
+ "id": [
+  "freq",
+  "indic_bt",
+  "nace_r2",
+  "s_adj",
+  "unit",
+  "geo",
+  "time"
+ ],
+ "size": [
+  1,
+  2,
+  1,
+  1,
+  1,
+  1,
+  8
+ ],
+ "dimension": {
+  "freq": {
+   "label": "Time frequency",
+   "category": {
+    "index": {
+     "M": 0
+    },
+    "label": {
+     "M": "Monthly"
+    }
+   }
+  },
+  "indic_bt": {
+   "label": "Business trend indicator",
+   "category": {
+    "index": {
+     "VOL_SLS": 0,
+     "NETTUR": 1
+    },
+    "label": {
+     "VOL_SLS": "Volume of sales",
+     "NETTUR": "Net turnover"
+    }
+   }
+  },
+  "nace_r2": {
+   "label": "Statistical classification of economic activities in the European Community (NACE Rev. 2)",
+   "category": {
+    "index": {
+     "G47": 0
+    },
+    "label": {
+     "G47": "Retail trade, except of motor vehicles and motorcycles"
+    }
+   }
+  },
+  "s_adj": {
+   "label": "Seasonal adjustment",
+   "category": {
+    "index": {
+     "SCA": 0
+    },
+    "label": {
+     "SCA": "Seasonally and calendar adjusted data"
+    }
+   }
+  },
+  "unit": {
+   "label": "Unit of measure",
+   "category": {
+    "index": {
+     "PCH_PRE": 0
+    },
+    "label": {
+     "PCH_PRE": "Percentage change on previous period"
+    }
+   }
+  },
+  "geo": {
+   "label": "Geopolitical entity (reporting)",
+   "category": {
+    "index": {
+     "EA21": 0
+    },
+    "label": {
+     "EA21": "Euro area – 21 countries (from 2026)"
+    }
+   }
+  },
+  "time": {
+   "label": "Time",
+   "category": {
+    "index": {
+     "2025-12": 0,
+     "2026-01": 1,
+     "2026-02": 2,
+     "2026-03": 3,
+     "2026-04": 4,
+     "2026-05": 5,
+     "2026-06": 6,
+     "2026-07": 7
+    },
+    "label": {
+     "2025-12": "2025-12",
+     "2026-01": "2026-01",
+     "2026-02": "2026-02",
+     "2026-03": "2026-03",
+     "2026-04": "2026-04",
+     "2026-05": "2026-05",
+     "2026-06": "2026-06",
+     "2026-07": "2026-07"
+    }
+   }
+  }
+ },
+ "extension": {
+  "lang": "EN",
+  "id": "STS_TRTU_M",
+  "agencyId": "ESTAT",
+  "version": "1.0",
+  "datastructure": {
+   "id": "STS_TRTU_M",
+   "agencyId": "ESTAT",
+   "version": "190.0"
+  },
+  "annotation": [
+   {
+    "type": "CREATED",
+    "date": "2010-04-09T21:43:44+0200"
+   },
+   {
+    "type": "DISSEMINATION_DOI_XML",
+    "title": "<adms:identifier xmlns:adms=\"http://www.w3.org/ns/adms#\" xmlns:skos=\"http://www.w3.org/2004/02/skos/core.html\" xmlns:dct=\"http://purl.org/dc/terms/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><adms:Identifier rdf:about=\"https://doi.org/10.2908/STS_TRTU_M\"><skos:notation rdf:datatype=\"http://purl.org/spar/datacite/doi\">10.2908/STS_TRTU_M</skos:notation><dct:creator rdf:resource=\"http://publications.europa.eu/resource/authority/corporate-body/ESTAT\"/><dct:issued rdf:datatype=\"http://www.w3.org/2001/XMLSchema#date\">2023-01-23</dct:issued></adms:Identifier></adms:identifier>"
+   },
+   {
+    "type": "DISSEMINATION_EXPLANATORY_LINK",
+    "title": "text-category",
+    "href": "https://ec.europa.eu/eurostat/databrowser-backend/api/public/explanatory-notes/get/Info_note_STS_main_20240223.pdf",
+    "text": "Information note: base year"
+   },
+   {
+    "type": "DISSEMINATION_EXPLANATORY_LINK",
+    "title": "text-category",
+    "href": "https://ec.europa.eu/eurostat/databrowser-backend/api/public/explanatory-notes/get/Info_note_STS_main_20240223.pdf"
+   },
+   {
+    "type": "DISSEMINATION_EXPLANATORY_LINK",
+    "title": "text-category",
+    "href": "https://ec.europa.eu/eurostat/databrowser-backend/api/public/explanatory-notes/get/Info_note_STS_main_20240223.pdf"
+   },
+   {
+    "type": "DISSEMINATION_OBJECT_TYPE",
+    "title": "DATASET"
+   },
+   {
+    "type": "DISSEMINATION_TIMESTAMP_DATA",
+    "date": "2026-09-05T11:00:00+0200"
+   },
+   {
+    "type": "DISSEMINATION_TIMESTAMP_GLOBAL",
+    "date": "2026-09-05T11:00:00+0200"
+   },
+   {
+    "type": "DISSEMINATION_TIMESTAMP_PLANNED",
+    "date": "2026-09-05T11:00:00+0200"
+   },
+   {
+    "type": "ESMS_HTML",
+    "title": "Explanatory texts (metadata)",
+    "href": "https://ec.europa.eu/eurostat/cache/metadata/en/sts_esms.htm"
+   },
+   {
+    "type": "ESMS_SDMX",
+    "title": "Explanatory texts (metadata)",
+    "href": "https://ec.europa.eu/eurostat/api/dissemination/files?file=metadata/sts_esms.sdmx.zip"
+   },
+   {
+    "type": "OBS_COUNT",
+    "title": "4198671"
+   },
+   {
+    "type": "OBS_PERIOD_OVERALL_LATEST",
+    "title": "2026-07"
+   },
+   {
+    "type": "OBS_PERIOD_OVERALL_OLDEST",
+    "title": "1991-01"
+   },
+   {
+    "type": "SOURCE_INSTITUTIONS",
+    "text": "Eurostat"
+   },
+   {
+    "type": "UPDATE_DATA",
+    "date": "2026-09-05T11:00:00+0200"
+   },
+   {
+    "type": "UPDATE_STRUCTURE",
+    "date": "2026-08-26T11:00:00+0200"
+   }
+  ],
+  "positions-with-no-data": {
+   "freq": [],
+   "indic_bt": [],
+   "nace_r2": [],
+   "s_adj": [],
+   "unit": [],
+   "geo": [],
+   "time": []
+  }
+ }
+}

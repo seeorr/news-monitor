@@ -13,11 +13,12 @@ contextualiza y explica**, y manda una alerta a Telegram. No es un agregador.
 
 ## Estado
 
-Bloques 1 a 4 completos. Cuatro fuentes entran por el mismo contrato y el ciclo
+Bloques 1 a 4 completos. Cinco fuentes entran por el mismo contrato y el ciclo
 procesa N eventos por vuelta:
 
 ```
-FRED (3 series)  ─┐
+FRED (series)    ─┐
+Eurostat         ─┤
 feeds RSS/Atom   ─┤
 SEC EDGAR        ─┼→ evento normalizado → frescura → reglas → dedupe → agrupacion
 precios (Yahoo)  ─┘                                                        │
@@ -74,7 +75,8 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 |---|---|
 | `src/schema/event.ts` | El contrato: `NormalizedEvent`. Toda fuente normaliza aquí |
 | `src/sources/fred.ts` | Lee FRED y normaliza. Calcula la variación interanual a partir de observaciones reales |
-| `src/sources/rss.ts` | Registro de feeds y conversión a eventos. Oficiales (Fed, BCE, SEC) y prensa |
+| `src/sources/eurostat.ts` | Macro de la zona euro sin clave. Resuelve el agregado por dataset y trata la respuesta vacía como fallo |
+| `src/sources/rss.ts` | Registro de feeds y conversión a eventos. Oficiales (Fed, BCE, SEC) y prensa (CNBC, Yahoo, Investing) |
 | `src/sources/sec-edgar.ts` | Documentos ante la SEC de la watchlist: resuelve ticker→CIK, filtra por tipo y reconoce los resultados por su apartado |
 | `src/sources/mercado.ts` | Precios de Yahoo. Solo es evento la sesion que se sale del umbral de ese valor |
 | `src/sources/calendario.ts` | Agenda macro desde FRED: que se publica y cuando |

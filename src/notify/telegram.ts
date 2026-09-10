@@ -46,6 +46,28 @@ export function sorpresa(s: Surprise): string {
   return `${signo(s.value)}${unidad} (${BASIS_LABEL[s.basis]})`;
 }
 
+/**
+ * Las sorpresas de un evento, escritas juntas y en el mismo orden siempre.
+ *
+ * Un evento lleva varias: contra el consenso si alguien lo tecleó, contra el
+ * dato anterior y contra la media de 3 meses. La lista ya viene ordenada de más
+ * a menos informativa desde `computeSurprises()`, y aquí no se reordena ni se
+ * recorta: enseñar una y callar la otra es volver a elegir por el lector.
+ *
+ * Existe por el mismo motivo que `sorpresa()`: la escriben la alerta de Telegram
+ * y el dashboard, y si cada uno junta la lista a su manera vuelve a haber dos
+ * lecturas de la misma cifra —el fallo que obligó a unificar `sorpresa()`—. El
+ * separador es el mismo ` · ` que usa el resto de la alerta.
+ *
+ * Devuelve null con la lista vacía, y no una cadena vacía: quien llama tiene que
+ * decidir si escribe la etiqueta "Sorpresa:", y una cadena vacía la dejaría
+ * colgando sin nada detrás.
+ */
+export function sorpresas(lista: readonly Surprise[]): string | null {
+  if (lista.length === 0) return null;
+  return lista.map(sorpresa).join(" · ");
+}
+
 /** Número en formato español: coma decimal. */
 export function es(n: number, decimals = 1): string {
   return n.toFixed(decimals).replace(".", ",");
@@ -69,7 +91,8 @@ export function formatAlert(
   if (event.actual !== null) cifras.push(`Actual: ${es(event.actual)}${unit}`);
   if (event.consensus !== null) cifras.push(`Consenso: ${es(event.consensus)}${unit}`);
   else if (event.previous !== null) cifras.push(`Anterior: ${es(event.previous)}${unit}`);
-  if (event.surprise) cifras.push(`Sorpresa: ${sorpresa(event.surprise)}`);
+  const linea = sorpresas(event.surprises);
+  if (linea !== null) cifras.push(`Sorpresa: ${linea}`);
   if (cifras.length > 0) lines.push(cifras.join(" | "));
 
   lines.push(

@@ -8,7 +8,7 @@ import type { LogCode, LogFields } from "../src/lib/log.ts";
 // Los dobles se limitan a las fronteras de servicios: no red, LLM ni escrituras.
 const mocks = vi.hoisted(() => ({
   config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
-  filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), fred: vi.fn(),
+  filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), fred: vi.fn(), eurostat: vi.fn(),
   score: vi.fn(), analyze: vi.fn(), send: vi.fn(), state: vi.fn(),
   seen: { has: vi.fn(), mark: vi.fn(), saveAlert: vi.fn() },
 }));
@@ -31,6 +31,13 @@ vi.mock("../src/sources/rss.ts", async (original) => ({
 }));
 vi.mock("../src/sources/fred.ts", async (original) => ({
   ...await original<typeof import("../src/sources/fred.ts")>(), fetchObservations: mocks.fred,
+}));
+// Eurostat es publica y no lleva clave, asi que no hay variable que la apague:
+// su frontera de red se dobla aqui como la de las demas. Por defecto rechaza,
+// que es lo que hace la red en este archivo, y asi el ciclo corre con las mismas
+// fuentes que antes mas cuatro caidas.
+vi.mock("../src/sources/eurostat.ts", async (original) => ({
+  ...await original<typeof import("../src/sources/eurostat.ts")>(), fetchSerie: mocks.eurostat,
 }));
 vi.mock("../src/ai/cascade.ts", async (original) => ({
   ...await original<typeof import("../src/ai/cascade.ts")>(),
@@ -74,6 +81,7 @@ beforeEach(() => {
   mocks.resolve.mockResolvedValue({ companies: [], unknown: [PRIVATE] });
   mocks.filings.mockResolvedValue([]);
   mocks.feed.mockResolvedValue([]);
+  mocks.eurostat.mockRejectedValue(Object.assign(new Error(payload), { query: payload }));
   mocks.state.mockReturnValue(mocks.seen);
   mocks.seen.has.mockResolvedValue(false);
   mocks.score.mockResolvedValue({ importance_score: 8, market_impact_score: 8,
@@ -203,15 +211,38 @@ describe("bordes reales de collect", () => {
     const lines: string[] = [];
     const result = await collectEvents(config(), { retrievedAt: new Date().toISOString(), log: (line) => lines.push(line) });
     sinFugas(lines);
+    // Las cuatro caidas de Eurostat se suman a las dos de siempre y ninguna se
+    // lleva por delante la fuente sana. Los ordinales son los de la lista de
+    // tareas: Eurostat ocupa del 1 al 4 porque va antes de los feeds.
     expect(result.ok).toBe(1);
     expect(result.events).toHaveLength(1);
-    expect(result.failures).toHaveLength(2);
+    expect(result.failures).toHaveLength(6);
     expect(JSON.stringify(result.failures)).not.toContain(SECRET);
     expect(lines.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
-      { code: "SOURCE_FAILED", source: "sec-edgar", stage: "collect", index: 1, error: "HTTP", status: 403 },
-      { code: "SOURCE_FAILED", source: "yahoo", stage: "collect", index: 2, error: "UNKNOWN" },
-      { code: "SOURCE_OK", source: "yahoo", stage: "collect", index: 3, count: 1 },
+      { code: "SOURCE_FAILED", source: "eurostat", stage: "collect", index: 1, error: "UNKNOWN" },
+      { code: "SOURCE_FAILED", source: "sec-edgar", stage: "collect", index: 5, error: "HTTP", status: 403 },
+      { code: "SOURCE_FAILED", source: "yahoo", stage: "collect", index: 6, error: "UNKNOWN" },
+      { code: "SOURCE_OK", source: "yahoo", stage: "collect", index: 7, count: 1 },
     ]));
+  });
+
+  /**
+   * El fallo de Eurostat que este proyecto teme no es una caida: es un 200 con
+   * cero filas. Sale en el log con su codigo y sin una sola palabra del mensaje,
+   * que es lo que permite distinguir "no responde" de "responde y no trae nada"
+   * sin abrir un boquete en el vocabulario cerrado del logger.
+   */
+  it("dice en el log que Eurostat respondió vacío, y solo eso", async () => {
+    const { collectEvents } = await import("../src/pipeline/collect.ts");
+    const { EurostatError } = await import("../src/sources/eurostat.ts");
+    mocks.watchlist.mockResolvedValue([]);
+    mocks.eurostat.mockRejectedValue(new EurostatError("EUROSTAT_EMPTY", payload));
+    const lines: string[] = [];
+    await collectEvents(config(), { retrievedAt: new Date().toISOString(), log: (line) => lines.push(line) });
+    sinFugas(lines);
+    expect(lines.map((line) => JSON.parse(line))).toContainEqual(
+      { code: "SOURCE_FAILED", source: "eurostat", stage: "collect", index: 1, error: "EUROSTAT_EMPTY" },
+    );
   });
 
   it("solo cuenta los símbolos SEC desconocidos", async () => {

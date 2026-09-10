@@ -193,7 +193,7 @@ export function toEvents(
       previous: null,
       consensus: null,
       unit: null,
-      surprise: null,
+      surprises: [],
 
       stale: false,
       official: true, // Lo presenta la empresa ante el regulador: no hay intermediario.

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatAlert, sorpresa } from "../src/notify/telegram.ts";
+import { formatAlert, sorpresa, sorpresas } from "../src/notify/telegram.ts";
+import { cifras } from "../app/_lib/formato.ts";
+import type { FilaEvento } from "../src/db/lectura.ts";
 import type { Analysis, Scoring } from "../src/ai/cascade.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 
@@ -18,7 +20,7 @@ const event: NormalizedEvent = {
   previous: 3.4,
   consensus: 3.4,
   unit: "%",
-  surprise: { value: -0.2, basis: "consensus", unit: "%" },
+  surprises: [{ value: -0.2, basis: "consensus", unit: "%" }],
   stale: false,
   official: true,
 };
@@ -85,7 +87,7 @@ describe("formato de la alerta", () => {
     const sinConsenso = {
       ...event,
       consensus: null,
-      surprise: { value: -0.2, basis: "previous" as const, unit: "%" },
+      surprises: [{ value: -0.2, basis: "previous" as const, unit: "%" }],
     };
     const t = formatAlert(sinConsenso, scoring, analysis);
     expect(t).toContain("Anterior: 3,4%");
@@ -94,7 +96,7 @@ describe("formato de la alerta", () => {
   });
 
   it("no imprime un hueco como si fuera un dato", () => {
-    const t = formatAlert({ ...event, consensus: null, previous: null, surprise: null }, scoring, null);
+    const t = formatAlert({ ...event, consensus: null, previous: null, surprises: [] }, scoring, null);
     expect(t).not.toContain("Consenso:");
     expect(t).not.toContain("Sorpresa:");
     expect(t).not.toContain("null");
@@ -137,5 +139,59 @@ describe("la sorpresa se escribe en un solo sitio", () => {
     for (const basis of ["consensus", "previous", "mean_3m"] as const) {
       expect(sorpresa({ value: 1, basis, unit: "%" })).toContain("vs ");
     }
+  });
+});
+
+/**
+ * Un evento lleva varias sorpresas y la alerta las enseña todas. Enseñar una y
+ * callar la otra seria volver a elegir por el lector: comparar el IPC con el del
+ * mes pasado es una variacion, y compararlo con la media de 3 meses dice si se
+ * sale de la tendencia. No son la misma frase dicha dos veces.
+ */
+describe("varias sorpresas en la misma cifra", () => {
+  const dos = [
+    { value: -0.2, basis: "previous" as const, unit: "%" },
+    { value: 0.4, basis: "mean_3m" as const, unit: "%" },
+  ];
+
+  it("las escribe todas, en orden y cada una con su base", () => {
+    expect(sorpresas(dos)).toBe("-0,2 pp (vs anterior) · +0,4 pp (vs media 3m)");
+  });
+
+  it("el consenso encabeza cuando existe", () => {
+    const tres = [{ value: -0.4, basis: "consensus" as const, unit: "%" }, ...dos];
+    expect(sorpresas(tres)).toBe(
+      "-0,4 pp (vs consenso) · -0,2 pp (vs anterior) · +0,4 pp (vs media 3m)",
+    );
+  });
+
+  it("con una sola base escribe una sola, sin separador colgando", () => {
+    expect(sorpresas([dos[0]!])).toBe("-0,2 pp (vs anterior)");
+    expect(sorpresas([dos[0]!])).not.toContain("·");
+  });
+
+  it("sin ninguna devuelve null, para que la etiqueta no salga vacia", () => {
+    expect(sorpresas([])).toBeNull();
+    const t = formatAlert({ ...event, surprises: [] }, scoring, null);
+    expect(t).not.toContain("Sorpresa:");
+  });
+
+  it("la alerta imprime la linea entera", () => {
+    const t = formatAlert({ ...event, consensus: null, surprises: dos }, scoring, null);
+    expect(t).toContain("Sorpresa: -0,2 pp (vs anterior) · +0,4 pp (vs media 3m)");
+  });
+
+  /**
+   * El fallo que obligo a unificar `sorpresa()` fue que la alerta decia una cosa
+   * y la pantalla otra para la misma cifra. Con dos sorpresas por evento el
+   * riesgo se duplica: bastaria con que una de las dos superficies enseñara solo
+   * la primera. Esto lo fija comparando las dos salidas de verdad.
+   */
+  it("el dashboard escribe exactamente la misma linea que la alerta", () => {
+    const fila = { actual: 3.2, consensus: null, previous: 3.4, unit: "%", surprises: dos };
+    const enPantalla = cifras(fila as FilaEvento).find((c) => c.etiqueta === "Sorpresa");
+    const enTelegram = formatAlert({ ...event, consensus: null, surprises: dos }, scoring, null);
+    expect(enPantalla?.valor).toBe(sorpresas(dos));
+    expect(enTelegram).toContain(enPantalla!.valor);
   });
 });

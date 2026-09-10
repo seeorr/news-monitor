@@ -106,9 +106,14 @@ export function eventFacts(event: NormalizedEvent): string {
     l.push(
       `Consenso: ${event.consensus === null ? "no disponible (fuente gratuita no lo publica)" : fmt(event.consensus) + u}`,
     );
+    // Una linea por base, y cada una dice contra que compara. Juntarlas en un
+    // solo numero obligaria al modelo a elegir cual, y esa eleccion es
+    // justamente la que el evento ya no hace.
     l.push(
-      event.surprise
-        ? `Sorpresa: ${fmt(event.surprise.value)} ${event.surprise.unit} (frente a: ${event.surprise.basis})`
+      event.surprises.length > 0
+        ? event.surprises
+            .map((x) => `Sorpresa: ${fmt(x.value)} ${x.unit} (frente a: ${x.basis})`)
+            .join("\n")
         : "Sorpresa: no calculable con los datos disponibles",
     );
   } else {
@@ -138,7 +143,10 @@ export function allowedNumbers(event: NormalizedEvent): Array<number | null> {
     event.actual,
     event.previous,
     event.consensus,
-    event.surprise?.value ?? null,
+    // Las dos sorpresas, no la primera: si el modelo cita la que se compara con
+    // la media de 3 meses y aqui solo esta la del dato anterior, el control
+    // anti-fabricacion tumbaria un analisis correcto.
+    ...event.surprises.map((s) => s.value),
     ...extractNumbers(`${event.title} ${event.summary ?? ""}`),
   ];
 }

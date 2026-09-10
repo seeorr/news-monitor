@@ -29,8 +29,8 @@ export interface FeedSpec {
  * Registro de feeds. Añadir uno es añadir una fila: no toca el pipeline ni el
  * formateador, igual que con las series de FRED.
  *
- * Ninguno pide clave ni tiene cupo. Los cuatro se comprobaron vivos el 8 de
- * septiembre de 2026.
+ * Ninguno pide clave ni tiene cupo. Los cinco primeros se comprobaron vivos el 8
+ * de septiembre de 2026; los tres de Investing, el 10 de septiembre.
  */
 export const FEEDS: Record<string, FeedSpec> = {
   "fed-press": {
@@ -65,6 +65,44 @@ export const FEEDS: Record<string, FeedSpec> = {
     id: "yahoo-finance",
     title: "Yahoo Finance",
     url: "https://finance.yahoo.com/news/rssindex",
+    country: "🌐",
+    official: false,
+  },
+
+  // ── Investing.com ──────────────────────────────────────────────────────────
+  // Tres secciones y no su feed general (`/rss/news.rss`), por una razón medible:
+  // el general va lleno de "Earnings call transcript: …", y "earnings" es una
+  // palabra macro del filtro por reglas. Cada transcripción pasaría el paso 1 y
+  // se pagaría su puntuación en Haiku. Las tres secciones elegidas no traían
+  // ninguna el 10 de septiembre de 2026; el general, una de cada diez.
+  //
+  // Investing publica `<link>` pero no `<guid>` ni `<description>`: el id sale
+  // del enlace, que lleva el número de artículo, y el resumen queda en null —un
+  // hueco declarado, como en cualquier otra fuente sin resumen. Y su `pubDate`
+  // viene sin zona horaria; lo arregla `toIso`, no esta tabla.
+  //
+  // Quedan a una fila de distancia, si algún día hacen falta: `news_1` (divisas),
+  // `news_11` (materias primas), `news_301` (cripto) y `news_357` (operaciones de
+  // insiders). `market_overview.rss` no entra a propósito: es análisis y opinión
+  // —"¿romperá el oro los 4.450?"—, justo lo que la cascada existe para no mirar.
+  "investing-economy": {
+    id: "investing-economy",
+    title: "Investing Economía",
+    url: "https://www.investing.com/rss/news_14.rss",
+    country: "🌐",
+    official: false,
+  },
+  "investing-indicators": {
+    id: "investing-indicators",
+    title: "Investing Indicadores",
+    url: "https://www.investing.com/rss/news_95.rss",
+    country: "🌐",
+    official: false,
+  },
+  "investing-stocks": {
+    id: "investing-stocks",
+    title: "Investing Bolsa",
+    url: "https://www.investing.com/rss/news_25.rss",
     country: "🌐",
     official: false,
   },
@@ -113,7 +151,7 @@ export function toEvents(
       previous: null,
       consensus: null,
       unit: null,
-      surprise: null,
+      surprises: [],
 
       stale: false,
       official: spec.official,

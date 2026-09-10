@@ -105,8 +105,23 @@ function sinHtml(s: string): string {
 }
 
 /**
+ * Una fecha a la que le falta la zona horaria. Investing.com publica
+ * `2026-09-10 09:08:53` y se queda ahí.
+ */
+const SIN_ZONA = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/;
+
+/**
  * Fecha del feed a instante ISO. RSS trae RFC 822 ("Fri, 4 Sep 2026 15:00:00 GMT")
  * y Atom trae ISO 8601; `Date` entiende los dos.
+ *
+ * La fecha **sin zona** se lee como UTC, y eso es una decisión, no un detalle.
+ * `Date.parse("2026-09-10 09:08:53")` la interpretaría como hora local, así que el
+ * mismo elemento tendría un instante aquí y otro en el runner de GitHub, que va en
+ * UTC: dos horas de diferencia en el campo que decide si una noticia es reciente o
+ * ya no se mira. Investing publica en GMT —el 10 de septiembre de 2026 su elemento
+ * más nuevo decía 09:08:53 mientras su propia cabecera `Date` decía 09:21 GMT, con
+ * diez elementos repartidos en cuatro minutos—, así que UTC no solo es estable:
+ * es lo que la fuente quiere decir.
  *
  * Devuelve null si no se puede interpretar. Un evento sin fecha fiable no se
  * descarta por eso, pero tampoco se le inventa la de hoy: eso lo convertiría en
@@ -114,6 +129,7 @@ function sinHtml(s: string): string {
  */
 export function toIso(date: string | null): string | null {
   if (!date) return null;
-  const t = Date.parse(date);
+  const m = SIN_ZONA.exec(date.trim());
+  const t = Date.parse(m ? `${m[1]}T${m[2]}Z` : date);
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }

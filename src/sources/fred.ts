@@ -10,7 +10,7 @@
  */
 import { fetchJson } from "../lib/http.ts";
 import {
-  computeSurprise,
+  computeSurprises,
   eventId,
   round,
   type NormalizedEvent,
@@ -55,6 +55,43 @@ export const SERIES: Record<string, SeriesSpec> = {
     id: "DGS10",
     title: "US 10Y Treasury Yield",
     country: "🇺🇸",
+    unit: "%",
+    transform: "level",
+    periodsPerYear: 252,
+  },
+
+  /**
+   * IPC armonizado de la zona euro, **composición variable**.
+   *
+   * La de composición variable y no la de 19 países fijos a propósito: la zona
+   * euro cambia de miembros —21 desde 2026— y una serie de composición fija
+   * envejece sola hasta dejar de describir lo que su nombre dice que describe.
+   *
+   * FRED lo da como índice (2025=100), igual que `CPIAUCSL`: la variación
+   * interanual la calcula `applyTransform()` a partir de dos observaciones
+   * reales, no se pide transformada.
+   */
+  CP0000EZCCM086NEST: {
+    id: "CP0000EZCCM086NEST",
+    title: "IPC armonizado de la zona euro",
+    country: "🇪🇺",
+    unit: "%",
+    transform: "yoy_pct",
+    periodsPerYear: 12,
+  },
+
+  /**
+   * Tipo de la facilidad de depósito del BCE: el tipo que de verdad marca el
+   * suelo del mercado monetario de la zona euro.
+   *
+   * Serie diaria y plana entre decisiones, así que sus dos sorpresas valen cero
+   * casi siempre. Es la verdad y se imprime como tal: el día que el BCE mueva,
+   * la sorpresa contra el dato anterior será el movimiento entero.
+   */
+  ECBDFR: {
+    id: "ECBDFR",
+    title: "Tipo de depósito del BCE",
+    country: "🇪🇺",
     unit: "%",
     transform: "level",
     periodsPerYear: 252,
@@ -147,7 +184,7 @@ export function toEvent(
     previous,
     consensus,
     unit: spec.unit,
-    surprise: computeSurprise(latest.value, { consensus, previous, mean3m }, spec.unit),
+    surprises: computeSurprises(latest.value, { consensus, previous, mean3m }, spec.unit),
     stale: opts.stale ?? false,
     official: true,
   };

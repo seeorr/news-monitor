@@ -86,6 +86,18 @@ describe("fechas", () => {
     expect(toIso("2026-09-01T16:30:35-04:00")).toBe("2026-09-01T20:30:35.000Z");
   });
 
+  // Sin esto el resultado dependería de la zona de la máquina: en Madrid saldría
+  // 07:08:53Z y en el runner de GitHub 09:08:53Z, para el mismo elemento.
+  it("lee como UTC la fecha sin zona de Investing", () => {
+    expect(toIso("2026-09-10 09:08:53")).toBe("2026-09-10T09:08:53.000Z");
+    expect(toIso("2026-09-10T09:08")).toBe("2026-09-10T09:08:00.000Z");
+  });
+
+  it("no toca la fecha que sí declara su zona", () => {
+    expect(toIso("2026-09-10 09:08:53 GMT")).toBe("2026-09-10T09:08:53.000Z");
+    expect(toIso("Sep 10, 2026 08:22 GMT")).toBe("2026-09-10T08:22:00.000Z");
+  });
+
   it("devuelve null antes que inventar una fecha", () => {
     expect(toIso("ayer por la tarde")).toBeNull();
     expect(toIso(null)).toBeNull();

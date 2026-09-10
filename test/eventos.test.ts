@@ -35,7 +35,7 @@ const evento: NormalizedEvent = {
   previous: 3.73,
   consensus: null,
   unit: "%",
-  surprise: { value: -0.19, basis: "previous", unit: "%" },
+  surprises: [{ value: -0.19, basis: "previous", unit: "%" }],
   stale: false,
   official: true,
 };

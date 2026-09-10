@@ -21,7 +21,7 @@ const noticia = (
   previous: null,
   consensus: null,
   unit: null,
-  surprise: null,
+  surprises: [],
   stale: false,
   official: false,
   ...extra,

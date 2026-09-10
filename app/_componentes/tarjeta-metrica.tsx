@@ -9,13 +9,17 @@
  */
 import { InsigniaObsoleto } from "./insignias.tsx";
 import { es } from "../_lib/formato.ts";
-import { sorpresa } from "../../src/notify/telegram.ts";
-import type { SurpriseBasis } from "../../src/schema/event.ts";
+import { sorpresas } from "../../src/notify/telegram.ts";
 import type { FilaEvento } from "../../src/db/lectura.ts";
 
 export function TarjetaMetrica({ serie }: { serie: FilaEvento }) {
   const unidad = serie.unit ?? "";
-  const diferencia = serie.surprise_value;
+  // El color lo decide la primera sorpresa, que es la de base mas informativa
+  // —consenso si existe, si no el dato anterior—. Las dos se escriben; el color
+  // es uno solo porque la cifra grande tambien lo es, y pintarla de dos colores
+  // a la vez no significa nada.
+  const linea = sorpresas(serie.surprises);
+  const diferencia = serie.surprises[0]?.value ?? null;
   const color =
     diferencia === null
       ? "text-txt"
@@ -38,18 +42,13 @@ export function TarjetaMetrica({ serie }: { serie: FilaEvento }) {
 
       <p className="mt-0.5 text-meta text-txt-3">
         {/*
-          La sorpresa declara siempre su base. Un porcentaje de sorpresa sin base
-          miente por omisión, y aquí la base nunca es el consenso: FRED no lo
-          publica.
+          Cada sorpresa declara su base, y salen todas las que hay: contra el dato
+          anterior y contra la media de 3 meses dicen cosas distintas —una es la
+          variacion, la otra si el dato se sale de la tendencia— y ninguna es la
+          buena. Contra el consenso casi nunca hay: FRED no lo publica.
         */}
-        {diferencia !== null && serie.surprise_basis !== null ? (
-          <span className="cifra">
-            {sorpresa({
-              value: diferencia,
-              basis: serie.surprise_basis as SurpriseBasis,
-              unit: unidad,
-            })}
-          </span>
+        {linea !== null ? (
+          <span className="cifra">{linea}</span>
         ) : (
           "sin referencia con la que comparar"
         )}

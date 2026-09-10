@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-export const SOURCES = ["fred", "rss", "sec-edgar", "yahoo", "coingecko"] as const;
+export const SOURCES = ["fred", "eurostat", "rss", "sec-edgar", "yahoo", "coingecko"] as const;
 export const KINDS = ["macro_release", "news", "filing", "market_move", "calendar"] as const;
 
 /**
@@ -17,6 +17,9 @@ export const KINDS = ["macro_release", "news", "filing", "market_move", "calenda
  * fuente gratuita fiable que lo dé, así que la alerta declara SIEMPRE contra qué
  * se compara. Un porcentaje de sorpresa sin base declarada es una cifra que
  * miente por omisión.
+ *
+ * El orden de esta enumeración es el orden en que se presentan: es el de más a
+ * menos informativo, y lo usa `computeSurprises()` para ordenar la lista.
  */
 export const SurpriseBasis = z.enum(["consensus", "previous", "mean_3m"]);
 export type SurpriseBasis = z.infer<typeof SurpriseBasis>;
@@ -54,7 +57,19 @@ export const NormalizedEvent = z.object({
   /** Solo si alguien lo ha introducido a mano. FRED no lo da. */
   consensus: z.number().nullable(),
   unit: z.string().nullable(),
-  surprise: Surprise.nullable(),
+  /**
+   * Todas las sorpresas calculables, no la mejor.
+   *
+   * Comparar el IPC contra el del mes pasado no es una sorpresa, es una
+   * variación: el mercado ya se sabía el dato anterior. La media de 3 meses dice
+   * otra cosa —si el dato se sale de la tendencia reciente— y ninguna de las dos
+   * sustituye al consenso. Quedarse con la primera disponible tiraba la otra.
+   *
+   * Lista vacía, no `null`: un evento sin cifras —una noticia, un documento— no
+   * tiene sorpresas que calcular, y eso es un conjunto vacío, no un hueco.
+   * Cada elemento declara su base; esa regla no se rompe en ningún borde.
+   */
+  surprises: z.array(Surprise),
 
   /** El dato es el último válido conocido, no uno fresco. La alerta debe decirlo. */
   stale: z.boolean(),
@@ -83,27 +98,38 @@ export function itemId(source: string, feedId: string, guid: string): string {
 }
 
 /**
- * Sorpresa con la base más informativa disponible, en este orden:
- * consenso (si alguien lo introdujo) → dato anterior → media de 3 periodos.
- * Devuelve null si no hay nada contra lo que comparar: preferimos un hueco a un cero.
+ * Todas las sorpresas calculables, de más a menos informativa: consenso (si
+ * alguien lo introdujo a mano), dato anterior y media de 3 periodos.
+ *
+ * Devuelve **todas** las bases disponibles y no la primera. El motivo: FRED no
+ * publica consenso, así que `consensus` está a null casi siempre y la sorpresa
+ * se calculaba contra el dato anterior, que es una variación y no una sorpresa
+ * —el mercado ya se sabía el dato anterior—. La media de 3 meses responde a otra
+ * pregunta: si el dato se sale de la tendencia reciente. Juntas dicen más que
+ * cualquiera sola, y descartar una para quedarse con la otra era tirar
+ * información que ya estaba calculada.
+ *
+ * Lista vacía si no hay nada contra lo que comparar: preferimos un hueco a un
+ * cero. Cada elemento lleva su base, siempre.
  */
-export function computeSurprise(
+export function computeSurprises(
   actual: number | null,
   refs: { consensus?: number | null; previous?: number | null; mean3m?: number | null },
   unit: string,
-): Surprise | null {
-  if (actual === null || !Number.isFinite(actual)) return null;
+): Surprise[] {
+  if (actual === null || !Number.isFinite(actual)) return [];
   const candidates: Array<[SurpriseBasis, number | null | undefined]> = [
     ["consensus", refs.consensus],
     ["previous", refs.previous],
     ["mean_3m", refs.mean3m],
   ];
+  const out: Surprise[] = [];
   for (const [basis, ref] of candidates) {
     if (ref !== null && ref !== undefined && Number.isFinite(ref)) {
-      return { value: round(actual - ref, 2), basis, unit };
+      out.push({ value: round(actual - ref, 2), basis, unit });
     }
   }
-  return null;
+  return out;
 }
 
 export function round(n: number, decimals: number): number {

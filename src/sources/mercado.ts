@@ -184,7 +184,7 @@ export function toEvent(
     previous: null,
     consensus: null,
     unit: "%",
-    surprise: null,
+    surprises: [],
 
     stale: false,
     // Yahoo no es fuente oficial y no tiene SLA: pasa por el filtro como prensa.

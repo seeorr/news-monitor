@@ -169,7 +169,7 @@ export function agendaEvent(
     previous: null,
     consensus: null,
     unit: null,
-    surprise: null,
+    surprises: [],
     stale: false,
     official: true,
   };

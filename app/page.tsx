@@ -19,6 +19,7 @@ import { claveFred, urlBaseDeDatos } from "./_lib/servidor.ts";
 import { loImportante, ultimasSeries, ultimosMovimientos } from "../src/db/lectura.ts";
 import { leerWatchlist } from "../src/db/watchlist.ts";
 import { SERIES } from "../src/sources/fred.ts";
+import { DATASETS } from "../src/sources/eurostat.ts";
 import { fetchAgenda, type Cita } from "../src/sources/calendario.ts";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export default async function Home() {
 
   const principal = await cargar(async (sql) => ({
     importantes: await loImportante(sql, { limite: 8 }),
-    series: await ultimasSeries(sql, Object.keys(SERIES)),
+    series: await ultimasSeries(sql, [...Object.keys(SERIES), ...Object.keys(DATASETS)]),
     movimientos: await ultimosMovimientos(sql),
   }));
 
@@ -71,7 +72,7 @@ export default async function Home() {
         </div>
 
         <aside>
-          <Bloque titulo="Macro" nota="lo que se ingiere de FRED">
+          <Bloque titulo="Macro" nota="lo que se ingiere de FRED y Eurostat">
             {principal.ok && principal.datos.series.length > 0 ? (
               <div className="flex flex-col gap-2">
                 {principal.datos.series.map((s) => (

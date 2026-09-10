@@ -6,8 +6,7 @@
  * Que la misma cifra se lea distinta en el móvil y en el navegador sería un
  * fallo de coherencia gratuito.
  */
-import { es, sorpresa } from "../../src/notify/telegram.ts";
-import type { SurpriseBasis } from "../../src/schema/event.ts";
+import { es, sorpresas } from "../../src/notify/telegram.ts";
 import type { FilaEvento } from "../../src/db/lectura.ts";
 
 export { es };
@@ -29,6 +28,7 @@ export const KIND_LABEL: Record<string, string> = {
 /** Las fuentes del enum. `coingecko` está declarada y no implementada; se dice. */
 export const SOURCE_LABEL: Record<string, string> = {
   fred: "FRED",
+  eurostat: "Eurostat",
   rss: "Prensa",
   "sec-edgar": "SEC EDGAR",
   yahoo: "Yahoo",
@@ -45,6 +45,9 @@ export const FEED_LABEL: Record<string, string> = {
   "sec-press": "SEC",
   "cnbc-markets": "CNBC",
   "yahoo-finance": "Yahoo Finance",
+  "investing-economy": "Investing · Economía",
+  "investing-indicators": "Investing · Indicadores",
+  "investing-stocks": "Investing · Bolsa",
 };
 
 export const SENTIMENT_LABEL: Record<string, string> = {
@@ -120,7 +123,9 @@ export interface Cifra {
  *
  * Y la sorpresa declara siempre su base —"vs anterior", "vs media 3m"—, porque
  * un porcentaje de sorpresa sin base miente por omisión. Esa etiqueta no es
- * opcional en la UI.
+ * opcional en la UI. Un evento lleva varias y se enseñan las que tenga: la
+ * comparación con el dato anterior y la comparación con la media de 3 meses
+ * dicen cosas distintas, y elegir una por el lector es decidir por él.
  */
 export function cifras(e: FilaEvento): Cifra[] {
   const unidad = e.unit ?? "";
@@ -131,18 +136,11 @@ export function cifras(e: FilaEvento): Cifra[] {
   } else if (e.previous !== null) {
     salida.push({ etiqueta: "Anterior", valor: `${es(e.previous)}${unidad}` });
   }
-  if (e.surprise_value !== null && e.surprise_basis !== null) {
-    // La escribe `sorpresa()`, la misma que la alerta de Telegram: la cifra no
-    // puede leerse distinta en el movil y en la pantalla.
-    salida.push({
-      etiqueta: "Sorpresa",
-      valor: sorpresa({
-        value: e.surprise_value,
-        basis: e.surprise_basis as SurpriseBasis,
-        unit: e.unit ?? "",
-      }),
-    });
-  }
+  // Las escribe `sorpresas()`, la misma que la alerta de Telegram, y salen
+  // **todas**: si la pantalla enseñara una y la alerta otra volveria a haber dos
+  // lecturas de la misma cifra, que es el fallo que obligo a unificar esto.
+  const sorpresa = sorpresas(e.surprises);
+  if (sorpresa !== null) salida.push({ etiqueta: "Sorpresa", valor: sorpresa });
   return salida;
 }
 
