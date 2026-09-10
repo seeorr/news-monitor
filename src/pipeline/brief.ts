@@ -232,7 +232,17 @@ export async function deliverBrief(
     if (!deps.send || !deps.canSend?.(destination)) return { state: "failed_before_send", brief };
     const token = deps.claimToken?.() ?? randomUUID();
     const claimed = await deps.store.claim(brief.date, destination, token);
-    if (!claimed) return { state: "blocked", brief };
+    if (!claimed) {
+      // Otro intento puede haber terminado desde el primer SELECT. Volver a leer
+      // distingue el duplicado ya entregado de un envío sin acuse. Ambos impiden
+      // reenviar, pero solo el primero permite declarar correcto el workflow.
+      const stored = await deps.store.persist(brief, destination);
+      return {
+        state: stored.state === "sent" ? "blocked" :
+          stored.state === "uncertain" ? "uncertain" : "failed_before_send",
+        brief: stored,
+      };
+    }
     brief = claimed;
     let state: SendState;
     try { state = await deps.send(brief.body, destination); }

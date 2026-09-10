@@ -12,6 +12,7 @@
     "agenda": "tsx src/agenda.ts",
     "regimen": "tsx src/regimen.ts",
     "brief": "tsx src/brief.ts",
+    "audit:filters": "tsx scripts/auditar-filtros.ts",
     "dashboard": "next dev",
     "dashboard:build": "next build",
     "watchlist": "tsx src/watchlist.ts",

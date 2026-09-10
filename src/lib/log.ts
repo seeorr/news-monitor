@@ -4,10 +4,14 @@
  * stacks o cuerpos HTTP. No depende de conocer la watchlist ni las claves.
  * Para diagnosticar: código + etapa + fuente + ordinal del ciclo + conteos.
  */
+import { FEEDS } from "../sources/rss.ts";
+import { RULE_REASON_CODES } from "../pipeline/rules.ts";
+
 const CODES = [
   "CYCLE_START", "CONFIG_MISSING", "STATE_OPEN", "WATCHLIST_EMPTY",
   "WATCHLIST_FAILED", "FEED_UNKNOWN", "SEC_CONTACT_MISSING", "SEC_UNKNOWN",
-  "SOURCE_OK", "SOURCE_FAILED", "NO_SOURCES", "SOURCES_PARTIAL", "FRESHNESS",
+  "SOURCE_OK", "SOURCE_FAILED", "FEED_NORMALIZED", "FEED_FUNNEL", "RULE_REASON",
+  "AUDIT_COMPLETE", "NO_SOURCES", "SOURCES_PARTIAL", "FRESHNESS",
   "RULES", "DEDUPE", "GROUPED", "SCORING_UNAVAILABLE", "SCORING_LIMIT",
   "SCORED", "ALERT_SKIPPED", "FABRICATION_RETRY", "ANALYSIS_OK",
   "ANALYSIS_FALLBACK", "ANALYSIS_LIMIT", "ALERT_READY", "DRY_RUN",
@@ -29,7 +33,10 @@ const CODES = [
 const SOURCES = ["fred", "eurostat", "rss", "sec-edgar", "yahoo", "coingecko", "neon", "file"] as const;
 const STAGES = ["startup", "watchlist", "collect", "freshness", "rules", "dedupe",
   "group", "scoring", "analysis", "format", "telegram", "persist", "cycle"] as const;
-const COUNTS = ["count", "total", "discarded", "ok", "failed", "deep", "sent", "index", "attempt"] as const;
+const COUNTS = ["count", "total", "discarded", "ok", "failed", "deep", "sent", "index", "attempt",
+  "fresh", "passed", "new", "seen"] as const;
+// Solo ids de fuentes públicas. Nunca series_id libre (puede ser un ticker).
+const FEED_IDS = Object.keys(FEEDS);
 const CONFIG_VARS = ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHAT_ID", "DATABASE_URL", "SEC_USER_AGENT"] as const;
 
@@ -39,6 +46,10 @@ export interface LogFields extends Partial<Record<typeof COUNTS[number], number>
   source?: typeof SOURCES[number];
   stage?: LogStage;
   variable?: typeof CONFIG_VARS[number];
+  feed?: string;
+  reason?: typeof RULE_REASON_CODES[number];
+  importance?: number;
+  impact?: number;
   /** Nunca se serializa: solo se examinan códigos públicos concretos. */
   error?: unknown;
 }
@@ -65,8 +76,16 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
       const source = dato(fields, "source");
       const stage = dato(fields, "stage");
       const variable = dato(fields, "variable");
+      const feed = dato(fields, "feed");
+      const reason = dato(fields, "reason");
       if (typeof source === "string" && SOURCES.some((s) => s === source)) record.source = source;
       if (typeof stage === "string" && STAGES.some((s) => s === stage)) record.stage = stage;
+      if (typeof feed === "string" && FEED_IDS.includes(feed)) record.feed = feed;
+      if (typeof reason === "string" && RULE_REASON_CODES.some((r) => r === reason)) record.reason = reason;
+      for (const key of ["importance", "impact"] as const) {
+        const value = dato(fields, key);
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 10) record[key] = value;
+      }
       if (code === "CONFIG_MISSING" && typeof variable === "string" &&
         CONFIG_VARS.some((v) => v === variable)) record.variable = variable;
       for (const key of COUNTS) {
@@ -88,7 +107,7 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
             // codigos, "no responde" y "responde y no trae nada" se leerian
             // igual en el log, y es justo la diferencia que hay que ver.
             "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
-            "EUROSTAT_SHAPE"].includes(errorCode)) {
+            "EUROSTAT_SHAPE", "FEED_INVALID"].includes(errorCode)) {
           record.error = errorCode;
         }
       }

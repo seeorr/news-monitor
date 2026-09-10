@@ -237,6 +237,54 @@ Antes de exponerlo hay que implementar acceso en la aplicación o comprobar una
 protección que cubra todas sus URLs, incluidas acciones de escritura.
 [Documentación oficial de protección](https://vercel.com/academy/optimize-your-vercel-account/deployment-protection).
 
+## Diagnóstico de fuentes y criterios de selección
+
+`npm run audit:filters` recoge los RSS actuales y consulta los ids ya vistos en
+Neon. No llama a modelos, no envía mensajes y no escribe en la base. Muestra
+conteos por feed: normalizados, recientes, admitidos por reglas, vistos y nuevos.
+`npm run audit:filters -- --detalle` guarda además cada titular y su motivo en
+`.cache/auditoria-filtros.json`, ignorado por Git; ese detalle no se permite en
+Actions. La simulación del cupo cubre solo RSS: en el ciclo real lo comparten
+también macro, documentos y precios.
+
+Los logs del ciclo incluyen `FEED_NORMALIZED`, `FEED_FUNNEL` y `RULE_REASON`.
+Distinguen una fuente que falla de otra sin noticias recientes o con todos sus
+candidatos ya vistos. Solo publican ids del registro de feeds, motivos de una lista
+cerrada y cifras; nunca títulos, enlaces ni nombres de la watchlist. Un HTTP 200
+con HTML se registra como `FEED_INVALID`, no como un feed vacío correcto.
+
+El filtro consulta titular **y entradilla**, y los símbolos y nombres de la
+watchlist efectiva. Busca términos completos: `FedEx` no significa `Fed`, ni
+`Chipotle` significa `IPO`. Reconoce publicaciones macro, intervenciones bancarias,
+movimientos de mercado y conflictos con un canal económico identificable.
+Descarta transcripciones y ofertas genéricas, salvo cuando mencionan una empresa
+vigilada. Pasar esta fase significa ser candidato a puntuación, nunca alerta segura.
+
+El cupo mantiene doce puntuaciones por ciclo por defecto: primero fuentes
+primarias, después rondas por feed de prensa, conservando recencia dentro de
+cada cola. Un feed rápido deja de ocupar todo el cupo solo por publicar más.
+Una avalancha de fuentes primarias aún puede aplazar la prensa; los pendientes
+no se marcan como vistos y pueden entrar en otra vuelta si siguen disponibles.
+
+Se conserva el umbral de prensa en **7/10**, salvo configuración explícita.
+Una fuente primaria solo puede anticipar el aviso un punto por debajo del umbral
+y con `needs_alert`: ser oficial no convierte un comunicado rutinario en urgente.
+El modelo recibe una rúbrica común de importancia e impacto y devuelve enteros;
+la nota guardada y el umbral dejan de discrepar por redondeo. Es una política
+explícita, todavía pendiente de medir con puntuaciones reales tras desplegarla.
+
+El resumen mantiene sus dos crons y admite un intento adicional al terminar
+Monitor o Agenda desde la rama predeterminada del propio repositorio. En horario
+automático solo actúa de lunes a viernes entre las 06:00 y las 12:00 UTC; el
+disparo manual permite actuar fuera de esa ventana. Recupera también la agenda
+pendiente. Los reclamos evitan reenvíos: una entrega confirmada permite terminar
+bien; una incierta o en curso queda señalada como fallo.
+
+Esto **no garantiza una ejecución cada treinta minutos**. GitHub puede retrasar o
+descartar el disparo; un workflow local que aún no está en la rama predeterminada
+remota no corre en producción. Antes de declarar un despliegue terminado, comparar
+el SHA remoto y el ejecutado en Actions, y comprobar la fila de entrega en Neon.
+
 ## Decisiones que condicionan el código
 
 - **La sorpresa declara siempre contra qué se compara.** FRED no publica
@@ -283,15 +331,15 @@ protección que cubra todas sus URLs, incluidas acciones de escritura.
 - **Una fuente caída no tumba el ciclo, y un evento fallido no tumba a los que
   quedan.** Se recogen todas las fuentes, se dice cuál falló y se sigue. El
   siguiente evento puede ser el que importaba.
-- **Hay techo de llamadas al modelo por ciclo.** El ciclo solicita una ejecución cada 30 minutos y
-  un feed suelta treinta elementos el primer día. Se atiende lo más reciente y el
-  resto espera a la vuelta siguiente, que llega en media hora.
+- **Hay techo de llamadas al modelo por ciclo.** El ciclo solicita una ejecución cada 30 minutos.
+  Los candidatos que no caben esperan a la siguiente ejecución real, cuya hora
+  GitHub no garantiza; aún pueden caducar o desaparecer del feed antes de entrar.
 - **El corte por antigüedad no se aplica a los datos macro.** Un titular de hace
   una semana no es noticia; el IPC de agosto lleva fecha del 1 de agosto y se
   publica a mediados de septiembre. Ahí la novedad la decide el registro de
   vistos, no el calendario.
-- **De prensa solo se anuncia lo que llega al umbral.** De una fuente primaria
-  basta con que el modelo lo pida. Cuatro avisos de relleno y se deja de mirar el
+- **De prensa solo se anuncia lo que llega al umbral.** Una fuente primaria puede
+  anticipar un aviso un punto por debajo si el modelo lo pide. Cuatro avisos de relleno y se deja de mirar el
   teléfono: es la forma real en que un monitor deja de servir.
 - **La misma historia contada por cinco medios es una historia.** Se agrupa por
   parecido de titulares —Jaccard sobre palabras, no un modelo— antes de puntuar.

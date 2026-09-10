@@ -1,6 +1,9 @@
 # Genera el régimen y el resumen, lo guarda en Neon y lo ENVÍA a Telegram.
 # Al chat privado, siempre. Al grupo, solo si TELEGRAM_GROUP_CHAT_ID está
-# configurado, y solo con la parte compartible (ver src/notify/compartir.ts).
+# configurado, con el mismo contenido y su propio estado de entrega.
+# Los ciclos del Monitor y la Agenda ofrecen intentos adicionales durante la
+# mañana. Esto reduce la dependencia de estos dos crons, pero no garantiza hora:
+# todos siguen dependiendo de que GitHub entregue alguna ejecución.
 name: Resumen de mañana
 
 on:
@@ -8,6 +11,9 @@ on:
     - cron: "19 6 * * 1-5"
     - cron: "49 7 * * 1-5"
   workflow_dispatch:
+  workflow_run:
+    workflows: [Monitor, Agenda]
+    types: [completed]
 
 permissions:
   contents: read
@@ -21,14 +27,56 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Se evalúa antes del checkout, de instalar paquetes o de leer secretos.
+      # Nunca ejecuta código ni recoge artefactos del workflow que disparó este.
+      - name: Comprobar origen y ventana matinal
+        id: ventana
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const trigger = process.env.GITHUB_EVENT_NAME;
+          const run = event.workflow_run;
+          const trusted = ['schedule', 'workflow_dispatch'].includes(trigger) || (trigger === 'workflow_run' &&
+            Boolean(event.repository?.default_branch) &&
+            run?.head_repository?.full_name === process.env.GITHUB_REPOSITORY &&
+            run?.head_branch === event.repository?.default_branch &&
+            ['schedule', 'workflow_dispatch'].includes(run?.event)
+          );
+          const now = new Date();
+          const morning = now.getUTCDay() >= 1 && now.getUTCDay() <= 5 &&
+            now.getUTCHours() >= 6 && now.getUTCHours() < 12;
+          const enabled = trusted && (trigger === 'workflow_dispatch' || morning);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `enabled=${enabled}\n`);
+          NODE
       - uses: actions/checkout@v5
+        if: steps.ventana.outputs.enabled == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
       - uses: actions/setup-node@v5
+        if: steps.ventana.outputs.enabled == 'true'
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+        if: steps.ventana.outputs.enabled == 'true'
+      # Si se perdieron los crons de Agenda, el primer ciclo de la mañana la
+      # recupera. Su claim por día impide duplicados con el workflow independiente.
+      - name: Recuperar agenda pendiente
+        id: agenda
+        if: steps.ventana.outputs.enabled == 'true'
+        continue-on-error: true
+        run: npm run agenda
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGENDA_DIAS: ${{ vars.AGENDA_DIAS }}
       - name: Calcular y guardar régimen
         id: regimen
+        if: steps.ventana.outputs.enabled == 'true'
         continue-on-error: true
         run: npm run regimen
         env:
@@ -39,6 +87,7 @@ jobs:
       # trabajo. Si el grupo no está configurado, su secreto llega vacío, no hay
       # segundo destino y el job no falla por ello.
       - name: Enviar el resumen con sus carencias
+        if: steps.ventana.outputs.enabled == 'true'
         run: npm run brief -- --send
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
@@ -46,8 +95,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
-      - name: Marcar régimen incompleto
-        if: steps.regimen.outcome == 'failure'
+      - name: Marcar preparación incompleta
+        if: always() && (steps.regimen.outcome == 'failure' || steps.agenda.outcome == 'failure')
         run: |
-          echo "Régimen incompleto o fallo de persistencia; revisar disponibilidad de datos y migraciones."
+          echo "Agenda o régimen incompleto; revisar los pasos de preparación, datos y migraciones."
           exit 1

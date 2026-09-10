@@ -44,6 +44,7 @@ export interface Collected {
 interface Task {
   name: string;
   source: "fred" | "eurostat" | "rss" | "sec-edgar" | "yahoo";
+  feed?: string;
   run: () => Promise<NormalizedEvent[]>;
 }
 
@@ -135,7 +136,14 @@ export async function collectEvents(
     tasks.push({
       name: `rss:${spec.id}`,
       source: "rss",
-      run: async () => feedEvents(await fetchFeed(spec), spec, { retrievedAt }),
+      feed: spec.id,
+      run: async () => {
+        const items = await fetchFeed(spec);
+        const normalized = feedEvents(items, spec, { retrievedAt });
+        log("FEED_NORMALIZED", { stage: "collect", source: "rss", feed: spec.id,
+          total: items.length, count: normalized.length, discarded: items.length - normalized.length });
+        return normalized;
+      },
     });
   }
 
@@ -201,11 +209,11 @@ export async function collectEvents(
       const nuevos = await task.run();
       events.push(...nuevos);
       ok++;
-      log("SOURCE_OK", { stage: "collect", source: task.source, index: index + 1, count: nuevos.length });
+      log("SOURCE_OK", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, count: nuevos.length });
     } catch (err) {
       // Tampoco devolver mensajes crudos que otro consumidor pudiera imprimir.
       failures.push({ source: task.name, detail: "SOURCE_FAILED" });
-      log("SOURCE_FAILED", { stage: "collect", source: task.source, index: index + 1, error: err });
+      log("SOURCE_FAILED", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, error: err });
     }
   }
 

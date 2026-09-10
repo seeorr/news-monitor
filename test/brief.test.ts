@@ -213,7 +213,7 @@ describe("persistencia y entrega", () => {
     const results = await Promise.all(Array.from({ length: 20 }, () => runBrief(deps, { now, send: true })));
     expect(send).toHaveBeenCalledOnce();
     expect(results.filter((r) => r.state === "sent")).toHaveLength(1);
-    expect(results.filter((r) => r.state === "blocked")).toHaveLength(19);
+    expect(results.filter((r) => ["blocked", "failed_before_send"].includes(r.state))).toHaveLength(19);
     expect(store.finish).toHaveBeenCalledOnce();
     expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
     expect(send).toHaveBeenCalledOnce();
@@ -259,7 +259,7 @@ describe("persistencia y entrega", () => {
     send.mockRejectedValueOnce(Error("timeout con contenido privado"));
     expect((await runBrief(deps, { now, send: true })).state).toBe("uncertain");
     expect(estado("2026-09-09")).toBe("uncertain");
-    expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
+    expect((await runBrief(deps, { now, send: true })).state).toBe("uncertain");
     expect(send).toHaveBeenCalledOnce();
   });
 
@@ -270,7 +270,7 @@ describe("persistencia y entrega", () => {
     expect((await runBrief(deps, { now, send: true })).state)
       .toBe(outcome === "sent" ? "record_failed_after_send" : "uncertain");
     expect(estado("2026-09-09")).toBe("sending");
-    expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
+    expect((await runBrief(deps, { now, send: true })).state).toBe("failed_before_send");
     expect(send).toHaveBeenCalledOnce();
   });
 
@@ -282,8 +282,29 @@ describe("persistencia y entrega", () => {
       throw Error("lost_ack");
     });
     expect((await runBrief(deps, { now, send: true })).state).toBe("failed_before_send");
-    expect((await runBrief(deps, { now, send: true })).state).toBe("blocked");
+    expect((await runBrief(deps, { now, send: true })).state).toBe("failed_before_send");
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("el bloqueo de un envío sin acuse sigue en rojo al ejecutar de nuevo la CLI", async () => {
+    const { deps, store, send } = setup({ canSend: (destination) => destination === "private" });
+    store.finish.mockRejectedValueOnce(Error("lost_ack"));
+    const io = { deps, now, env: {}, log: vi.fn(), preview: vi.fn() };
+    expect(await runBriefCli(["--send"], io)).toBe(1);
+    expect(await runBriefCli(["--send"], io)).toBe(1);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("una entrega incierta sigue en rojo y una confirmada sigue en verde, sin reenviar", async () => {
+    for (const state of ["sent", "uncertain"] as const) {
+      const { deps, send } = setup({ canSend: (destination) => destination === "private" });
+      send.mockResolvedValueOnce(state);
+      const io = { deps, now, env: {}, log: vi.fn(), preview: vi.fn() };
+      const expected = state === "sent" ? 0 : 1;
+      expect(await runBriefCli(["--send"], io)).toBe(expected);
+      expect(await runBriefCli(["--send"], io)).toBe(expected);
+      expect(send).toHaveBeenCalledOnce();
+    }
   });
 
   it("fecha UTC cambia sin depender del huso horario", async () => {
@@ -462,7 +483,7 @@ describe("segundo destino: el grupo compartido", () => {
     expect((await deliverBrief(deps, documento, { send: true, destination: "private" })).state).toBe("sent");
     expect(estado("2026-09-09", "group")).toBe("uncertain");
     expect(estado("2026-09-09", "private")).toBe("sent");
-    expect((await deliverBrief(deps, documento, { send: true, destination: "group" })).state).toBe("blocked");
+    expect((await deliverBrief(deps, documento, { send: true, destination: "group" })).state).toBe("uncertain");
   });
 
   it("la CLI genera una sola vez y entrega el mismo cuerpo a los dos destinos", async () => {

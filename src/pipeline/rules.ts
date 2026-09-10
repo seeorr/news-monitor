@@ -1,85 +1,149 @@
-/**
- * Paso 1 de la cascada (§5): filtro por reglas. Gratis, sin LLM.
- *
- * La mayoría de lo que entra muere aquí. Ese es el punto: reduce el volumen que
- * llega al LLM en un 80-90 %, y lo hace con reglas auditables en vez de con una
- * llamada que cuesta dinero y no se puede explicar.
- */
+/** Paso 1: candidatos sin LLM. Pasar no significa enviar alerta: quedan dedupe,
+ * presupuesto y puntuación. El log público usa solo reasonCode. */
 import type { NormalizedEvent } from "../schema/event.ts";
+
+export const RULE_REASON_CODES = [
+  "official", "watchlist_symbol", "watchlist_name", "macro", "market",
+  "geopolitics", "corporate", "low_signal", "no_match",
+] as const;
+export type RuleReasonCode = (typeof RULE_REASON_CODES)[number];
 
 export interface RuleDecision {
   pass: boolean;
-  /** Por qué. Va al log: un filtro que no explica sus descartes es una caja negra. */
+  reasonCode: RuleReasonCode;
+  /** Explicación para auditoría privada, nunca para el log público de Actions. */
   reason: string;
 }
 
-/** Palabras que, en un titular, casi siempre significan que hay que mirar. */
-export const MACRO_KEYWORDS = [
-  "cpi", "inflation", "inflación", "fomc", "fed", "rate decision", "tipos",
-  "payrolls", "unemployment", "paro", "gdp", "pib", "ecb", "bce",
-  // La macro europea entra por su nombre y no solo por el del banco central: un
-  // "euro area inflation" o un "eurozone GDP" son exactamente el tipo de titular
-  // que estas reglas existen para no tirar, y con la lista pensada para EE. UU.
-  // solo pasaban por casualidad, si el titular repetia ademas "inflation".
-  "eurozone", "euro area", "zona euro", "eurostat",
-  "guidance", "earnings", "merger", "acquisition", "ipo", "bankruptcy",
-  "downgrade", "upgrade", "sanctions", "tariff", "arancel",
-];
-
-/**
- * Lo único que la regla mira de un evento: su titular y si la fuente es
- * primaria. Se declara aparte, y no como `NormalizedEvent`, para que la firma
- * diga la verdad sobre lo que lee, y para que el día que la regla necesite un
- * campo más haya que añadirlo aquí, a la vista, en vez de que entre gratis.
- */
-export type Enjuiciable = Pick<NormalizedEvent, "title" | "official">;
-
-export function applyRules(
-  event: Enjuiciable,
-  opts: { watchlist?: string[] } = {},
-): RuleDecision {
-  // Fuente oficial (Fed, BLS, SEC, BCE) pasa siempre. Es dato primario, no opinión.
-  if (event.official) {
-    return { pass: true, reason: "fuente oficial" };
-  }
-
-  const haystack = event.title.toLowerCase();
-
-  const watchlist = opts.watchlist ?? [];
-  const ticker = watchlist.find((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`, "i").test(event.title));
-  if (ticker) {
-    return { pass: true, reason: `menciona ${ticker} de la watchlist` };
-  }
-
-  const keyword = MACRO_KEYWORDS.find((k) => haystack.includes(k));
-  if (keyword) {
-    return { pass: true, reason: `keyword macro "${keyword}"` };
-  }
-
-  return { pass: false, reason: "sin ticker de la watchlist ni keyword macro" };
+/** Nombres y símbolos de la misma watchlist privada que usa la ingesta. */
+export interface RuleWatchlistEntry {
+  ticker: string;
+  nombre?: string | null;
+  quoteSymbol?: string | null;
+}
+export interface RuleOptions {
+  /** Se admiten los tickers simples del respaldo por entorno. */
+  watchlist?: ReadonlyArray<string | RuleWatchlistEntry>;
 }
 
+/** Términos concretos: «rates» a secas también describe ofertas de tarjetas. */
+export const MACRO_KEYWORDS = [
+  "cpi", "ipc", "ppi", "pce", "inflation", "inflacion", "deflation", "deflacion",
+  "consumer price", "consumer prices", "producer price", "producer prices",
+  "fomc", "fed", "federal reserve", "ecb", "bce", "bank of japan", "bank of england",
+  "central bank", "banco central", "rate decision", "interest rate", "interest rates",
+  "benchmark rate", "policy rate", "tipos de interes", "tipo de interes",
+  "payrolls", "jobs report", "jobless claims", "unemployment", "desempleo", "paro",
+  "gdp", "pib", "retail sales", "ventas minoristas", "industrial production",
+  "industrial output", "produccion industrial", "pmi", "ism", "jolts", "recession", "recesion",
+  "eurozone", "euro area", "zona euro", "eurostat", "treasury yields", "bond yields",
+  "sovereign debt", "deuda soberana", "credit spreads", "quantitative easing",
+  "quantitative tightening", "sanctions", "sanciones", "tariff", "tariffs", "arancel", "aranceles",
+];
+
+/** La entradilla puede identificar el hecho que el titular deja implícito. */
+export type Enjuiciable = Pick<NormalizedEvent, "title" | "official"> &
+  Partial<Pick<NormalizedEvent, "summary" | "kind" | "series_id">>;
+
+const CORPORATE_KEYWORDS = [
+  "earnings", "guidance", "merger", "mergers", "acquisition", "acquisitions",
+  "takeover", "ipo", "bankruptcy", "bankrupt", "insolvency", "quiebra",
+  "downgrade", "downgrades", "upgrade", "upgrades", "profit warning",
+];
+// Dos señales: conflicto y canal económico. Sin países o guerras prefijados.
+const CONFLICT = /\b(?:war|conflict|attack\w*|strike[sd]?|blockade|disrupt\w*|closure|closed?|stranglehold|guerra|conflicto|ataque\w*|bloqueo|cierre)\b/u;
+const TRANSMISSION = /\b(?:oil|crude|energy|gas|shipping|supply|trade|exports?|imports?|strait|canal|port|ports|petroleo|energia|suministro|comercio|estrecho|puerto\w*)\b/u;
+const MARKET_ASSET = /\b(?:oil|crude|brent|wti|natural gas|treasur\w*|bonds?|stocks?|equities|s&p\s*500|nasdaq|dow|banks?|insurers?|petroleo|bonos?|bancos?)\b/u;
+const MARKET_EVENT = /\b(?:surge[sd]?|surging|plunge[sd]?|plunging|crash\w*|sell[ -]?off|rall(?:y|ies)|tumble[sd]?|slump[sd]?|jump[sd]?|spike[sd]?|squeeze|shortage|inventor\w*|stocks? (?:fall|rise)|bailout|recapital\w*|inject\w*|pump|rescat\w*|inyeccion|desplom\w*|escasez)\b/u;
+
+export function applyRules(event: Enjuiciable, opts: RuleOptions = {}): RuleDecision {
+  if (event.official) return decision(true, "official", "fuente oficial");
+
+  const raw = `${event.title}\n${event.summary ?? ""}`;
+  const text = fold(raw);
+  for (const entry of opts.watchlist ?? []) {
+    const company = typeof entry === "string" ? { ticker: entry } : entry;
+    if (event.kind === "market_move" && event.series_id &&
+        event.series_id.toUpperCase() === company.ticker.trim().toUpperCase()) {
+      return decision(true, "watchlist_symbol", "movimiento del simbolo vigilado");
+    }
+    for (const symbol of [company.ticker, company.quoteSymbol]) {
+      if (symbol && matchesSymbol(raw, symbol)) {
+        return decision(true, "watchlist_symbol", "menciona un simbolo de la watchlist");
+      }
+    }
+    if (company.nombre && matchesName(text, company.nombre)) {
+      return decision(true, "watchlist_name", "menciona el nombre de una empresa vigilada");
+    }
+  }
+
+  // «earnings» abría la puerta a cualquier transcripción. Las de una empresa
+  // vigilada conservan su paso; el resto no consume el cupo por esa palabra.
+  const title = fold(event.title);
+  if (/\b(?:earnings call (?:transcript|highlights)|earnings transcript|transcript of.{0,30}earnings|transcripcion de resultados)\b/u.test(title) ||
+      /\b(?:welcome offer|sign[ -]?up bonus|stocks? to buy|best (?:cd|savings|credit card|mortgage) rates)\b/u.test(title)) {
+    return decision(false, "low_signal", "transcripcion u oferta sin empresa vigilada");
+  }
+
+  const macro = MACRO_KEYWORDS.find((word) => phrase(text, word));
+  if (macro) return decision(true, "macro", `termino macro: ${macro}`);
+  if (CONFLICT.test(text) && TRANSMISSION.test(text)) {
+    return decision(true, "geopolitics", "conflicto o interrupcion con canal economico identificable");
+  }
+  if (MARKET_ASSET.test(text) && MARKET_EVENT.test(text)) {
+    return decision(true, "market", "movimiento o tension de mercado, energia o banca");
+  }
+  const corporate = CORPORATE_KEYWORDS.find((word) => phrase(text, word));
+  if (corporate) return decision(true, "corporate", `hecho corporativo: ${corporate}`);
+  return decision(false, "no_match", "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa");
+}
+
+function decision(pass: boolean, reasonCode: RuleReasonCode, reason: string): RuleDecision {
+  return { pass, reasonCode, reason };
+}
+
+/** «fed» no es FedEx, «ipo» no es Chipotle ni «paro» comparó. */
+function phrase(text: string, term: string): boolean {
+  const pattern = escapeRegExp(fold(term)).replace(/\s+/g, "\\s+");
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${pattern}(?![\\p{L}\\p{N}_])`, "u").test(text);
+}
+
+function matchesSymbol(text: string, symbol: string): boolean {
+  const clean = symbol.trim();
+  if (!clean) return false;
+  // ON, IT o A son palabras: para símbolos de hasta dos letras se exige
+  // notación financiera ($A, (ON), NASDAQ:IT), no una mayúscula casual.
+  if (/^[a-z]{1,2}$/i.test(clean)) {
+    const escaped = escapeRegExp(clean);
+    return new RegExp(`(?:\\$${escaped}(?![\\p{L}\\p{N}_])|\\(${escaped}\\)|\\b[A-Z][A-Z0-9.]*:\\s*${escaped}(?![\\p{L}\\p{N}_]))`, "iu").test(text);
+  }
+  // A diferencia de \b, encuentra índices ^INDX y símbolos BRK.B.
+  return phrase(fold(text), clean);
+}
+
+function matchesName(text: string, name: string): boolean {
+  const clean = fold(name).trim();
+  // Solo sufijos legales finales: «Acme Robotics Inc.» identifica «Acme
+  // Robotics», no cualquier noticia que mencione «Robotics».
+  const short = clean.replace(/(?:[\s,]+(?:incorporated|corporation|corp|inc|limited|ltd|plc|s\.a|sa)\.?)+$/u, "").trim();
+  return [clean, short].some((candidate) =>
+    candidate.replace(/[^\p{L}\p{N}]/gu, "").length >= 4 && phrase(text, candidate));
+}
+
+function fold(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * ¿Se anuncia o solo se registra?
- *
- * De una fuente primaria —la Fed, el BCE, un documento ante la SEC, un dato de
- * FRED— basta con que el modelo diga que merece aviso: quien publica ya ha
- * filtrado. Un titular de prensa tiene que llegar al umbral por sí mismo.
- *
- * La diferencia apareció en cuanto entraron cinco feeds: con `needs_alert` como
- * única condición, un "las acciones de X pesan por la inflación" de 6/10 se
- * anunciaba igual que una decisión de tipos. Cuatro avisos así y se deja de
- * mirar el teléfono, que es la única forma real de que este sistema falle.
- */
+/** La prensa exige el umbral. Una primaria puede adelantar un aviso un punto
+ * si el modelo identifica un hecho material; oficial no significa urgente. */
 export function mereceAlerta(
   event: NormalizedEvent,
   scoring: { needs_alert: boolean; importance_score: number },
   umbral: number,
 ): boolean {
   if (scoring.importance_score >= umbral) return true;
-  return event.official && scoring.needs_alert;
+  return event.official && scoring.needs_alert && scoring.importance_score >= umbral - 1;
 }

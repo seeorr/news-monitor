@@ -109,7 +109,12 @@ export const FEEDS: Record<string, FeedSpec> = {
 };
 
 export async function fetchFeed(spec: FeedSpec, opts: RetryOptions = {}): Promise<FeedItem[]> {
-  return parseFeed(await fetchText(spec.url, opts));
+  const xml = await fetchText(spec.url, opts);
+  // Una página HTML de bloqueo con HTTP 200 no es un feed vacío correcto.
+  if (!/<(?:\w+:)?(?:rss|feed|RDF)(?:\s|>)/i.test(xml)) {
+    throw Object.assign(new Error("feed_invalid"), { code: "FEED_INVALID" });
+  }
+  return parseFeed(xml);
 }
 
 /**

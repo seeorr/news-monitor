@@ -31,6 +31,8 @@ import { loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
 import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
 import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
+import { registrarEmbudoFeeds } from "./pipeline/diagnostico.ts";
+import { priorizarGrupos } from "./pipeline/prioridad.ts";
 import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import {
@@ -81,7 +83,7 @@ async function main(): Promise<number> {
   // La watchlist del filtro es la misma que la de la ingesta: si se vigila a una
   // empresa, su nombre en un titular también cuenta.
   stage = "rules";
-  const watchlist = vigilados.map((v) => v.ticker);
+  const watchlist = vigilados;
   const candidatos = frescos.filter((e) => applyRules(e, { watchlist }).pass);
   log("RULES", { stage, count: candidatos.length, discarded: frescos.length - candidatos.length });
 
@@ -92,11 +94,12 @@ async function main(): Promise<number> {
     if (force || !(await seen.has(event.id))) nuevos.push(event);
   }
   log("DEDUPE", { stage, count: nuevos.length, discarded: candidatos.length - nuevos.length });
+  registrarEmbudoFeeds({ events, fresh: frescos, candidates: candidatos, nuevos, watchlist }, log);
   if (nuevos.length === 0) return 0;
 
   // ── Paso 2b: la misma historia contada por varios ──────────────────────────
   stage = "group";
-  const grupos = agrupar(nuevos, { umbral: config.umbralAgrupacion });
+  const grupos = priorizarGrupos(agrupar(nuevos, { umbral: config.umbralAgrupacion }));
   const fundidos = nuevos.length - grupos.length;
   if (fundidos > 0) {
     log("GROUPED", { stage, count: grupos.length, discarded: fundidos });
@@ -134,7 +137,7 @@ async function main(): Promise<number> {
         dry,
         force,
         // El techo del modelo caro se comprueba aquí y no dentro: el orden del
-        // bucle (lo más reciente primero) es el que decide quién se lo lleva.
+        // bucle (oficiales primero, después rondas por feed) reparte ese cupo.
         analisisProfundo: profundos < config.maxDeepPerCycle,
       });
       if (resultado.deep) profundos++;
@@ -185,7 +188,8 @@ async function procesar(
   const event = grupo.representante;
   stage = "scoring";
   const scoring = await scoreEvent(event, deps);
-  log("SCORED", { stage, source: event.source });
+  log("SCORED", { stage, source: event.source, feed: event.source === "rss" ? event.series_id ?? undefined : undefined,
+    importance: scoring.importance_score, impact: scoring.market_impact_score });
 
   const puntuacion: Puntuacion = {
     importance: scoring.importance_score,
@@ -195,7 +199,8 @@ async function procesar(
   };
 
   if (!mereceAlerta(event, scoring, config.alertThreshold)) {
-    log("ALERT_SKIPPED", { stage, source: event.source });
+    log("ALERT_SKIPPED", { stage, source: event.source, feed: event.source === "rss" ? event.series_id ?? undefined : undefined,
+      importance: scoring.importance_score, impact: scoring.market_impact_score });
     stage = "persist";
     if (!dry) await marcarGrupo(seen, grupo, puntuacion);
     return { enviada: false, deep: false };
