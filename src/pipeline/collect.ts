@@ -28,6 +28,7 @@ import { createLogger, type Logger } from "../lib/log.ts";
 import { DeadlineError, mapConcurrent, positiveInteger, withDeadline } from "../lib/concurrency.ts";
 import { withRequestSignal } from "../lib/http.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
+import { FAST_FEEDS, type Profile } from "./profile.ts";
 
 export interface SourceFailure {
   source: string;
@@ -60,6 +61,8 @@ export interface CollectedSource {
 }
 
 export interface CollectOptions {
+  profile?: Profile;
+  onSourceResult?: (result: { feed?: string; ok: boolean; at: string }) => Promise<void>;
   retrievedAt: string;
   log?: (line: string) => void;
   logger?: Logger;
@@ -102,6 +105,7 @@ export async function collectEvents(
   config: Config,
   opts: CollectOptions,
 ): Promise<Collected> {
+  if (opts.profile !== undefined && !["fast", "full"].includes(opts.profile)) throw new Error("invalid_capture_profile");
   const sourceTimeout = positiveInteger(config.sourceTimeoutMs, 45_000, 120_000);
   const collection = new AbortController();
   const globalTimer = setTimeout(() => collection.abort(new DeadlineError("COLLECTION_TIMEOUT")),
@@ -131,7 +135,7 @@ async function collectWithinBudget(
   const tasks: Task[] = [];
 
   // ── FRED ───────────────────────────────────────────────────────────────────
-  if (config.fredApiKey) {
+  if (opts.profile !== "fast" && config.fredApiKey) {
     for (const spec of Object.values(SERIES)) {
       tasks.push({
         name: `fred:${spec.id}`,
@@ -153,7 +157,7 @@ async function collectWithinBudget(
   // El agregado (`EA21` hoy) se resuelve dentro, preguntándoselo al propio
   // dataset. Una respuesta sin filas —que Eurostat sirve con un 200 y cara de
   // normalidad— lanza y cae aquí como `SOURCE_FAILED`, igual que una caída.
-  for (const spec of Object.values(DATASETS)) {
+  for (const spec of opts.profile === "fast" ? [] : Object.values(DATASETS)) {
     tasks.push({
       name: `eurostat:${spec.id}`,
       source: "eurostat",
@@ -165,7 +169,8 @@ async function collectWithinBudget(
   }
 
   // ── Feeds ──────────────────────────────────────────────────────────────────
-  const elegidos = config.feeds.length > 0 ? config.feeds : selectFeeds(config.rssFeedBatches).map((feed) => feed.id);
+  const configured = config.feeds.length > 0 ? config.feeds : selectFeeds(config.rssFeedBatches).map((feed) => feed.id);
+  const elegidos = opts.profile === "fast" ? [...new Set(["ecb-press", ...configured.filter((id) => (FAST_FEEDS as readonly string[]).includes(id))])] : configured;
   for (const id of elegidos) {
     const spec = FEEDS[id];
     if (!spec) {
@@ -181,7 +186,7 @@ async function collectWithinBudget(
       source: "rss",
       feed: spec.id,
       run: async () => {
-        const items = await fetchFeed(spec);
+        const items = await fetchFeed(spec, opts.profile === "fast" ? { attempts: 1, timeoutMs: 10_000 } : undefined);
         const normalized = feedEvents(items, spec, { retrievedAt });
         log("FEED_NORMALIZED", { stage: "collect", source: "rss", feed: spec.id,
           total: items.length, count: normalized.length, discarded: items.length - normalized.length });
@@ -193,7 +198,7 @@ async function collectWithinBudget(
   // ── SEC EDGAR ──────────────────────────────────────────────────────────────
   // Dos condiciones, y las dos se explican en voz alta si no se cumplen: sin
   // contacto la SEC responde 403, y sin watchlist no hay a quién vigilar.
-  const conFilings = vigilados.filter((v) => v.vigilarFilings);
+  const conFilings = opts.profile === "fast" ? [] : vigilados.filter((v) => v.vigilarFilings);
   if (conFilings.length > 0 && config.secUserAgent) {
     for (const [i, vigilado] of conFilings.entries()) {
       tasks.push({
@@ -232,7 +237,7 @@ async function collectWithinBudget(
   // ── Precios ────────────────────────────────────────────────────────────────
   // Una tarea por valor y no una sola: si Yahoo se atraganta con un símbolo, se
   // pierde ese y no la cartera entera.
-  const conPrecio = vigilados.filter((x) => x.vigilarPrecio);
+  const conPrecio = opts.profile === "fast" ? [] : vigilados.filter((x) => x.vigilarPrecio);
   for (const [i, v] of conPrecio.entries()) {
     const symbol = v.quoteSymbol ?? v.ticker;
     tasks.push({
@@ -260,6 +265,12 @@ async function collectWithinBudget(
   let persistenceFailed = false;
   let persistenceError: unknown;
 
+  // También full consulta el BCE antes que las APIs lentas. La prioridad del
+  // procesamiento no serviría si el comunicado aún estuviera esperando captura.
+  const sourcePriority = (task: Task) => task.feed === "ecb-press" ? 2
+    : task.feed && (FAST_FEEDS as readonly string[]).includes(task.feed) ? 1 : 0;
+  tasks.sort((a, b) => sourcePriority(b) - sourcePriority(a));
+
   await mapConcurrent(tasks, positiveInteger(config.sourceConcurrency, 3, 16), async (task, index) => {
     let nuevos: NormalizedEvent[];
     try {
@@ -269,6 +280,7 @@ async function collectWithinBudget(
       // Tampoco devolver mensajes crudos que otro consumidor pudiera imprimir.
       failures.push({ source: task.name, detail: err instanceof DeadlineError ? err.code : "SOURCE_FAILED" });
       log("SOURCE_FAILED", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, error: err });
+      await opts.onSourceResult?.({ feed: task.feed, ok: false, at: new Date().toISOString() });
       return;
     }
     // Fuera del catch de fuente: si la base falla, no decir «RSS caído» ni
@@ -276,6 +288,7 @@ async function collectWithinBudget(
     // simultáneas, también cuando el respaldo es un fichero JSON.
     const write = persistence.then(async () => {
       await opts.onCollected?.(nuevos, { source: task.source, feed: task.feed, index: index + 1, vigilados });
+      await opts.onSourceResult?.({ feed: task.feed, ok: true, at: new Date().toISOString() });
     });
     persistence = write;
     try { await write; }

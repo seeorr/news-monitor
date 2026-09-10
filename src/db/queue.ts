@@ -2,6 +2,7 @@
 import { neon } from "@neondatabase/serverless";
 import { z } from "zod";
 import type { Ejecutor } from "./cliente.ts";
+import { rateFact } from "../pipeline/critical-macro.ts";
 import {
   captureCounts, emptySourceStats, parseQueueEntry, prepareQueueCaptures, prepareQueueFinishes,
   QUEUE_REASONS, queueInstant, queueLease, queueLimit, queueStoryWindow,
@@ -34,7 +35,7 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
     const result = await sql`
       with incoming as (
         select * from jsonb_to_recordset(${JSON.stringify(updates)}::jsonb) as item(
-          id text, state text, score jsonb, reason text, delivery_pending boolean
+          id text, state text, score jsonb, reason text, delivery_pending boolean, event jsonb
         )
       ), owned as (
         select q.id from capture_queue q join incoming i on q.id = i.id
@@ -45,6 +46,7 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
       )
       update capture_queue q
       set state = i.state, score = i.score, reason = i.reason,
+        snapshot = case when i.event is not null then jsonb_set(q.snapshot,'{summary}',coalesce(i.event->'summary','null'::jsonb)) else q.snapshot end,
         delivery_pending = i.delivery_pending,
         next_attempt_at = case when i.state = 'retryable_failed'
           then ${at}::timestamptz + least(21600, 60 * power(2, least(20, greatest(0, q.attempts - 1)))) * interval '1 second'
@@ -95,13 +97,24 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
             or (state = 'retryable_failed' and next_attempt_at <= ${at}::timestamptz)
             or (state = 'processing' and lease_until <= ${at}::timestamptz)
         ) candidates
-        order by publisher_rank, first_captured_at, id
+        order by coalesce((snapshot->>'critical_macro')::boolean, false) desc, publisher_rank, first_captured_at, id
         limit ${cap}
       `);
     },
     async storyContext(event) {
       const window = queueStoryWindow(event);
       if (!window) return [];
+      if (rateFact(event)) {
+        window.from = new Date(Date.parse(window.from) - 14 * 86_400_000).toISOString();
+        window.until = new Date(Date.parse(window.until) + 14 * 86_400_000).toISOString();
+        return entries(await sql`
+          select * from capture_queue
+          where coalesce(story_at, data_period_at) between ${window.from}::timestamptz and ${window.until}::timestamptz
+            and (state in ('pending','processing','retryable_failed','scored')
+              or (state='discarded' and reason in ('duplicate_story','legacy_processed')))
+          order by first_captured_at, id
+        `);
+      }
       return entries(await sql`
         select * from capture_queue
         where story_at between ${window.from}::timestamptz and ${window.until}::timestamptz
@@ -143,7 +156,7 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
       return entries(await sql`
         select * from capture_queue
         where state = 'scored' and delivery_pending
-        order by first_captured_at, id
+        order by coalesce((snapshot->>'critical_macro')::boolean, false) desc, first_captured_at, id
         limit ${cap}
       `);
     },

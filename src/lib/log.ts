@@ -7,12 +7,13 @@
 import { FEEDS } from "../sources/rss.ts";
 import { RULE_REASON_CODES } from "../pipeline/rules.ts";
 import { QUEUE_REASONS } from "../pipeline/queue.ts";
+import { PROFILES, TRIGGERS, type Profile, type Trigger } from "../pipeline/profile.ts";
 
-const PRIORITIES = ["macro_release", "watchlist", "material_news", "news", "routine_official"] as const;
+const PRIORITIES = ["critical_macro", "macro_release", "watchlist", "material_news", "news", "routine_official"] as const;
 const PUBLISHERS = [...new Set(Object.values(FEEDS).map((feed) => feed.publisher)), "fred", "eurostat", "sec", "yahoo", "yahoo-market", "rss-unknown", "coingecko"];
 
 const CODES = [
-  "CYCLE_START", "CONFIG_MISSING", "STATE_OPEN", "WATCHLIST_EMPTY",
+  "CYCLE_START", "RUN_RECORDED", "CONFIG_MISSING", "STATE_OPEN", "WATCHLIST_EMPTY",
   "WATCHLIST_FAILED", "FEED_UNKNOWN", "FEED_DISABLED", "SEC_CONTACT_MISSING", "SEC_UNKNOWN",
   "SOURCE_OK", "SOURCE_FAILED", "FEED_NORMALIZED", "FEED_FUNNEL", "RULE_REASON",
   "AUDIT_COMPLETE", "NO_SOURCES", "SOURCES_PARTIAL", "FRESHNESS",
@@ -49,6 +50,8 @@ const CONFIG_VARS = ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN",
 export type LogCode = typeof CODES[number];
 export type LogStage = typeof STAGES[number];
 export interface LogFields extends Partial<Record<typeof COUNTS[number], number>> {
+  profile?: Profile;
+  trigger?: Trigger;
   source?: typeof SOURCES[number];
   stage?: LogStage;
   variable?: typeof CONFIG_VARS[number];
@@ -91,7 +94,7 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
       if (typeof stage === "string" && STAGES.some((s) => s === stage)) record.stage = stage;
       if (typeof feed === "string" && FEED_IDS.includes(feed)) record.feed = feed;
       if (typeof reason === "string" && RULE_REASON_CODES.some((r) => r === reason)) record.reason = reason;
-      for (const [field, allowed] of [["queueReason", QUEUE_REASONS], ["priority", PRIORITIES], ["publisher", PUBLISHERS]] as const) {
+      for (const [field, allowed] of [["queueReason", QUEUE_REASONS], ["priority", PRIORITIES], ["publisher", PUBLISHERS], ["profile", PROFILES], ["trigger", TRIGGERS]] as const) {
         const value = dato(fields, field);
         if (typeof value === "string" && allowed.some((item) => item === value)) record[field] = value;
       }

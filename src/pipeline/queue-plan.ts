@@ -2,6 +2,7 @@ import { agrupar, type Grupo } from "./agrupar.ts";
 import { applyRules, type RuleOptions } from "./rules.ts";
 import type { QueueEntry } from "./queue.ts";
 import { detectRelevance } from "./relevance.ts";
+import { criticalMacro } from "./critical-macro.ts";
 
 export interface QueuePlanItem {
   group: Grupo;
@@ -10,7 +11,7 @@ export interface QueuePlanItem {
   base: number;
   agePoints: number;
   points: number;
-  reason: "macro_release" | "watchlist" | "material_news" | "news" | "routine_official";
+  reason: "critical_macro" | "macro_release" | "watchlist" | "material_news" | "news" | "routine_official";
   firstCapturedAt: string;
 }
 
@@ -31,7 +32,7 @@ export function planQueue(
     return { group, entries: members, publisher: representative.publisher, base, agePoints,
       points: base + agePoints, reason, firstCapturedAt };
   });
-  const compare = (a: QueuePlanItem, b: QueuePlanItem) => b.points - a.points ||
+  const compare = (a: QueuePlanItem, b: QueuePlanItem) => Number(b.reason === "critical_macro") - Number(a.reason === "critical_macro") || b.points - a.points ||
     a.firstCapturedAt.localeCompare(b.firstCapturedAt) || a.group.representante.id.localeCompare(b.group.representante.id);
   const queues = new Map<string, QueuePlanItem[]>();
   for (const candidate of candidates) {
@@ -40,7 +41,13 @@ export function planQueue(
     queues.set(candidate.publisher, queue);
   }
   for (const queue of queues.values()) queue.sort(compare);
-  const out: QueuePlanItem[] = [];
+  // Carril crítico dentro del MISMO cupo. La equidad y envejecimiento siguen
+  // gobernando el resto; una emergencia no espera otra ronda de editores.
+  const out = candidates.filter((item) => item.reason === "critical_macro").sort(compare).slice(0, opts.limit);
+  for (const [publisher, queue] of queues) {
+    const rest = queue.filter((item) => item.reason !== "critical_macro");
+    if (rest.length) queues.set(publisher, rest); else queues.delete(publisher);
+  }
   const routineCap = Math.floor((opts.capacity ?? opts.limit) / 4);
   let routines = 0;
   while (queues.size && out.length < opts.limit) {
@@ -65,6 +72,7 @@ export function planQueue(
 
 function signal(entry: QueueEntry, watchlist: RuleOptions["watchlist"]): Pick<QueuePlanItem, "base" | "reason"> {
   const e = entry.event;
+  if (criticalMacro(e)) return { base: 8, reason: "critical_macro" };
   if (e.kind === "macro_release") return { base: 4, reason: "macro_release" };
   // Se consulta sin privilegio oficial para detectar una relación concreta.
   const rule = applyRules({ ...e, official: false }, { watchlist });

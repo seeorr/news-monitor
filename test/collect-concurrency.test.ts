@@ -55,6 +55,17 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("captura concurrente real", () => {
+  it("fast incluye BCE aunque la selección explícita lo omita y excluye APIs pesadas", async () => {
+    mocks.watchlist.mockResolvedValue([company("TEST", "0000123456")]);
+    mocks.feed.mockImplementation(async (spec) => [item(spec.id)]);
+    const work = collectEvents(cfg({ fredApiKey: "synthetic-unused", feeds: ["fed-press", "boe-news", "boj-news", "yahoo-finance", "investing-economy", "sec-press"] }),
+      { retrievedAt, profile: "fast" });
+    await vi.runAllTimersAsync();
+    const result = await work;
+    expect(result.ok).toBe(5);
+    expect(mocks.feed.mock.calls.map((call) => call[0].id)).toEqual(["ecb-press", "fed-press", "boe-news", "boj-news", "yahoo-finance"]);
+    expect(mocks.eurostat).not.toHaveBeenCalled(); expect(mocks.filings).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
   it("limita trabajo a tres fuentes y serializa las escrituras tempranas", async () => {
     let active = 0;
     let peak = 0;
@@ -107,12 +118,12 @@ describe("captura concurrente real", () => {
 
   it("el plazo global cancela activos y declara los pendientes sin arrancarlos", async () => {
     mocks.eurostat.mockImplementation(() => new Promise(() => {}));
-    const work = collectEvents(cfg({ collectionTimeoutMs: 30 }), { retrievedAt });
+    const work = collectEvents(cfg({ collectionTimeoutMs: 30, feeds: ["not-registered"] }), { retrievedAt });
     await vi.runAllTimersAsync();
     const result = await work;
     expect(mocks.eurostat).toHaveBeenCalledTimes(3);
     expect(mocks.feed).not.toHaveBeenCalled();
-    expect(result.failures).toHaveLength(6);
+    expect(result.failures).toHaveLength(4);
     expect(result.failures.every((f) => f.detail === "COLLECTION_TIMEOUT")).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -122,7 +133,7 @@ describe("captura concurrente real", () => {
     const storageError = new Error("Synthetic storage failure");
     const lines: string[] = [];
     let writes = 0;
-    const work = collectEvents(cfg(), { retrievedAt, log: (line) => lines.push(line), onCollected: async () => {
+    const work = collectEvents(cfg({ feeds: ["not-registered"] }), { retrievedAt, log: (line) => lines.push(line), onCollected: async () => {
       writes++;
       throw storageError;
     } });
@@ -133,6 +144,18 @@ describe("captura concurrente real", () => {
     expect(lines.map((line) => JSON.parse(line)).filter((line) => line.code === "SOURCE_FAILED")).toEqual([]);
     expect(mocks.feed).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("full persiste el BCE antes de esperar APIs macro lentas", async () => {
+    mocks.eurostat.mockImplementation(() => new Promise(() => {}));
+    mocks.feed.mockImplementation(async (spec) => [item(spec.id)]);
+    const saved: string[] = [];
+    const work = collectEvents(cfg(), { retrievedAt, profile: "full", onCollected: async (events) => { saved.push(...events.map((e) => e.series_id!)); } });
+    await vi.advanceTimersByTimeAsync(5);
+    expect(saved).toContain("ecb-press");
+    expect(mocks.feed.mock.calls[0]![0].id).toBe("ecb-press");
+    await vi.runAllTimersAsync();
+    expect((await work).ok).toBe(2);
   });
 
   it("una empresa SEC fallida no borra los documentos de otra", async () => {

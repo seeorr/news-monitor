@@ -11,6 +11,7 @@ import {
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { NormalizedEvent } from "../schema/event.ts";
+import { criticalMacro, rateFact } from "./critical-macro.ts";
 
 export const QUEUE_STATES = ["pending", "processing", "scored", "discarded", "retryable_failed"] as const;
 export type QueueState = (typeof QUEUE_STATES)[number];
@@ -79,12 +80,13 @@ export function parseQueueEntry(raw: unknown): QueueEntry {
 }
 
 export type QueueOutcome =
-  | { state: "scored"; score: QueueScore; needs_delivery: boolean }
-  | { state: "discarded"; reason: QueueReason }
+  | { state: "scored"; score: QueueScore; needs_delivery: boolean; event?: NormalizedEvent }
+  | { state: "discarded"; reason: QueueReason; event?: NormalizedEvent }
   | { state: "retryable_failed"; reason: QueueReason };
 
 export interface QueueFinish { id: string; outcome: QueueOutcome }
 export interface PreparedQueueFinish {
+  event: NormalizedEvent | null;
   id: string;
   state: "scored" | "discarded" | "retryable_failed";
   score: QueueScore | null;
@@ -98,7 +100,9 @@ export function prepareQueueFinishes(items: readonly QueueFinish[]): PreparedQue
     if (!id || ids.has(id)) throw new Error("duplicate_or_empty_queue_finish");
     ids.add(id);
     const state = z.enum(["scored", "discarded", "retryable_failed"]).parse(outcome.state);
-    return { id, state,
+    const event = "event" in outcome && outcome.event ? NormalizedEvent.parse(outcome.event) : null;
+    if (event && event.id !== id) throw new Error("queue_enrichment_identity_changed");
+    return { id, state, event,
       score: outcome.state === "scored" ? QueueScore.parse(outcome.score) : null,
       reason: outcome.state === "scored" ? null : z.enum(QUEUE_REASONS).parse(outcome.reason),
       delivery_pending: outcome.state === "scored" && z.boolean().parse(outcome.needs_delivery),
@@ -170,7 +174,7 @@ export function queueStoryAt(event: NormalizedEvent): string | null {
 }
 
 export function queueStoryWindow(event: NormalizedEvent): { from: string; until: string } | null {
-  const at = queueStoryAt(event);
+  const at = queueStoryAt(event) ?? (rateFact(event) ? queueInstant(event.data_period_at ?? event.observed_at) : null);
   if (at === null) return null;
   return { from: new Date(Date.parse(at) - 86_400_000).toISOString(),
     until: new Date(Date.parse(at) + 86_400_000).toISOString() };
@@ -203,7 +207,7 @@ export function prepareQueueCaptures(inputs: readonly QueueCapture[], now?: stri
   const at = queueInstant(now);
   const rows = new Map<string, QueueEntry>();
   for (const input of inputs) {
-    const event = NormalizedEvent.parse(input.event);
+    const event = NormalizedEvent.parse({ ...input.event, critical_macro: criticalMacro(input.event) });
     const prior = rows.get(event.id);
     if (prior) { prior.capture_count++; continue; }
     const nullableInstant = (value: string | null | undefined) => value == null ? null : queueInstant(value);
@@ -276,7 +280,7 @@ function scanFairly(rows: QueueEntry[], cap: number): QueueEntry[] {
     publishers.set(row.publisher, group);
   }
   const ranked = [...publishers.values()].flatMap((group) => group.map((row, rank) => ({ row, rank })));
-  return ranked.sort((a, b) => a.rank - b.rank || oldestFirst(a.row, b.row)).slice(0, cap).map(({ row }) => clone(row));
+  return ranked.sort((a, b) => Number(criticalMacro(b.row.event)) - Number(criticalMacro(a.row.event)) || a.rank - b.rank || oldestFirst(a.row, b.row)).slice(0, cap).map(({ row }) => clone(row));
 }
 
 function storeWithAccess(access: Access): QueueStore {
@@ -293,6 +297,7 @@ function storeWithAccess(access: Access): QueueStore {
         return { row, update };
       });
       for (const { row, update } of targets) {
+        if (update.event) row.event = { ...row.event, summary: update.event.summary };
         row.state = update.state;
         row.reason = update.reason;
         row.score = update.score;
@@ -329,8 +334,12 @@ function storeWithAccess(access: Access): QueueStore {
     storyContext(event) {
       const window = queueStoryWindow(event);
       if (!window) return Promise.resolve([]);
-      return access((rows) => [...rows.values()].filter((row) => row.event.kind === "news" &&
-        row.story_at !== null && row.story_at >= window.from && row.story_at <= window.until &&
+      const rate = rateFact(event);
+      const from = rate ? new Date(Date.parse(window.from) - 14 * 86_400_000).toISOString() : window.from;
+      const until = rate ? new Date(Date.parse(window.until) + 14 * 86_400_000).toISOString() : window.until;
+      return access((rows) => [...rows.values()].filter((row) =>
+        (row.story_at ?? (rate ? row.data_period_at : null)) !== null &&
+        (row.story_at ?? row.data_period_at)! >= from && (row.story_at ?? row.data_period_at)! <= until &&
         (row.state !== "discarded" || row.reason === "duplicate_story" || row.reason === "legacy_processed"))
         .sort(oldestFirst).map(clone), false);
     },
@@ -360,7 +369,7 @@ function storeWithAccess(access: Access): QueueStore {
     listDeliveryPending(limit) {
       const cap = queueLimit(limit);
       return access((rows) => [...rows.values()].filter((row) => row.state === "scored" && row.delivery_pending)
-        .sort(oldestFirst).slice(0, cap).map(clone), false);
+        .sort((a, b) => Number(criticalMacro(b.event)) - Number(criticalMacro(a.event)) || oldestFirst(a, b)).slice(0, cap).map(clone), false);
     },
     completeDelivery(id) {
       return access((rows) => {
@@ -471,7 +480,13 @@ export function fileQueueStore(stateDir: string): QueueStore {
         writeFileSync(out, JSON.stringify({ version: 1, entries: [...rows.values()] }), "utf8");
         fsyncSync(out);
       } finally { closeSync(out); }
-      renameSync(temporary, path);
+      for (let attempt = 0; ; attempt++) {
+        try { renameSync(temporary, path); break; }
+        catch (error) {
+          if (attempt >= 20 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
       temporary = null;
       return result;
     } finally {

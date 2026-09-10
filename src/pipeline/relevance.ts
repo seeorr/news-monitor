@@ -1,6 +1,7 @@
 /** Evidencia determinista, independiente de la puntuación y de la entrega. */
 import { applySignals, type Enjuiciable, type RuleOptions } from "./rules-core.ts";
 import { storySubject } from "./agrupar.ts";
+import { criticalMacro } from "./critical-macro.ts";
 export type RelevanceDecision = {
   admit: boolean;
   factuality: "fact" | "rumour" | "opinion" | "promotion" | "routine" | "unknown";
@@ -36,7 +37,8 @@ export function detectRelevance(event: Enjuiciable, opts: RelevanceOptions = {})
   const general = applySignals({ ...event, official: false }, {});
   const action = CHANGE.test(text) || /\b(?:holds?|unchanged|maintained|slows?|rebounds?|fell|rise|pump|disrupt\w*|shift\w*|upgrades?|downgrades?|signals?|gains?|climbs?|lifts?|deepens?|reacts?|points to|revisa|nuevos aranceles|involves|changes|sells?|restructures?|refinances?|appoints?|resigns?|partnership|agreement|completes?|completed|reported|names|explodes?|sink|slides?|slips?|set new|hits? .{0,25}high|record discounts|targets? .{0,35}valuation)\b/u.test(text);
   const sector = MATERIAL.test(text) || CORPORATE.test(text) || /\b(?:energy|crude|capital|banks?|insurers?|consumer price|retail sales|industrial output|monetary policy|policy rate|benchmark rate|interest rate|bank rate|tipos de interes|financial stability|shipping|tankers?|exports?|trade|partnership|agreement|outlook|ipo|ceo|futures|bitcoin|ethereum)\b/u.test(text);
-  const concrete = structured || CONCRETE_CORPORATE.test(text) || (action && sector);
+  const critical = criticalMacro(event);
+  const concrete = structured || CONCRETE_CORPORATE.test(text) || (action && sector) || (critical && (event.summary?.length ?? 0) >= 40);
   if (ROUTINE.test(title) && !/\b(?:announces? (?:a )?(?:rate cut|rate hike)|anuncia (?:una )?(?:subida|bajada) de tipos)\b/u.test(text)) {
     return reject("routine", "routine_without_new_decision");
   }
@@ -44,7 +46,7 @@ export function detectRelevance(event: Enjuiciable, opts: RelevanceOptions = {})
   // demostrar un hecho suficiente para un aviso. El scoring no crea evidencia.
   const report = event.official && /\b(?:monetary policy report|summary of opinions|employment situation|cpi report|ppi report|market statistics|money stock|principal figures|basic figures|minutes of)\b/u.test(title);
   const prospective = /\b(?:considers? a rate|rate .{0,15}expectations)\b/u.test(title);
-  const admit = concrete || report || prospective;
+  const admit = concrete || report || prospective || critical;
   const titlePersonal = applySignals({ ...event, title: event.title, summary: null, official: false }, opts);
   const direct = mentions && concrete &&
     (event.kind === "filing" || event.kind === "market_move" ||

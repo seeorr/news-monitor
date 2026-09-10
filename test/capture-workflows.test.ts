@@ -8,14 +8,14 @@ const gate = brief.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/);
 
 /** Ejecuta el JavaScript exacto del workflow; FS y reloj son las únicas fronteras. */
 function gateAllows(options: { trigger?: string; origin?: string; title?: string; repoMode?: string;
-  branch?: string; repository?: string } = {}): boolean {
+  branch?: string; repository?: string; conclusion?: string } = {}): boolean {
   if (!gate) throw new Error("workflow_gate_missing");
   const event = {
     repository: { default_branch: "main" },
     workflow_run: {
       name: "Monitor", display_title: options.title ?? "Monitor (full)",
       head_branch: options.branch ?? "main", head_repository: { full_name: options.repository ?? "synthetic/monitor" },
-      event: options.origin ?? "workflow_dispatch", conclusion: "success",
+      event: options.origin ?? "workflow_dispatch", conclusion: options.conclusion ?? "success",
     },
   };
   let output = "";
@@ -32,10 +32,11 @@ function gateAllows(options: { trigger?: string; origin?: string; title?: string
   return output === "enabled=true\n";
 }
 
-function actualRunTitle(mode: string, repoMode: string): string {
-  const expression = monitor.match(/^run-name: Monitor \(\$\{\{\s*(.*?)\s*\}\}\)$/m)?.[1];
-  if (!expression) throw new Error("monitor_run_name_missing");
-  return `Monitor (${runInNewContext(expression, { inputs: { mode }, vars: { MONITOR_MODE: repoMode } })})`;
+function actualRunTitle(mode: string, repoMode: string, profile = "full"): string {
+  const template = monitor.match(/^run-name: (.*)$/m)?.[1];
+  if (!template) throw new Error("monitor_run_name_missing");
+  return template.replace(/\$\{\{(.*?)\}\}/g, (_match, expression: string) => String(runInNewContext(expression,
+    { inputs: { mode, profile }, vars: { MONITOR_MODE: repoMode }, github: { event_name: "workflow_dispatch" } })));
 }
 
 describe("capture-only no dispara mensajes por la cadena de workflows", () => {
@@ -44,7 +45,8 @@ describe("capture-only no dispara mensajes por la cadena de workflows", () => {
   });
 
   it("el modo heredado del repositorio queda en el título y también bloquea la recuperación", () => {
-    expect(actualRunTitle("", "capture-only")).toBe("Monitor (capture-only)");
+    expect(actualRunTitle("", "capture-only")).toBe("Monitor (capture-only) [full]");
+    expect(actualRunTitle("auto", "capture-only")).toBe("Monitor (capture-only) [full]");
     expect(gateAllows({ title: actualRunTitle("", "capture-only"), repoMode: "full" })).toBe(false);
   });
 
@@ -52,8 +54,11 @@ describe("capture-only no dispara mensajes por la cadena de workflows", () => {
     expect(gateAllows({ trigger, repoMode: "capture-only", title: "Monitor (full)" })).toBe(false);
   });
 
-  it.each(["full", "process-only"])("mantiene la recuperación para un Monitor %s autorizado", (mode) => {
-    expect(gateAllows({ title: actualRunTitle(mode, "") })).toBe(true);
+  it("mantiene la recuperación para full y evita efectos indirectos de fast/process/fallo", () => {
+    expect(gateAllows({ title: actualRunTitle("full", "") })).toBe(true);
+    expect(gateAllows({ title: actualRunTitle("process-only", "") })).toBe(false);
+    for (const profile of ["fast", "process"]) expect(gateAllows({ title: actualRunTitle("full", "", profile) })).toBe(false);
+    expect(gateAllows({ title: actualRunTitle("full", "", "invalid"), conclusion: "failure" })).toBe(false);
   });
 
   it("una ejecución de otro repositorio o rama sigue sin atravesar la puerta", () => {
@@ -75,8 +80,9 @@ describe("capture-only no dispara mensajes por la cadena de workflows", () => {
   it("el aviso de fallo del propio Monitor también queda desactivado en capture-only", () => {
     const expression = monitor.match(/if: \$\{\{\s*(failure\(\)[^\r\n]*?)\s*\}\}/)?.[1];
     expect(expression).toBeDefined();
-    const evaluate = (mode: string) => runInNewContext(expression!, { failure: () => true, env: { MONITOR_MODE: mode } });
+    const evaluate = (mode: string, valid = "true") => runInNewContext(expression!, { failure: () => true, env: { MONITOR_MODE: mode }, steps: { profile: { outputs: { valid } } } });
     expect(evaluate("capture-only")).toBe(false);
     expect(evaluate("full")).toBe(true);
+    expect(evaluate("full", "")).toBe(false);
   });
 });

@@ -131,6 +131,25 @@ async function ejecutarMain(dry = true) {
   return { records: salida.map((line) => JSON.parse(line)), exit };
 }
 
+describe("perfil del punto de entrada real", () => {
+  it("desconocido falla antes de estado, fuentes, modelos y Telegram", async () => {
+    vi.stubEnv("MONITOR_PROFILE", "unknown-private-profile");
+    const result = await ejecutarMain(false);
+    expect(result.exit).toHaveBeenCalledWith(1);
+    expect(mocks.config).not.toHaveBeenCalled(); expect(mocks.state).not.toHaveBeenCalled();
+    expect(mocks.queue).not.toHaveBeenCalled(); expect(mocks.feed).not.toHaveBeenCalled();
+    expect(mocks.score).not.toHaveBeenCalled(); expect(mocks.send).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.records)).not.toContain("unknown-private-profile");
+  });
+  it("fast capture-only real no modelos ni Telegram y conserva cola", async () => {
+    vi.stubEnv("MONITOR_PROFILE", "fast"); vi.stubEnv("MONITOR_MODE", "capture-only");
+    const result = await ejecutarMain(false);
+    expect(result.records).toContainEqual(expect.objectContaining({ code: "CYCLE_START", profile: "fast" }));
+    expect(mocks.eurostat).not.toHaveBeenCalled(); expect(mocks.quote).not.toHaveBeenCalled();
+    expect(mocks.score).not.toHaveBeenCalled(); expect(mocks.analyze).not.toHaveBeenCalled(); expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(["true", ""])("logger real, GITHUB_ACTIONS=%s", (actions) => {
   it("solo publica vocabulario permitido, sin depender de la watchlist", async () => {
     vi.stubEnv("GITHUB_ACTIONS", actions);

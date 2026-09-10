@@ -12,6 +12,7 @@
  * además sin poder explicar por qué agrupó lo que agrupó.
  */
 import type { NormalizedEvent } from "../schema/event.ts";
+import { rateFact, sameMacroFact } from "./critical-macro.ts";
 
 /**
  * Calibrado con los titulares reales del 8 de septiembre, no elegido a ojo.
@@ -73,6 +74,7 @@ export function similitud(a: Set<string>, b: Set<string>): number {
 
 /** Mismo criterio para grupos visibles y copias que llegan en otra captura. */
 export function sameStory(a: NormalizedEvent, b: NormalizedEvent, threshold = UMBRAL_DEFECTO): boolean {
+  if (sameMacroFact(a, b)) return true;
   return a.kind === "news" && b.kind === "news" && compatibles(a, b) &&
     similitud(firma(a.title), firma(b.title)) >= threshold;
 }
@@ -80,6 +82,8 @@ export function sameStory(a: NormalizedEvent, b: NormalizedEvent, threshold = UM
 /** Relación conservadora: mismo sujeto explícito y tema, pero un hecho cambió.
  * No confunde esta relación con equivalencia ni impide puntuar la actualización. */
 export function relatedUpdate(a: NormalizedEvent, b: NormalizedEvent): boolean {
+  const x = rateFact(a), y = rateFact(b);
+  if (x && y && x.bank === y.bank && x.day === y.day && !sameMacroFact(a, b)) return true;
   const subject = storySubject(a.title);
   return a.kind === "news" && b.kind === "news" && Boolean(subject) && subject === storySubject(b.title) &&
     !sameStory(a, b) && Math.abs(Date.parse(a.publication_at ?? a.observed_at) - Date.parse(b.publication_at ?? b.observed_at)) <= 24 * 3600_000 &&
@@ -107,13 +111,13 @@ export function agrupar(events: NormalizedEvent[], opts: { umbral?: number } = {
   const grupos: Array<{ representante: NormalizedEvent; firma: Set<string>; duplicados: NormalizedEvent[] }> = [];
 
   for (const event of events) {
-    if (event.kind !== "news") {
+    if (event.kind !== "news" && !rateFact(event)) {
       grupos.push({ representante: event, firma: new Set(), duplicados: [] });
       continue;
     }
 
     const f = firma(event.title);
-    const grupo = grupos.find((g) => g.firma.size > 0 && compatibles(g.representante, event) && similitud(g.firma, f) >= umbral);
+    const grupo = grupos.find((g) => sameStory(g.representante, event, umbral));
 
     if (!grupo) {
       grupos.push({ representante: event, firma: f, duplicados: [] });

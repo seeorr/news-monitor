@@ -8,6 +8,7 @@ import { decideNews, type NewsDecision } from "./news-policy.ts";
 import { capturedEvent } from "./queue-cycle.ts";
 import type { RuleOptions } from "./rules.ts";
 import { relatedUpdate } from "./agrupar.ts";
+import { criticalMacro } from "./critical-macro.ts";
 export type NewsDeliveryOptions = RuleOptions & {
   now: string; deps: CascadeDeps | null; queue: QueueStore; control: ControlStore; seen: SeenStore;
   briefHour: number; briefDay: number; importantHour: number; importantDay: number;
@@ -18,11 +19,12 @@ export type NewsDeliveryOptions = RuleOptions & {
   onFailure?: (error: unknown) => void;
   afterSent?: (body: string, event: QueueEntry["event"]) => Promise<void>;
   excludeIds?: Set<string>;
+  onlyCritical?: boolean;
 };
 type Ready = { entry: QueueEntry; decision: NewsDecision; scoring: Scoring };
 export async function deliverNews(options: NewsDeliveryOptions) {
   const { queue, control, seen } = options;
-  const candidates = (await queue.listDeliveryPending(options.maxItems)).filter((entry) => !options.excludeIds?.has(entry.id));
+  const candidates = (await queue.listDeliveryPending(options.maxItems)).filter((entry) => !options.excludeIds?.has(entry.id) && (!options.onlyCritical || criticalMacro(entry.event)));
   const brief: Ready[] = [];
   const important: Ready[] = [];
   let sent = 0, failed = 0, deep = 0;

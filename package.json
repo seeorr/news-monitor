@@ -15,6 +15,8 @@
     "audit:filters": "tsx scripts/auditar-filtros.ts",
     "audit:queue": "tsx scripts/auditar-cola.ts",
     "audit:cadence": "tsx scripts/auditar-cadencia.ts",
+    "audit:health": "tsx scripts/auditar-salud.ts",
+    "verify:cadence:postgres": "tsx scripts/verificar-cadencia-postgres.ts",
     "verify:feeds": "tsx scripts/verificar-fuentes.ts",
     "verify:queue:postgres": "tsx scripts/verificar-cola-postgres.ts",
     "verify:control:postgres": "tsx scripts/verificar-control-postgres.ts",

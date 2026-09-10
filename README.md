@@ -27,6 +27,11 @@ Entrega y procedimientos: [cola, pruebas y capacidad](docs/captura-persistente.m
 [fuentes y condiciones](docs/fuentes-cobertura.md),
 [cadencia y disparador externo](docs/disparador-externo.md).
 
+Reloj externo implementado localmente, todavía desactivado:
+[Cloudflare, perfiles fast/full/process y activación progresiva](docs/cadencia-cloudflare.md).
+[Resultados de verificación de cadencia](docs/verificacion-cadencia.md).
+La migración de runs debe revisarse/aplicarse antes de habilitar su telemetría en Neon.
+
 ```
 FRED (series)    ─┐
 Eurostat         ─┤

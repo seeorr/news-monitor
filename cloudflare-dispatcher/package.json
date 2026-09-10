@@ -1,0 +1,8 @@
+{
+  "name": "news-monitor-clock",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "validate": "wrangler deploy --dry-run --outdir dist" },
+  "devDependencies": { "wrangler": "4.130.0" }
+}

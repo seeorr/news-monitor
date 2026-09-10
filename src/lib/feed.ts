@@ -101,7 +101,7 @@ export function decodeEntities(s: string): string {
 }
 
 /** Un resumen con etiquetas HTML dentro se queda en su texto. EDGAR manda `<b>` en el suyo. */
-function sinHtml(s: string): string {
+export function sinHtml(s: string): string {
   return unwrapCdata(s)
     .replace(/<br\s*\/?>/gi, " · ")
     .replace(/<[^>]+>/g, " ")

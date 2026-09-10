@@ -50,8 +50,13 @@ jobs:
             now.getUTCHours() >= 6 && now.getUTCHours() < 12;
           // Capturar no debe disparar indirectamente agenda/resumen ni Telegram.
           const captureOnly = process.env.MONITOR_MODE === 'capture-only' ||
-            (trigger === 'workflow_run' && run?.display_title === 'Monitor (capture-only)');
-          const enabled = trusted && !captureOnly && (trigger === 'workflow_dispatch' || morning);
+            (trigger === 'workflow_run' && run?.display_title?.startsWith('Monitor (capture-only)'));
+          // Fast/process no deben descargar fuentes lentas ni pagar modelos
+          // indirectamente a través de workflow_run. Un perfil inválido tampoco.
+          const lightweight = trigger === 'workflow_run' &&
+            (/\[(fast|process)\]$/.test(run?.display_title ?? '') || run?.display_title?.startsWith('Monitor (process-only)'));
+          const succeeded = trigger !== 'workflow_run' || run?.conclusion === 'success';
+          const enabled = trusted && succeeded && !captureOnly && !lightweight && (trigger === 'workflow_dispatch' || morning);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `enabled=${enabled}\n`);
           NODE
       - uses: actions/checkout@v5

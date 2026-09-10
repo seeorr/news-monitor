@@ -31,6 +31,11 @@ import { neonControlStore } from "./db/control.ts";
 import { BudgetExhausted, fileControlStore, memoryControlStore, type AiRecord } from "./pipeline/control.ts";
 import { decideNews } from "./pipeline/news-policy.ts";
 import { deliverNews } from "./pipeline/news-delivery.ts";
+import { executionProfile } from "./pipeline/profile.ts";
+import { criticalMacro } from "./pipeline/critical-macro.ts";
+import { CRITICAL_FEEDS, queueSnapshot, type RunRecord } from "./pipeline/cadence.ts";
+import { fileRunStore, memoryRunStore, neonRunStore } from "./db/cadence.ts";
+import { enrichEcbDecision } from "./sources/ecb-release.ts";
 
 // Seguro desde el arranque, incluso antes de cargar configuración y watchlist.
 const log = createLogger();
@@ -38,15 +43,21 @@ let stage: LogStage = "startup";
 
 async function main(): Promise<number> {
   loadDotEnv();
-  const mode = process.env["MONITOR_MODE"]?.trim() || "full";
-  if (!["full", "capture-only", "process-only"].includes(mode)) throw new Error("invalid_cycle_mode");
+  const execution = executionProfile(process.env);
+  const { mode, profile, trigger } = execution;
   const dry = process.argv.includes("--dry");
   const force = process.argv.includes("--force");
   const captureOnly = process.argv.includes("--capture-only") || mode === "capture-only";
-  const processOnly = process.argv.includes("--process-only") || mode === "process-only";
+  const processOnly = process.argv.includes("--process-only") || execution.processOnly;
   if ((captureOnly && (processOnly || force)) || (processOnly && (dry || force))) throw new Error("incompatible_cycle_modes");
   const config = loadConfig();
-  log("CYCLE_START", { stage });
+  if (profile === "fast") {
+    config.maxScoringPerCycle = Math.min(config.maxScoringPerCycle, 4);
+    config.maxDeepPerCycle = Math.min(config.maxDeepPerCycle, 1);
+    config.sourceTimeoutMs = Math.min(config.sourceTimeoutMs ?? 45_000, 15_000);
+    config.collectionTimeoutMs = Math.min(config.collectionTimeoutMs ?? 180_000, 60_000);
+  }
+  log("CYCLE_START", { stage, profile, trigger });
   for (const variable of missingVars(config)) {
     log("CONFIG_MISSING", { stage, variable: variable.name as LogFields["variable"] });
   }
@@ -56,17 +67,36 @@ async function main(): Promise<number> {
   const queue: QueueStore = dry || force ? memoryQueueStore()
     : config.databaseUrl ? neonQueueStore(config.databaseUrl) : fileQueueStore(config.stateDir);
   const levels = config.newsDeliveryMode === "two-level";
-  const control = dry || !levels ? memoryControlStore() : config.databaseUrl ? neonControlStore(config.databaseUrl) : fileControlStore(config.stateDir);
+  const control = dry ? memoryControlStore() : config.databaseUrl ? neonControlStore(config.databaseUrl) : fileControlStore(config.stateDir);
   const retrievedAt = new Date().toISOString();
+  const runs = dry || force || !config.runTelemetry ? memoryRunStore()
+    : config.databaseUrl ? neonRunStore(config.databaseUrl) : fileRunStore(config.stateDir);
+  const initial = queueSnapshot(await queue.stats());
+  const run: RunRecord = { id: randomUUID(), profile, trigger, mode: processOnly ? "process-only" : captureOnly ? "capture-only" : "full",
+    startedAt: retrievedAt, endedAt: null, captureCompletedAt: null, status: "running",
+    sourcesOk: 0, sourcesFailed: 0, captured: 0, unique: 0, criticalOk: [], criticalFailed: [],
+    pendingBefore: initial.pending, pendingAfter: initial.pending, oldestPendingAt: initial.oldest, scored: 0, sent: 0 };
+  await runs.put(run);
+  let checkpoint: Promise<void> = Promise.resolve();
+  const saveRun = () => { const snapshot = structuredClone(run); checkpoint = checkpoint.then(() => runs.put(snapshot)); return checkpoint; };
+  try {
   let watchlist = processOnly ? await watchlistEfectiva(config) : [];
   let sourceFailure = false;
   if (!processOnly) {
     stage = "collect";
-    const collected = await collectEvents(config, { retrievedAt, logger: log,
+    const collected = await collectEvents(config, { retrievedAt, logger: log, profile,
+      onSourceResult: async (result) => {
+        if (result.ok) run.sourcesOk++; else run.sourcesFailed++;
+        if (result.feed && (CRITICAL_FEEDS as readonly string[]).includes(result.feed)) {
+          (result.ok ? run.criticalOk : run.criticalFailed).push(result.feed as typeof CRITICAL_FEEDS[number]);
+        }
+        await saveRun();
+      },
       onCollected: async (events, source) => {
         stage = "persist";
         const counts = await captureCandidates(queue, events, { now: new Date().toISOString(),
           maxAgeHours: config.maxItemAgeHours, watchlist: source.vigilados });
+        run.captured += counts.captured; run.unique += counts.unique;
         if (levels && !dry) for (const event of events) {
           // No sobrescribir una decisión ya puntuada por una mera recaptura.
           if (!await control.getDecision(event.id)) await control.putDecision(event.id,
@@ -77,6 +107,9 @@ async function main(): Promise<number> {
       },
     });
     watchlist = collected.vigilados;
+    run.captureCompletedAt = new Date().toISOString();
+    run.sourcesOk = collected.ok; run.sourcesFailed = collected.failures.length;
+    await saveRun();
     sourceFailure = collected.ok === 0;
     if (sourceFailure) log("NO_SOURCES", { stage, failed: collected.failures.length });
     if (collected.failures.length > 0) log("SOURCES_PARTIAL", { stage, failed: collected.failures.length, ok: collected.ok });
@@ -94,15 +127,16 @@ async function main(): Promise<number> {
   if (captureOnly) {
     log("CAPTURE_ONLY", { stage: "persist" });
     await reportQueue(queue);
+    run.status = sourceFailure ? "failed" : run.sourcesFailed ? "partial" : "success";
     return sourceFailure ? 1 : 0;
   }
   const deps: CascadeDeps | null = config.anthropicApiKey ? {
-    client: new Anthropic({ apiKey: config.anthropicApiKey, timeout: 60_000, maxRetries: 0 }),
+    client: new Anthropic({ apiKey: config.anthropicApiKey, timeout: profile === "fast" ? 20_000 : 60_000, maxRetries: 0 }),
     modelScoring: config.modelScoring, modelAnalysis: config.modelAnalysis,
     onFabrication: (attempt, violations) => log("FABRICATION_RETRY", { stage: "analysis", attempt, count: violations.length }),
     onScoringSummaryFallback: () => log("SCORING_SUMMARY_FALLBACK", { stage: "scoring" }),
   } : null;
-  if (deps && levels) {
+  if (deps) {
     const requests = new Map<string, Omit<AiRecord, "inputTokens" | "outputTokens" | "result" | "costUsd">>();
     deps.beforeRequest = async (info) => {
       const id = randomUUID();
@@ -143,10 +177,11 @@ async function main(): Promise<number> {
   });
   // Primero lo ya puntuado: un ciclo lento no puede posponer indefinidamente
   // entregas anteriores detrás de doce nuevas llamadas al modelo.
-  const before = levels ? { sent: 0, failed: 0 } : await deliver(config.maxScoringPerCycle);
+  const hasCritical = (await queue.listPending(new Date().toISOString(), 1)).some((entry) => criticalMacro(entry.event));
+  const before = levels || hasCritical ? { sent: 0, failed: 0 } : await deliver(config.maxScoringPerCycle);
   const attemptedLevels = new Set<string>();
   let remainingDeepLevels = config.maxDeepPerCycle;
-  const sendTwoLevels = async () => { const result = await deliverNews({ now: new Date().toISOString(), deps, queue, control, seen, watchlist,
+  const sendTwoLevels = async (onlyCritical = false) => { const result = await deliverNews({ now: new Date().toISOString(), deps, queue, control, seen, watchlist, onlyCritical,
     briefHour: config.briefNewsHour ?? 6, briefDay: config.briefNewsDay ?? 24,
     importantHour: config.importantNewsHour ?? 3, importantDay: config.importantNewsDay ?? 12,
     batchSize: config.briefBatchSize ?? 3, briefIntervalMinutes: config.briefIntervalMinutes ?? 60,
@@ -163,7 +198,8 @@ async function main(): Promise<number> {
       await copiarAlGrupo(config, event, body);
     }, onFailure: (error) => log("EVENT_FAILED", { stage: "telegram", error }),
   }); remainingDeepLevels -= result.deep; return result; };
-  const beforeLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
+  const beforeLevels = levels ? await sendTwoLevels(true) : { sent: 0, failed: 0, deep: 0 };
+  const immediate = { sent: 0, failed: 0, deep: 0 };
   if (!deps) log("SCORING_UNAVAILABLE", { stage: "scoring" });
   const processing = deps ? await processQueue(queue, {
     maxScoring: config.maxScoringPerCycle, scanLimit: config.queueScanLimit,
@@ -173,6 +209,18 @@ async function main(): Promise<number> {
       { now: new Date().toISOString(), watchlist, maxPendingHours: config.maxPendingHours })); },
     hasProcessed: (id) => { stage = "dedupe"; return force ? Promise.resolve(false) : seen.has(id); },
     score: (event) => { stage = "scoring"; return scoreEvent(event, deps); },
+    enrich: enrichEcbDecision,
+    onScored: async (event) => {
+      // Entrega crítica justo después de puntuar; las otras llamadas del cupo
+      // no retrasan una decisión ya preparada. Las cuotas siguen siendo comunes.
+      if (levels && criticalMacro(event)) {
+        const result = await sendTwoLevels(true);
+        immediate.sent += result.sent; immediate.failed += result.failed; immediate.deep += result.deep;
+      } else if (criticalMacro(event)) {
+        const result = await deliver(1);
+        immediate.sent += result.sent; immediate.failed += result.failed;
+      }
+    },
     onPlan: (item) => log("QUEUE_PLAN", { stage: "scoring", source: item.group.representante.source,
       feed: item.group.representante.source === "rss" ? item.group.representante.series_id ?? undefined : undefined,
       priority: item.reason, publisher: item.publisher, points: item.points, agePoints: item.agePoints }),
@@ -183,13 +231,25 @@ async function main(): Promise<number> {
   const remaining = config.maxScoringPerCycle - attemptedDelivery.size;
   const after = !levels && remaining > 0 ? await deliver(remaining) : { sent: 0, failed: 0 };
   const afterLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
-  const delivery = { sent: before.sent + after.sent + beforeLevels.sent + afterLevels.sent,
-    failed: before.failed + after.failed + beforeLevels.failed + afterLevels.failed };
-  profundos += beforeLevels.deep + afterLevels.deep;
+  const delivery = { sent: before.sent + after.sent + beforeLevels.sent + afterLevels.sent + immediate.sent,
+    failed: before.failed + after.failed + beforeLevels.failed + afterLevels.failed + immediate.failed };
+  profundos += beforeLevels.deep + afterLevels.deep + immediate.deep;
   await reportQueue(queue);
   const failed = processing.failed + delivery.failed;
   log("CYCLE_END", { stage: "cycle", sent: delivery.sent, deep: profundos, failed });
+  run.scored = processing.scored; run.sent = delivery.sent;
+  run.status = sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? "failed" : failed || run.sourcesFailed ? "partial" : "success";
   return sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? 1 : 0;
+  } finally {
+    await checkpoint;
+    const final = queueSnapshot(await queue.stats());
+    run.pendingAfter = final.pending; run.oldestPendingAt = final.oldest;
+    run.endedAt = new Date().toISOString();
+    if (run.status === "running") run.status = "failed";
+    await runs.put(run);
+    log("RUN_RECORDED", { stage: "persist", profile, trigger, captured: run.captured, unique: run.unique, pending: run.pendingAfter,
+      ok: run.sourcesOk, failed: run.sourcesFailed });
+  }
 }
 
 async function reportQueue(queue: QueueStore): Promise<void> {

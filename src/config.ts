@@ -39,6 +39,7 @@ export interface Config {
   edgarMaxFilings?: number;
   queueScanLimit?: number;
   processingLeaseMs?: number;
+  runTelemetry?: boolean;
   newsDeliveryMode?: "legacy" | "two-level";
   briefNewsThreshold?: number;
   watchlistImportantThreshold?: number;
@@ -119,6 +120,7 @@ export function loadConfig(): Config {
     edgarMaxFilings: entero("EDGAR_MAX_FILINGS", 1000, 1, 5000),
     queueScanLimit: entero("QUEUE_SCAN_LIMIT", 500, 12, 5000),
     processingLeaseMs: entero("PROCESSING_LEASE_MS", 900_000, 60_000, 3600_000),
+    runTelemetry: env("RUN_TELEMETRY") !== "false",
     newsDeliveryMode: deliveryMode(),
     briefNewsThreshold: entero("BRIEF_NEWS_THRESHOLD", 5, 3, 8),
     watchlistImportantThreshold: entero("WATCHLIST_IMPORTANT_THRESHOLD", 6, 5, 10),

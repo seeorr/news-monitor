@@ -57,6 +57,8 @@ export const NormalizedEvent = z.object({
   data_period_at: z.string().nullable().optional(),
   /** Primera captura inmutable de la cola; no se renueva al reintentar. */
   first_captured_at: z.string().optional(),
+  /** Clasificación determinista persistida antes del límite de lectura. */
+  critical_macro: z.boolean().optional(),
 
   actual: z.number().nullable(),
   previous: z.number().nullable(),

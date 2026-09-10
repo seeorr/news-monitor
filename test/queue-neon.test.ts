@@ -108,8 +108,8 @@ describe("cola Neon: contratos de consultas parametrizadas", () => {
     expect(p.calls[0]!.values.at(-1)).toBe(2);
     const payload = JSON.parse(p.calls[0]!.values[0] as string);
     expect(payload).toEqual([
-      { id: input.event.id, state: "scored", score, reason: null, delivery_pending: true },
-      { id: "duplicate", state: "discarded", score: null, reason: "duplicate_story", delivery_pending: false },
+      { id: input.event.id, state: "scored", score, reason: null, delivery_pending: true, event: null },
+      { id: "duplicate", state: "discarded", score: null, reason: "duplicate_story", delivery_pending: false, event: null },
     ]);
     p.respond([]);
     await expect(store.finish(input.event.id, "old", { state: "scored", score, needs_delivery: true }, t0))

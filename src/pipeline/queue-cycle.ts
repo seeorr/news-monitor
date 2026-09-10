@@ -39,6 +39,8 @@ export interface QueueProcessingOptions extends RuleOptions {
   score: (event: NormalizedEvent) => Promise<QueueScore>;
   onPlan?: (item: QueuePlanItem) => void;
   onFailure?: (entry: QueueEntry, error: unknown) => void;
+  onScored?: (event: NormalizedEvent) => Promise<void>;
+  enrich?: (event: NormalizedEvent) => Promise<NormalizedEvent>;
 }
 
 /** No vuelve a aplicar frescura a una candidata que ya entró en la cola. */
@@ -82,7 +84,21 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
     options.onPlan?.(item);
     attempted++;
     let score: QueueScore;
-    try { score = await options.score(capturedEvent(representative)); }
+    let enriched = capturedEvent(representative);
+    try {
+      if (options.enrich) enriched = await options.enrich(enriched);
+      // El RSS oficial puede traer solo el título. Tras leer el comunicado,
+      // comprobar otra vez: la prensa pudo haber entregado ya ese mismo hecho.
+      const resolvedAfterEnrichment = enriched.summary !== representative.event.summary &&
+        (await queue.storyContext(enriched)).some((row) => row.id !== representative.id && row.state === "scored" &&
+          sameStory(enriched, row.event, options.groupThreshold));
+      if (resolvedAfterEnrichment) {
+        await queue.finishBatch(owned.map((row) => ({ id: row.id, outcome: { state: "discarded", reason: "duplicate_story",
+          event: row.id === representative.id ? enriched : row.event } })), token, now());
+        discarded += owned.length; attempted--; continue;
+      }
+      score = await options.score(enriched);
+    }
     catch (error) {
       const budget = (error as { code?: string })?.code === "AI_BUDGET_EXHAUSTED";
       await queue.finishBatch(owned.map((row) => ({ id: row.id,
@@ -95,10 +111,11 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
     // Representante + duplicados cambian juntos. Morir aquí no deja una copia
     // pendiente que pueda anunciarse en otra vuelta sin su representante.
     await queue.finishBatch(owned.map((row) => ({ id: row.id, outcome: row.id === representative.id
-      ? { state: "scored", score, needs_delivery: true }
+      ? { state: "scored", score, needs_delivery: true, event: enriched }
       : { state: "discarded", reason: "duplicate_story" } })), token, now());
     scored++;
     discarded += owned.length - 1;
+    await options.onScored?.(enriched);
   }
   return { pending: pending.length, attempted, scored, failed, discarded };
 }

@@ -1,3 +1,5 @@
+# Arquitectura actual y activación externa: docs/cadencia-cloudflare.md.
+# Los comentarios históricos siguientes explican el respaldo conservado.
 # Ciclo de ingesta. Corre en el free tier de GitHub Actions, que es ILIMITADO en
 # minutos porque el repositorio es publico.
 #
@@ -49,7 +51,7 @@
 # `workflow_dispatch` —cron-job.org, Cloudflare Workers Cron, el cron de Vercel—
 # y no fingir que el planificador de Actions es ese disparador.
 name: Monitor
-run-name: Monitor (${{ inputs.mode || vars.MONITOR_MODE || 'full' }})
+run-name: Monitor (${{ inputs.mode != 'auto' && inputs.mode || vars.MONITOR_MODE || 'full' }}) [${{ github.event_name == 'schedule' && 'full' || inputs.profile || 'full' }}]
 
 on:
   schedule:
@@ -59,11 +61,21 @@ on:
     - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Modo del ciclo; vacío respeta MONITOR_MODE del repositorio"
+      profile:
+        description: "Fuentes: fast (críticas), full (todas), process (solo cola)"
         type: choice
-        options: ["", "full", "capture-only", "process-only"]
-        default: ""
+        options: ["full", "fast", "process"]
+        default: "full"
+      origin:
+        description: "Etiqueta operativa del disparador; no es autenticación"
+        type: choice
+        options: ["manual", "external"]
+        default: "manual"
+      mode:
+        description: "Modo del ciclo; auto respeta MONITOR_MODE del repositorio"
+        type: choice
+        options: ["auto", "full", "capture-only", "process-only"]
+        default: "auto"
 
 # Un ciclo cada vez. Dos ejecuciones solapadas leerian la misma observacion y
 # competirian por escribirla; la base lo aguanta, pero no hay nada que ganar.
@@ -75,7 +87,9 @@ jobs:
   ciclo:
     runs-on: ubuntu-latest
     env:
-      MONITOR_MODE: ${{ inputs.mode || vars.MONITOR_MODE || 'full' }}
+      MONITOR_MODE: ${{ inputs.mode != 'auto' && inputs.mode || vars.MONITOR_MODE || 'full' }}
+      MONITOR_PROFILE: ${{ github.event_name == 'schedule' && 'full' || inputs.profile || 'full' }}
+      MONITOR_ORIGIN: ${{ github.event_name == 'schedule' && 'schedule' || inputs.origin || 'manual' }}
     # Una vuelta son ~40 s. Diez minutos es margen de sobra para una fuente lenta,
     # y el tope existe para que un `fetch` colgado no ocupe el grupo sin avanzar.
     timeout-minutes: 10
@@ -84,6 +98,10 @@ jobs:
       # con el aviso. v5 pide runner >= 2.327.1, que el runner alojado supera de
       # sobra, y no cambia nada de lo que aqui se usa.
       - uses: actions/checkout@v5
+
+      - name: Validar perfil antes de dependencias y secretos
+        id: profile
+        run: node scripts/validate-profile.mjs
 
       - uses: actions/setup-node@v5
         with:
@@ -124,6 +142,7 @@ jobs:
           EDGAR_MAX_FILINGS: ${{ vars.EDGAR_MAX_FILINGS }}
           QUEUE_SCAN_LIMIT: ${{ vars.QUEUE_SCAN_LIMIT }}
           PROCESSING_LEASE_MS: ${{ vars.PROCESSING_LEASE_MS }}
+          RUN_TELEMETRY: ${{ vars.RUN_TELEMETRY }}
           NEWS_DELIVERY_MODE: ${{ vars.NEWS_DELIVERY_MODE }}
           BRIEF_NEWS_THRESHOLD: ${{ vars.BRIEF_NEWS_THRESHOLD }}
           WATCHLIST_IMPORTANT_THRESHOLD: ${{ vars.WATCHLIST_IMPORTANT_THRESHOLD }}
@@ -147,7 +166,7 @@ jobs:
       # concurrencia, una ejecucion pendiente a la que otra sustituye acaba
       # CANCELADA, y avisar de eso serian avisos falsos todos los dias.
       - name: Avisar del fallo por Telegram
-        if: ${{ failure() && env.MONITOR_MODE != 'capture-only' }}
+        if: ${{ failure() && steps.profile.outputs.valid == 'true' && env.MONITOR_MODE != 'capture-only' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

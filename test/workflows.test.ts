@@ -10,7 +10,7 @@ const gate = brief.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/)!;
 function enabled(trigger: string, date: string, overrides: Record<string, unknown> = {}): boolean {
   const event = {
     repository: { default_branch: "main" },
-    workflow_run: { head_branch: "main", head_repository: { full_name: "fixture/monitor" }, event: "schedule" },
+    workflow_run: { head_branch: "main", head_repository: { full_name: "fixture/monitor" }, event: "schedule", conclusion: "success" },
     ...overrides,
   };
   let output = "";
@@ -46,7 +46,7 @@ describe("resumen: ventana y origen del fallback", () => {
   ])("rechaza un origen no permitido: %j", (override) => {
     expect(enabled("workflow_run", "2026-09-10T08:00:00Z", {
       workflow_run: { head_branch: "main", head_repository: { full_name: "fixture/monitor" },
-        event: "schedule", ...override },
+        event: "schedule", conclusion: "success", ...override },
     })).toBe(false);
   });
 
@@ -59,7 +59,7 @@ describe("resumen: ventana y origen del fallback", () => {
   it("un Monitor lanzado manualmente también permite recuperar la mañana", () => {
     expect(enabled("workflow_run", "2026-09-10T08:00:00Z", {
       workflow_run: { head_branch: "main", head_repository: { full_name: "fixture/monitor" },
-        event: "workflow_dispatch" },
+        event: "workflow_dispatch", conclusion: "success" },
     })).toBe(true);
   });
 });
