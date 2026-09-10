@@ -7,6 +7,7 @@ import { applyRules } from "../src/pipeline/rules.ts";
 import { agrupar } from "../src/pipeline/agrupar.ts";
 import { decideNews } from "../src/pipeline/news-policy.ts";
 import { recientes } from "../src/pipeline/collect.ts";
+import { formatInteresting, formatImportant } from "../src/notify/news-formats.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 type Label = "important" | "brief" | "digest" | "none";
 type Case = { id:string; split:string; title:string; score:number; label:Label; official?:boolean; materialWatchlist?:boolean; userLabel:null };
@@ -69,3 +70,17 @@ if(publicPath){
     fresh:results.filter(r=>r.fresh).length,beforeFresh:results.filter(r=>r.fresh&&r.before.pass).length,afterFresh:results.filter(r=>r.fresh&&r.after.pass).length,rows:results},null,2)+"\n");
 }
 console.log(JSON.stringify({calibration:report.calibration,holdout:report.holdout,grouping:report.grouping},null,2));
+
+// Ejemplos inventados, producidos por los mismos formateadores. Cero transporte.
+const briefEvent=makeEvent({...dataset.cases[0]!,id:"contrato-ficticio",title:"Orion signs copper supply contract"});
+const briefScore={importance_score:5,market_impact_score:5,sentiment:"neutral" as const,needs_alert:false,
+  one_liner:"Orion firma un contrato de suministro de cobre para su planta industrial. La fuente confirma el acuerdo, pero no publica su importe ni la duración."};
+const importantEvent={...makeEvent({...dataset.cases[0]!,id:"produccion-ficticia",title:"Altair suspends copper production at its northern mine"}),
+  summary:"Altair confirma la suspensión de producción de cobre en su mina del norte tras una avería. No indica fecha de reinicio ni cuantifica la producción afectada."};
+const importantScore={...briefScore,importance_score:8,market_impact_score:8,needs_alert:true,
+  one_liner:"Altair suspende la producción de cobre en su mina del norte por una avería. No hay fecha confirmada de reinicio."};
+const importantAnalysis={why_it_matters:"La interrupción podría reducir el suministro disponible para los compradores de esa mina. Su efecto en el mercado dependería de la duración del cierre y de la posibilidad de sustituir esa oferta; esos datos no constan en el comunicado.",
+  catalysts:[],affected_assets:[],risks:["La fuente no cuantifica la producción afectada. Una reparación rápida o el uso de inventarios podrían limitar el efecto; no se ha confirmado ninguna de esas circunstancias."],
+  what_to_watch:["Vigilar el siguiente parte del operador: diagnóstico de la avería, calendario de reparación y capacidad que pueda recuperar. Una fecha concreta de reinicio cambiaría la valoración de la interrupción."]};
+const short=formatInteresting(briefEvent,briefScore),long=formatImportant(importantEvent,importantScore,importantAnalysis);
+await writeFile("docs/evaluacion/ejemplos-telegram.md",`# Ejemplos ficticios de Telegram\n\nGenerados localmente por los formateadores del programa. No son noticias reales ni se han enviado.\n\n## Aviso breve (${short.length} caracteres)\n\n${short}\n\n## Alerta importante (${long.length} caracteres)\n\n${long}\n\nLa extensión depende de la evidencia. No se rellena un mensaje escaso para alcanzar un mínimo.\n`);
