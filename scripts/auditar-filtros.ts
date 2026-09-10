@@ -7,12 +7,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { neon } from "@neondatabase/serverless";
 import { loadConfig, loadDotEnv } from "../src/config.ts";
 import { createLogger } from "../src/lib/log.ts";
-import { FEEDS, fetchFeed, toEvents } from "../src/sources/rss.ts";
+import { FEEDS, fetchFeed, toEvents, selectFeeds, publisherForEvent } from "../src/sources/rss.ts";
 import { recientes, porFecha, watchlistEfectiva } from "../src/pipeline/collect.ts";
 import { applyRules } from "../src/pipeline/rules.ts";
-import { agrupar } from "../src/pipeline/agrupar.ts";
 import { registrarEmbudoFeeds } from "../src/pipeline/diagnostico.ts";
-import { priorizarGrupos } from "../src/pipeline/prioridad.ts";
+import { planQueue } from "../src/pipeline/queue-plan.ts";
+import { prepareQueueCaptures } from "../src/pipeline/queue.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 
 const log = createLogger();
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   }
   const now = new Date();
   const watchlist = await watchlistEfectiva(config, (line) => console.log(line));
-  const elegidos = config.feeds.length ? config.feeds : Object.keys(FEEDS);
+  const elegidos = config.feeds.length ? config.feeds : selectFeeds(config.rssFeedBatches).map((spec) => spec.id);
   const events: NormalizedEvent[] = [];
   let failures = 0;
   for (const id of elegidos) {
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
       failures++;
       continue;
     }
+    if (spec.enabled === false) { log("FEED_DISABLED", { source: "rss", feed: id, count: 1 }); continue; }
     try {
       const items = await fetchFeed(spec);
       const normalized = toEvents(items, spec, { retrievedAt: now.toISOString() });
@@ -63,9 +64,11 @@ async function main(): Promise<void> {
   const seen = new Map(guardados.map((e) => [e.id, e]));
   const nuevos = porFecha(candidates.filter((e) => !seen.has(e.id)));
   registrarEmbudoFeeds({ events, fresh, candidates, nuevos, watchlist }, log);
-  const grupos = priorizarGrupos(agrupar(nuevos, { umbral: config.umbralAgrupacion }));
+  const plan = planQueue(prepareQueueCaptures(nuevos.map((event) => ({ event, publisher: publisherForEvent(event) })), now.toISOString()),
+    { now, limit: nuevos.length, capacity: config.maxScoringPerCycle, groupThreshold: config.umbralAgrupacion, watchlist });
+  const grupos = plan.map((item) => item.group);
   const budget = grupos.slice(0, config.maxScoringPerCycle);
-  log("SCORING_LIMIT", { stage: "scoring", count: budget.length, discarded: grupos.length - budget.length });
+  log("SCORING_LIMIT", { stage: "scoring", count: budget.length, pending: grupos.length - budget.length });
 
   if (process.argv.includes("--detalle")) {
     // Nunca volcamos títulos/URLs en un log público de Actions.
@@ -84,7 +87,7 @@ async function main(): Promise<void> {
     });
     await mkdir(".cache", { recursive: true });
     await writeFile(".cache/auditoria-filtros.json", JSON.stringify({
-      fecha: now.toISOString(), alcance: "RSS actual; no ejecuta modelos ni envíos; el cupo real también lo comparten macro, filings y precios",
+      fecha: now.toISOString(), alcance: "Simulación del RSS actual contra eventos procesados. No incluye backlog persistente ni antigüedad real: audit:queue muestra esa cola. No ejecuta modelos ni envíos; el cupo real también lo comparten macro, filings y precios",
       deduplicacionConsultada: Boolean(config.databaseUrl), maxAgeHours: config.maxItemAgeHours,
       alertThreshold: config.alertThreshold, maxScoringPerCycle: config.maxScoringPerCycle, failures, eventos: detalle,
     }, null, 2), "utf8");

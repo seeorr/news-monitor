@@ -6,10 +6,14 @@
  */
 import { FEEDS } from "../sources/rss.ts";
 import { RULE_REASON_CODES } from "../pipeline/rules.ts";
+import { QUEUE_REASONS } from "../pipeline/queue.ts";
+
+const PRIORITIES = ["macro_release", "watchlist", "material_news", "news", "routine_official"] as const;
+const PUBLISHERS = [...new Set(Object.values(FEEDS).map((feed) => feed.publisher)), "fred", "eurostat", "sec", "yahoo", "yahoo-market", "rss-unknown", "coingecko"];
 
 const CODES = [
   "CYCLE_START", "CONFIG_MISSING", "STATE_OPEN", "WATCHLIST_EMPTY",
-  "WATCHLIST_FAILED", "FEED_UNKNOWN", "SEC_CONTACT_MISSING", "SEC_UNKNOWN",
+  "WATCHLIST_FAILED", "FEED_UNKNOWN", "FEED_DISABLED", "SEC_CONTACT_MISSING", "SEC_UNKNOWN",
   "SOURCE_OK", "SOURCE_FAILED", "FEED_NORMALIZED", "FEED_FUNNEL", "RULE_REASON",
   "AUDIT_COMPLETE", "NO_SOURCES", "SOURCES_PARTIAL", "FRESHNESS",
   "RULES", "DEDUPE", "GROUPED", "SCORING_UNAVAILABLE", "SCORING_LIMIT",
@@ -28,13 +32,15 @@ const CODES = [
   // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
   // diagnosticar.
   "GROUP_SENT", "GROUP_REJECTED", "GROUP_FAILED",
-  "UNHANDLED", "LOG_SUPPRESSED",
+  "QUEUE_CAPTURE", "QUEUE_STATS", "QUEUE_DISCARDED", "QUEUE_PLAN", "QUEUE_RETRY",
+  "QUEUE_DELIVERY_PENDING", "SEC_COVERAGE", "CAPTURE_ONLY", "UNHANDLED", "LOG_SUPPRESSED",
 ] as const;
 const SOURCES = ["fred", "eurostat", "rss", "sec-edgar", "yahoo", "coingecko", "neon", "file"] as const;
 const STAGES = ["startup", "watchlist", "collect", "freshness", "rules", "dedupe",
   "group", "scoring", "analysis", "format", "telegram", "persist", "cycle"] as const;
 const COUNTS = ["count", "total", "discarded", "ok", "failed", "deep", "sent", "index", "attempt",
-  "fresh", "passed", "new", "seen"] as const;
+  "fresh", "passed", "new", "seen", "captured", "unique", "pending", "processed",
+  "scored", "retryable", "processing", "oldestHours", "deliveryPending", "points", "agePoints"] as const;
 // Solo ids de fuentes públicas. Nunca series_id libre (puede ser un ticker).
 const FEED_IDS = Object.keys(FEEDS);
 const CONFIG_VARS = ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN",
@@ -48,6 +54,9 @@ export interface LogFields extends Partial<Record<typeof COUNTS[number], number>
   variable?: typeof CONFIG_VARS[number];
   feed?: string;
   reason?: typeof RULE_REASON_CODES[number];
+  queueReason?: typeof QUEUE_REASONS[number];
+  priority?: typeof PRIORITIES[number];
+  publisher?: string;
   importance?: number;
   impact?: number;
   /** Nunca se serializa: solo se examinan códigos públicos concretos. */
@@ -82,6 +91,10 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
       if (typeof stage === "string" && STAGES.some((s) => s === stage)) record.stage = stage;
       if (typeof feed === "string" && FEED_IDS.includes(feed)) record.feed = feed;
       if (typeof reason === "string" && RULE_REASON_CODES.some((r) => r === reason)) record.reason = reason;
+      for (const [field, allowed] of [["queueReason", QUEUE_REASONS], ["priority", PRIORITIES], ["publisher", PUBLISHERS]] as const) {
+        const value = dato(fields, field);
+        if (typeof value === "string" && allowed.some((item) => item === value)) record[field] = value;
+      }
       for (const key of ["importance", "impact"] as const) {
         const value = dato(fields, key);
         if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 10) record[key] = value;
@@ -107,7 +120,8 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
             // codigos, "no responde" y "responde y no trae nada" se leerian
             // igual en el log, y es justo la diferencia que hay que ver.
             "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
-            "EUROSTAT_SHAPE", "FEED_INVALID"].includes(errorCode)) {
+            "EUROSTAT_SHAPE", "FEED_INVALID", "SOURCE_TIMEOUT", "COLLECTION_TIMEOUT", "SEC_SHAPE",
+            "SEC_COVERAGE_LIMIT", "SEC_ARCHIVE_FAILED", "AI_BUDGET_EXHAUSTED"].includes(errorCode)) {
           record.error = errorCode;
         } else {
           // El SDK envuelve los errores de Zod en un Error sin código ni status.

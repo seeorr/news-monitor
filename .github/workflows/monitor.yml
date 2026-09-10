@@ -49,6 +49,7 @@
 # `workflow_dispatch` —cron-job.org, Cloudflare Workers Cron, el cron de Vercel—
 # y no fingir que el planificador de Actions es ese disparador.
 name: Monitor
+run-name: Monitor (${{ inputs.mode || vars.MONITOR_MODE || 'full' }})
 
 on:
   schedule:
@@ -57,6 +58,12 @@ on:
     - cron: "7 * * * *"
     - cron: "37 * * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Modo del ciclo; vacío respeta MONITOR_MODE del repositorio"
+        type: choice
+        options: ["", "full", "capture-only", "process-only"]
+        default: ""
 
 # Un ciclo cada vez. Dos ejecuciones solapadas leerian la misma observacion y
 # competirian por escribirla; la base lo aguanta, pero no hay nada que ganar.
@@ -67,6 +74,8 @@ concurrency:
 jobs:
   ciclo:
     runs-on: ubuntu-latest
+    env:
+      MONITOR_MODE: ${{ inputs.mode || vars.MONITOR_MODE || 'full' }}
     # Una vuelta son ~40 s. Diez minutos es margen de sobra para una fuente lenta,
     # y el tope existe para que un `fetch` colgado no ocupe el grupo sin avanzar.
     timeout-minutes: 10
@@ -108,6 +117,28 @@ jobs:
           MAX_ITEM_AGE_HOURS: ${{ vars.MAX_ITEM_AGE_HOURS }}
           GROUP_THRESHOLD: ${{ vars.GROUP_THRESHOLD }}
           RSS_FEEDS: ${{ vars.RSS_FEEDS }}
+          RSS_FEED_BATCHES: ${{ vars.RSS_FEED_BATCHES }}
+          SOURCE_CONCURRENCY: ${{ vars.SOURCE_CONCURRENCY }}
+          SOURCE_TIMEOUT_MS: ${{ vars.SOURCE_TIMEOUT_MS }}
+          COLLECTION_TIMEOUT_MS: ${{ vars.COLLECTION_TIMEOUT_MS }}
+          EDGAR_MAX_FILINGS: ${{ vars.EDGAR_MAX_FILINGS }}
+          QUEUE_SCAN_LIMIT: ${{ vars.QUEUE_SCAN_LIMIT }}
+          PROCESSING_LEASE_MS: ${{ vars.PROCESSING_LEASE_MS }}
+          NEWS_DELIVERY_MODE: ${{ vars.NEWS_DELIVERY_MODE }}
+          BRIEF_NEWS_THRESHOLD: ${{ vars.BRIEF_NEWS_THRESHOLD }}
+          WATCHLIST_IMPORTANT_THRESHOLD: ${{ vars.WATCHLIST_IMPORTANT_THRESHOLD }}
+          BRIEF_NEWS_PER_HOUR: ${{ vars.BRIEF_NEWS_PER_HOUR }}
+          BRIEF_NEWS_PER_DAY: ${{ vars.BRIEF_NEWS_PER_DAY }}
+          IMPORTANT_NEWS_PER_HOUR: ${{ vars.IMPORTANT_NEWS_PER_HOUR }}
+          IMPORTANT_NEWS_PER_DAY: ${{ vars.IMPORTANT_NEWS_PER_DAY }}
+          BRIEF_BATCH_SIZE: ${{ vars.BRIEF_BATCH_SIZE }}
+          BRIEF_INTERVAL_MINUTES: ${{ vars.BRIEF_INTERVAL_MINUTES }}
+          MAX_PENDING_HOURS: ${{ vars.MAX_PENDING_HOURS }}
+          AI_CALLS_PER_DAY: ${{ vars.AI_CALLS_PER_DAY }}
+          AI_SCORING_INPUT_USD_PER_MILLION: ${{ vars.AI_SCORING_INPUT_USD_PER_MILLION }}
+          AI_SCORING_OUTPUT_USD_PER_MILLION: ${{ vars.AI_SCORING_OUTPUT_USD_PER_MILLION }}
+          AI_ANALYSIS_INPUT_USD_PER_MILLION: ${{ vars.AI_ANALYSIS_INPUT_USD_PER_MILLION }}
+          AI_ANALYSIS_OUTPUT_USD_PER_MILLION: ${{ vars.AI_ANALYSIS_OUTPUT_USD_PER_MILLION }}
 
       # Un monitor que se cae en silencio es peor que no tener monitor: crees
       # que no pasa nada en los mercados cuando lo que pasa es que no corre.
@@ -116,7 +147,7 @@ jobs:
       # concurrencia, una ejecucion pendiente a la que otra sustituye acaba
       # CANCELADA, y avisar de eso serian avisos falsos todos los dias.
       - name: Avisar del fallo por Telegram
-        if: failure()
+        if: ${{ failure() && env.MONITOR_MODE != 'capture-only' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

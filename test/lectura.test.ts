@@ -72,7 +72,7 @@ describe("listado de eventos", () => {
     await listarEventos(ejecutor, { kinds: ["news"], sources: ["rss"], sentimiento: "bullish" });
 
     const { sql, valores } = consultas[0]!;
-    expect(sql).not.toContain("news");
+    expect(sql).not.toContain("'news'"); // news_decisions es un identificador SQL, no el filtro interpolado.
     expect(sql).not.toContain("bullish");
     expect(valores).toContainEqual(["news"]);
     expect(valores).toContainEqual(["rss"]);

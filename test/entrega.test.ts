@@ -18,11 +18,12 @@ import type { Config } from "../src/config.ts";
 import type { Ejecutor } from "../src/db/cliente.ts";
 import type { Vigilado } from "../src/db/watchlist.ts";
 import { memorySeenStore } from "../src/pipeline/seen.ts";
+import { memoryQueueStore } from "../src/pipeline/queue.ts";
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
   filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), eurostat: vi.fn(),
-  score: vi.fn(), analyze: vi.fn(), send: vi.fn(), store: vi.fn(),
+  score: vi.fn(), analyze: vi.fn(), send: vi.fn(), store: vi.fn(), queue: vi.fn(),
 }));
 vi.mock("../src/config.ts", async (original) => ({
   ...await original<typeof import("../src/config.ts")>(),
@@ -54,6 +55,10 @@ vi.mock("../src/notify/telegram.ts", async (original) => ({
 vi.mock("../src/db/neon.ts", async (original) => ({
   ...await original<typeof import("../src/db/neon.ts")>(), neonSeenStore: mocks.store,
 }));
+vi.mock("../src/db/queue.ts", () => ({ neonQueueStore: mocks.queue }));
+vi.mock("../src/pipeline/queue.ts", async (original) => ({
+  ...await original<typeof import("../src/pipeline/queue.ts")>(), fileQueueStore: mocks.queue,
+}));
 
 const vigilado: Vigilado = {
   ticker: "ACME", nombre: "Acme Ejemplo", cik: null, quoteSymbol: "ACME",
@@ -77,6 +82,7 @@ const config = (): Config => ({
  */
 function estadoCompartido() {
   const memoria = memorySeenStore();
+  const cola = memoryQueueStore();
   const store = {
     ...memoria,
     mark: vi.fn(memoria.mark),
@@ -85,11 +91,13 @@ function estadoCompartido() {
     claimAlert: vi.fn(memoria.claimAlert),
   };
   mocks.store.mockReturnValue(store);
-  return { memoria, store };
+  mocks.queue.mockReturnValue(cola);
+  return { memoria, store, cola };
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("MONITOR_MODE", "full");
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Red no autorizada en entrega.test"); }));
   mocks.config.mockReturnValue(config());
   mocks.watchlist.mockResolvedValue([vigilado]);
@@ -108,25 +116,29 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 /** Una vuelta entera del ciclo, con `src/main.ts` de verdad. */
 async function vuelta(flags: string[] = []) {
   vi.resetModules();
+  const networkCallsBefore = vi.mocked(fetch).mock.calls.length;
   const salida: string[] = [];
   const log = vi.spyOn(console, "log").mockImplementation((...a) => salida.push(a.map(String).join(" ")));
   const argv = vi.spyOn(process, "argv", "get").mockReturnValue(["node", "main.ts", ...flags]);
   const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   await import("../src/main.ts");
   await vi.waitFor(() => expect(exit).toHaveBeenCalledTimes(1));
+  expect(fetch).toHaveBeenCalledTimes(networkCallsBefore);
   const codigo = exit.mock.calls[0]?.[0];
   for (const espia of [log, argv, exit]) espia.mockRestore();
-  return { codigos: salida.map((l) => String(JSON.parse(l).code)), codigo };
+  const records = salida.map((line) => JSON.parse(line) as Record<string, unknown>);
+  return { codigos: records.map((record) => String(record.code)), codigo, records };
 }
 
 describe("el proceso muere y la vuelta siguiente no reenvía", () => {
   it("muere entre el envío y el registro: la segunda vuelta no manda nada", async () => {
-    const { memoria, store } = estadoCompartido();
+    const { memoria, store, cola } = estadoCompartido();
     // El mensaje sale, y el proceso se cae antes de escribir nada de vuelta.
     store.saveAlert.mockRejectedValueOnce(new Error("el proceso se murió aquí"));
 
@@ -137,6 +149,7 @@ describe("el proceso muere y la vuelta siguiente no reenvía", () => {
     // Ni entregada ni descartada: la entrega se queda en vuelo y nadie la libera.
     expect([...memoria.entregas.values()].map((e) => e.estado)).toEqual(["sending"]);
     expect(memoria.alerts).toHaveLength(0);
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
 
     const segunda = await vuelta();
     expect(mocks.send).toHaveBeenCalledTimes(1); // ← lo único que importa.
@@ -146,7 +159,7 @@ describe("el proceso muere y la vuelta siguiente no reenvía", () => {
   });
 
   it("muere justo después de reclamar, con el evento sin marcar: tampoco reenvía", async () => {
-    const { memoria, store } = estadoCompartido();
+    const { memoria, store, cola } = estadoCompartido();
     // El peor caso: el reclamo ya está puesto y el registro de vistos no sabe
     // nada, así que la deduplicación no protege y el reclamo es lo único que hay.
     store.mark.mockRejectedValueOnce(new Error("el proceso se murió aquí"));
@@ -154,14 +167,17 @@ describe("el proceso muere y la vuelta siguiente no reenvía", () => {
     const primera = await vuelta();
     expect(mocks.send).not.toHaveBeenCalled();
     expect(primera.codigos).toContain("EVENT_FAILED");
+    // La puntuación queda guardada aunque falle la proyección en events.
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
 
     const segunda = await vuelta();
-    expect(mocks.score).toHaveBeenCalledTimes(2); // El evento vuelve entero...
-    expect(segunda.codigos).toContain("ALERT_BLOCKED"); // ...y choca con el reclamo.
+    expect(mocks.score).toHaveBeenCalledTimes(1); // Se reutiliza la puntuación persistente.
+    expect(segunda.codigos).toContain("ALERT_BLOCKED"); // La entrega choca con el reclamo previo.
     expect(mocks.send).not.toHaveBeenCalled();
     expect(segunda.codigo).toBe(1);
     // Y en esta segunda vuelta sí se marca, para no repuntuarlo cada media hora.
-    expect(await memoria.has(mocks.score.mock.calls[1]![0].id)).toBe(true);
+    expect(await memoria.has(mocks.score.mock.calls[0]![0].id)).toBe(true);
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
   });
 
   it("un envío incierto no se reintenta solo, y se dice que es incierto", async () => {
@@ -230,6 +246,123 @@ describe("el proceso muere y la vuelta siguiente no reenvía", () => {
     expect(store.mark).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
     expect(memoria.entregas.size).toBe(0);
+  });
+
+  it("reanuda una entrega pendiente desde la cola sin recapturar ni repuntuar", async () => {
+    const { memoria, cola } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), telegramBotToken: null });
+    const primera = await vuelta();
+    expect(primera.codigos).toContain("TELEGRAM_MISSING");
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
+    const captures = mocks.quote.mock.calls.length;
+
+    mocks.config.mockReturnValue(config());
+    const segunda = await vuelta(["--process-only"]);
+    expect(segunda.codigos).toContain("ALERT_SENT");
+    expect(mocks.quote).toHaveBeenCalledTimes(captures);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
+    expect([...memoria.entregas.values()].map((entry) => entry.estado)).toEqual(["sent"]);
+
+    await vuelta(["--process-only"]);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("entrega lo ya puntuado antes de intentar un nuevo scoring que falla", async () => {
+    const { cola } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), telegramBotToken: null });
+    await vuelta();
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+
+    mocks.config.mockReturnValue(config());
+    mocks.quote.mockResolvedValue({ symbol: "ACME", currency: "USD", price: 112,
+      previousClose: 100, sessionDate: "2030-01-02T15:00:00Z" });
+    mocks.score.mockRejectedValueOnce(new Error("nuevo scoring temporalmente indisponible"));
+    const second = await vuelta();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.score).toHaveBeenCalledTimes(2);
+    expect(mocks.send.mock.invocationCallOrder[0]!).toBeLessThan(mocks.score.mock.invocationCallOrder[1]!);
+    expect(second.codigos).toContain("ALERT_SENT");
+    expect(second.codigos).toContain("EVENT_FAILED");
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
+    expect((await cola.stats()).reduce((sum, row) => sum + row.retryable_failed, 0)).toBe(1);
+  });
+
+  it("sin API key entrega una puntuación guardada como alerta corta sin otro modelo", async () => {
+    const { cola, memoria } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), telegramBotToken: null });
+    await vuelta();
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.analyze).not.toHaveBeenCalled();
+    const captureCount = mocks.quote.mock.calls.length;
+
+    mocks.config.mockReturnValue({ ...config(), anthropicApiKey: null });
+    const second = await vuelta(["--process-only"]);
+    expect(second.codigos).toContain("SCORING_UNAVAILABLE");
+    expect(second.codigos).toContain("ALERT_SENT");
+    expect(mocks.quote).toHaveBeenCalledTimes(captureCount);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.analyze).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0]?.[2]).toContain("Sube con fuerza.");
+    expect(memoria.alerts[0]?.deep).toBe(false);
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
+  });
+
+  it("recuperar sent tras fallar completeDelivery termina en verde y no vuelve a enviar ni analizar", async () => {
+    const { cola, memoria } = estadoCompartido();
+    vi.spyOn(cola, "completeDelivery").mockRejectedValueOnce(new Error("fallo al cerrar la cola"));
+    const first = await vuelta();
+    expect(first.codigo).toBe(1);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.analyze).toHaveBeenCalledTimes(1);
+    expect([...memoria.entregas.values()].map((entry) => entry.estado)).toEqual(["sent"]);
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
+
+    const second = await vuelta();
+    expect(second.codigo).toBe(0);
+    expect(second.records.find((record) => record.code === "CYCLE_END")?.failed).toBe(0);
+    expect(second.codigos).not.toContain("EVENT_FAILED");
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.analyze).toHaveBeenCalledTimes(1);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(await cola.listDeliveryPending()).toHaveLength(0);
+  });
+
+  it.each(["flag", "environment"])("capture-only mediante %s guarda sin modelos, reclamos ni Telegram", async (via) => {
+    const { cola, store } = estadoCompartido();
+    if (via === "environment") vi.stubEnv("MONITOR_MODE", "capture-only");
+    const result = await vuelta(via === "flag" ? ["--capture-only"] : []);
+    expect(result.codigo).toBe(0);
+    expect(result.codigos).toContain("CAPTURE_ONLY");
+    expect(await cola.listPending()).toHaveLength(1);
+    expect(mocks.score).not.toHaveBeenCalled();
+    expect(mocks.analyze).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(store.claimAlert).not.toHaveBeenCalled();
+    expect(store.mark).not.toHaveBeenCalled();
+  });
+
+  it("capture-only tampoco entrega resultados que ya estaban esperando en la cola", async () => {
+    const { cola, store } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), telegramBotToken: null });
+    await vuelta();
+    const pending = await cola.listDeliveryPending();
+    expect(pending).toHaveLength(1);
+    const marks = store.mark.mock.calls.length;
+    mocks.config.mockReturnValue(config());
+    await vuelta(["--capture-only"]);
+    expect(mocks.score).toHaveBeenCalledTimes(1);
+    expect(mocks.analyze).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(store.claimAlert).not.toHaveBeenCalled();
+    expect(store.mark).toHaveBeenCalledTimes(marks);
+    expect((await cola.listDeliveryPending()).map((entry) => entry.id)).toEqual(pending.map((entry) => entry.id));
   });
 });
 

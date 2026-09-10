@@ -51,6 +51,12 @@ export const NormalizedEvent = z.object({
   observed_at: z.string(),
   /** Cuándo lo obtuvimos nosotros. */
   retrieved_at: z.string(),
+  /** Fecha de publicación original, null si el feed solo ofrece actualización. */
+  publication_at: z.string().nullable().optional(),
+  /** Periodo de la observación macro, no su fecha de publicación. */
+  data_period_at: z.string().nullable().optional(),
+  /** Primera captura inmutable de la cola; no se renueva al reintentar. */
+  first_captured_at: z.string().optional(),
 
   actual: z.number().nullable(),
   previous: z.number().nullable(),
@@ -73,7 +79,7 @@ export const NormalizedEvent = z.object({
 
   /** El dato es el último válido conocido, no uno fresco. La alerta debe decirlo. */
   stale: z.boolean(),
-  /** Fuente oficial (Fed, BLS, SEC, BCE). Pasa el filtro por reglas siempre. */
+  /** Fuente oficial (Fed, BLS, SEC, BCE). Atribución primaria, no pase automático. */
   official: z.boolean(),
 });
 export type NormalizedEvent = z.infer<typeof NormalizedEvent>;

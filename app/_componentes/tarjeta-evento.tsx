@@ -73,6 +73,10 @@ function Detalle({ evento }: { evento: FilaEvento }) {
   return (
     <div className="border-t border-linea px-4 py-3.5">
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-secundario">
+        {evento.news_level ? <>
+          <dt className="text-txt-3">Nivel asignado</dt>
+          <dd>{{important: "Importante", brief: "Aviso breve", digest: "Resumen", dashboard: "Dashboard", none: "Sin aviso"}[evento.news_level] ?? "Sin clasificar"}</dd>
+        </> : null}
         <dt className="text-txt-3">Fecha del dato</dt>
         <dd className="cifra">{observado(evento.observed_at)}</dd>
         <dt className="text-txt-3">Visto</dt>

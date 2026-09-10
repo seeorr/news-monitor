@@ -16,7 +16,7 @@ import {
   fetchSerie as fetchEurostat,
   toEvent as eurostatEvent,
 } from "../sources/eurostat.ts";
-import { FEEDS, fetchFeed, toEvents as feedEvents } from "../sources/rss.ts";
+import { FEEDS, fetchFeed, selectFeeds, toEvents as feedEvents } from "../sources/rss.ts";
 import { fetchCotizacion, toEvent as movimientoEvent } from "../sources/mercado.ts";
 import {
   fetchFilings,
@@ -25,6 +25,8 @@ import {
   type Company,
 } from "../sources/sec-edgar.ts";
 import { createLogger, type Logger } from "../lib/log.ts";
+import { DeadlineError, mapConcurrent, positiveInteger, withDeadline } from "../lib/concurrency.ts";
+import { withRequestSignal } from "../lib/http.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
 export interface SourceFailure {
@@ -48,7 +50,22 @@ interface Task {
   run: () => Promise<NormalizedEvent[]>;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export interface CollectedSource {
+  source: Task["source"];
+  feed?: string;
+  /** Ordinal público; no contiene ticker ni contacto. */
+  index: number;
+  /** Se entrega al filtro interno, nunca al logger público. */
+  vigilados: Vigilado[];
+}
+
+export interface CollectOptions {
+  retrievedAt: string;
+  log?: (line: string) => void;
+  logger?: Logger;
+  /** Escritura temprana, serializada. Un fallo aquí aborta el ciclo y se propaga. */
+  onCollected?: (events: NormalizedEvent[], source: CollectedSource) => Promise<void>;
+}
 
 /**
  * La watchlist que manda.
@@ -83,12 +100,34 @@ async function cargarWatchlist(
 
 export async function collectEvents(
   config: Config,
-  opts: { retrievedAt: string; log?: (line: string) => void; logger?: Logger },
+  opts: CollectOptions,
+): Promise<Collected> {
+  const sourceTimeout = positiveInteger(config.sourceTimeoutMs, 45_000, 120_000);
+  const collection = new AbortController();
+  const globalTimer = setTimeout(() => collection.abort(new DeadlineError("COLLECTION_TIMEOUT")),
+    positiveInteger(config.collectionTimeoutMs, 180_000, 600_000));
+  try {
+    return await collectWithinBudget(config, opts, collection, sourceTimeout);
+  } finally {
+    clearTimeout(globalTimer);
+  }
+}
+
+async function collectWithinBudget(
+  config: Config,
+  opts: CollectOptions,
+  collection: AbortController,
+  sourceTimeout: number,
 ): Promise<Collected> {
   const log = opts.logger ?? createLogger(opts.log ?? (() => {}));
   const retrievedAt = opts.retrievedAt;
-  // Protegido incluso si Neon falla antes de devolver la lista.
-  const vigilados = await cargarWatchlist(config, log);
+  // Un Neon sin respuesta no puede consumir todo el tiempo de captura. Si la
+  // consulta no admite señal, el deadline permite continuar con el respaldo.
+  const vigilados = await withDeadline(() => cargarWatchlist(config, log), sourceTimeout, collection.signal)
+    .catch((err) => {
+      log("WATCHLIST_FAILED", { stage: "watchlist", source: "neon", error: err });
+      return desdeEntorno(config.watchlist, config.secWatchlist);
+    });
   const tasks: Task[] = [];
 
   // ── FRED ───────────────────────────────────────────────────────────────────
@@ -126,11 +165,15 @@ export async function collectEvents(
   }
 
   // ── Feeds ──────────────────────────────────────────────────────────────────
-  const elegidos = config.feeds.length > 0 ? config.feeds : Object.keys(FEEDS);
+  const elegidos = config.feeds.length > 0 ? config.feeds : selectFeeds(config.rssFeedBatches).map((feed) => feed.id);
   for (const id of elegidos) {
     const spec = FEEDS[id];
     if (!spec) {
       log("FEED_UNKNOWN", { stage: "collect", source: "rss", count: 1 });
+      continue;
+    }
+    if (spec.enabled === false) {
+      log("FEED_DISABLED", { stage: "collect", source: "rss", feed: spec.id, count: 1 });
       continue;
     }
     tasks.push({
@@ -152,26 +195,36 @@ export async function collectEvents(
   // contacto la SEC responde 403, y sin watchlist no hay a quién vigilar.
   const conFilings = vigilados.filter((v) => v.vigilarFilings);
   if (conFilings.length > 0 && config.secUserAgent) {
-    tasks.push({
-      name: "sec-edgar",
-      source: "sec-edgar",
-      run: async () => {
-        const ua = config.secUserAgent!;
-        const companies = await resolverEmpresas(conFilings, ua, log);
-        const eventos: NormalizedEvent[] = [];
-        for (const company of companies) {
-          const filings = await fetchFilings(company, ua);
-          eventos.push(
-            ...filingEvents(filings, company, {
-              retrievedAt,
-              forms: config.edgarForms.length > 0 ? config.edgarForms : undefined,
-            }),
-          );
-          await sleep(150); // La SEC pide como mucho 10 peticiones por segundo.
-        }
-        return eventos;
-      },
-    });
+    for (const [i, vigilado] of conFilings.entries()) {
+      tasks.push({
+        name: `sec-edgar:#${i + 1}`,
+        source: "sec-edgar",
+        run: async () => {
+          const ua = config.secUserAgent!;
+          let company: Company | undefined = vigilado.cik
+            ? { cik: vigilado.cik, ticker: vigilado.ticker, name: vigilado.nombre } : undefined;
+          if (!company) {
+            // El mapa se comparte en memoria; si falla no afecta a empresas con
+            // CIK propio, y cada empresa conserva su propio resultado y diagnóstico.
+            const resolved = await resolveTickers([vigilado.ticker], ua);
+            company = resolved.companies[0];
+            if (resolved.unknown.length > 0) log("SEC_UNKNOWN", { stage: "collect", source: "sec-edgar", count: resolved.unknown.length });
+          }
+          if (!company) return [];
+          const forms = config.edgarForms.length > 0 ? config.edgarForms : undefined;
+          const filings = await fetchFilings(company, ua, {
+            forms,
+            count: config.edgarMaxFilings,
+            since: new Date(Date.parse(retrievedAt) - config.maxItemAgeHours * 3600_000).toISOString(),
+            onCoverage: (coverage) => {
+              if (coverage.truncated) log("SEC_COVERAGE", { stage: "collect", source: "sec-edgar",
+                total: coverage.total, count: coverage.returned, failed: coverage.archiveFailures });
+            },
+          });
+          return filingEvents(filings, company, { retrievedAt, forms });
+        },
+      });
+    }
   } else if (conFilings.length > 0) {
     log("SEC_CONTACT_MISSING", { stage: "collect", source: "sec-edgar" });
   }
@@ -203,47 +256,36 @@ export async function collectEvents(
   const events: NormalizedEvent[] = [];
   const failures: SourceFailure[] = [];
   let ok = 0;
+  let persistence: Promise<void> = Promise.resolve();
+  let persistenceFailed = false;
+  let persistenceError: unknown;
 
-  for (const [index, task] of tasks.entries()) {
+  await mapConcurrent(tasks, positiveInteger(config.sourceConcurrency, 3, 16), async (task, index) => {
+    let nuevos: NormalizedEvent[];
     try {
-      const nuevos = await task.run();
-      events.push(...nuevos);
-      ok++;
-      log("SOURCE_OK", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, count: nuevos.length });
+      nuevos = await withDeadline((signal) => withRequestSignal(signal, task.run), sourceTimeout, collection.signal);
     } catch (err) {
+      if (persistenceFailed) throw persistenceError;
       // Tampoco devolver mensajes crudos que otro consumidor pudiera imprimir.
-      failures.push({ source: task.name, detail: "SOURCE_FAILED" });
+      failures.push({ source: task.name, detail: err instanceof DeadlineError ? err.code : "SOURCE_FAILED" });
       log("SOURCE_FAILED", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, error: err });
+      return;
     }
-  }
+    // Fuera del catch de fuente: si la base falla, no decir «RSS caído» ni
+    // devolver éxito con candidatas sin guardar. No hay dos escrituras de lote
+    // simultáneas, también cuando el respaldo es un fichero JSON.
+    const write = persistence.then(async () => {
+      await opts.onCollected?.(nuevos, { source: task.source, feed: task.feed, index: index + 1, vigilados });
+    });
+    persistence = write;
+    try { await write; }
+    catch (err) { persistenceFailed = true; persistenceError = err; collection.abort(err); throw err; }
+    events.push(...nuevos);
+    ok++;
+    log("SOURCE_OK", { stage: "collect", source: task.source, feed: task.feed, index: index + 1, count: nuevos.length });
+  });
 
   return { events, failures, ok, vigilados };
-}
-
-/**
- * Empresas listas para EDGAR.
- *
- * El CIK guardado en la watchlist se usa tal cual; solo se pregunta a la SEC por
- * los que no lo tienen. Así una lista ya resuelta no descarga el mapa completo
- * de tickers en cada ciclo.
- */
-async function resolverEmpresas(
-  vigilados: Vigilado[],
-  userAgent: string,
-  log: Logger,
-): Promise<Company[]> {
-  const listas: Company[] = vigilados
-    .filter((v) => v.cik)
-    .map((v) => ({ cik: v.cik!, ticker: v.ticker, name: v.nombre }));
-
-  const pendientes = vigilados.filter((v) => !v.cik).map((v) => v.ticker);
-  if (pendientes.length === 0) return listas;
-
-  const { companies, unknown } = await resolveTickers(pendientes, userAgent);
-  if (unknown.length > 0) {
-    log("SEC_UNKNOWN", { stage: "collect", source: "sec-edgar", count: unknown.length });
-  }
-  return [...listas, ...companies];
 }
 
 /**

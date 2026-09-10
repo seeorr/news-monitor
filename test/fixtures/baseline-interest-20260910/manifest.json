@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-09-10T12:52:41.374Z",
+  "source": "pre-interest-change snapshot",
+  "files": [
+    {
+      "name": "rules",
+      "originalSha256": "0ceb52228920b665e879236d7c963a2d56bdd52fe8b0e4be2ca6b2aa2bcd2eb8"
+    },
+    {
+      "name": "agrupar",
+      "originalSha256": "a51e058cc4ba28de682d4d3013a66f0829fe80730e14e9f611e12cf8db11fc54"
+    }
+  ]
+}

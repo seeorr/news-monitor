@@ -71,6 +71,26 @@ export function similitud(a: Set<string>, b: Set<string>): number {
   return comunes / (a.size + b.size - comunes);
 }
 
+/** Mismo criterio para grupos visibles y copias que llegan en otra captura. */
+export function sameStory(a: NormalizedEvent, b: NormalizedEvent, threshold = UMBRAL_DEFECTO): boolean {
+  return a.kind === "news" && b.kind === "news" && compatibles(a, b) &&
+    similitud(firma(a.title), firma(b.title)) >= threshold;
+}
+
+/** Relación conservadora: mismo sujeto explícito y tema, pero un hecho cambió.
+ * No confunde esta relación con equivalencia ni impide puntuar la actualización. */
+export function relatedUpdate(a: NormalizedEvent, b: NormalizedEvent): boolean {
+  const subject = storySubject(a.title);
+  return a.kind === "news" && b.kind === "news" && Boolean(subject) && subject === storySubject(b.title) &&
+    !sameStory(a, b) && Math.abs(Date.parse(a.publication_at ?? a.observed_at) - Date.parse(b.publication_at ?? b.observed_at)) <= 24 * 3600_000 &&
+    similitud(firma(a.title), firma(b.title)) >= 0.5;
+}
+export function storySubject(title: string): string | null {
+  return title.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "")
+    .match(/^(.{2,65}?)\s+(?:acquires?|buys?|sells?|raises?|cuts?|reports?|signs?|wins?|files?|denies|announces?|adquiere|compra|vende|eleva|recorta|publica|firma|gana|presenta|niega|anuncia)\b/u)?.[1]
+    ?.replace(/^the\s+/, "").replace(/federal reserve/g, "fed").trim() ?? null;
+}
+
 /**
  * Agrupa noticias que cuentan lo mismo.
  *
@@ -93,7 +113,7 @@ export function agrupar(events: NormalizedEvent[], opts: { umbral?: number } = {
     }
 
     const f = firma(event.title);
-    const grupo = grupos.find((g) => g.firma.size > 0 && similitud(g.firma, f) >= umbral);
+    const grupo = grupos.find((g) => g.firma.size > 0 && compatibles(g.representante, event) && similitud(g.firma, f) >= umbral);
 
     if (!grupo) {
       grupos.push({ representante: event, firma: f, duplicados: [] });
@@ -110,6 +130,36 @@ export function agrupar(events: NormalizedEvent[], opts: { umbral?: number } = {
   }
 
   return grupos.map(({ representante, duplicados }) => ({ representante, duplicados }));
+}
+
+/** Dos publicaciones periódicas con el mismo título no son una noticia.
+ * Tampoco lo son un recorte de 25 y otro de 50 puntos con la misma prosa. */
+function compatibles(a: NormalizedEvent, b: NormalizedEvent): boolean {
+  const left = traits(a), right = traits(b);
+  return left.negation === right.negation &&
+    (!left.subject || !right.subject || left.subject === right.subject) &&
+    (!Number.isFinite(left.time) || !Number.isFinite(right.time) || Math.abs(left.time - right.time) <= 24 * 3600_000) &&
+    left.period === right.period && left.numbers === right.numbers;
+}
+
+// El agrupador compara muchos pares; cada regex se calcula una vez por snapshot.
+// Se comprueba el contenido para no devolver datos antiguos si un caller muta e.
+const traitCache = new WeakMap<NormalizedEvent, { title:string; summary:string|null; date:string; negation:boolean; subject:string|null; time:number; period:string; numbers:string }>();
+function traits(e: NormalizedEvent) {
+  const date = e.publication_at ?? e.observed_at;
+  const cached = traitCache.get(e);
+  if (cached && cached.title === e.title && cached.summary === e.summary && cached.date === date) return cached;
+  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  const negation = /\b(?:not|no|never|denies|denied|niega|sin|cancelled|cancela|rejected|rechaza)\b/u;
+  const period = (e: NormalizedEvent) => normalize(e.title).match(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|q[1-4])\b/gu)?.sort().join("|") ?? "";
+  const numbers = (e: NormalizedEvent) => {
+    const text = normalize(`${e.title} ${e.summary ?? ""}`).replace(/%/g, " percent ");
+    const values = [...text.matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0]);
+    const magnitudes = [...text.matchAll(/\b(?:million|billion|trillion|millones|billones|miles|basis points|puntos basicos|percent|por ciento)\b/g)].map((m) => m[0]);
+    return [...new Set(values)].sort().join("|") + ";" + [...new Set(magnitudes)].sort().join("|");
+  };
+  const value = {title:e.title,summary:e.summary,date,negation:negation.test(normalize(e.title)),subject:storySubject(e.title),time:Date.parse(date),period:period(e),numbers:numbers(e)};
+  traitCache.set(e,value); return value;
 }
 
 /** ¿Es `candidato` mejor portavoz de la historia que `actual`? */

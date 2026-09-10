@@ -60,15 +60,15 @@ describe("cobertura de las reglas sin ampliar el umbral de alerta", () => {
     expect(applyRules(noticia(title))).toMatchObject({ pass: false, reasonCode: "low_signal" });
   });
 
-  it("conserva la transcripción cuando pertenece a una empresa vigilada", () => {
+  it("la watchlist no convierte una transcripción en hecho nuevo", () => {
     expect(applyRules(noticia("Acme Q2 Earnings Call Transcript"), {
       watchlist: [{ ticker: "ACMX", nombre: "Acme Inc." }],
-    })).toMatchObject({ pass: true, reasonCode: "watchlist_name" });
+    })).toMatchObject({ pass: false, reasonCode: "low_signal" });
   });
 
-  it("una fuente oficial pasa incluso con un titular rutinario", () => {
+  it("una fuente oficial rutinaria también necesita un hecho nuevo", () => {
     expect(applyRules({ ...noticia("Fireside chat"), official: true }))
-      .toMatchObject({ pass: true, reasonCode: "official" });
+      .toMatchObject({ pass: false, reasonCode: "low_signal" });
   });
 });
 

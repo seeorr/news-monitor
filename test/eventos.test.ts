@@ -48,6 +48,15 @@ const puntuacion = {
 };
 
 describe("registro de un evento", () => {
+  it("proyecta la primera captura, sin confundirla con el periodo macro ni actualizarla en conflictos", async () => {
+    const { consultas, ejecutor } = espia();
+    const first = "2026-09-08T09:00:00.000Z";
+    await neonSeenStore(URL_FALSA, ejecutor).mark({ ...evento, first_captured_at: first }, puntuacion);
+    expect(consultas[0]?.sql).toContain("observed_at, retrieved_at, first_seen_at");
+    expect(consultas[0]?.valores).toContain(evento.observed_at);
+    expect(consultas[0]?.valores).toContain(first);
+    expect(consultas[0]?.sql.split("do update set")[1]).not.toContain("first_seen_at");
+  });
   // El fallo: con el umbral en 7 la mayoría de lo que se puntúa no se anuncia, y
   // su nota se perdía. Se pagaba Haiku y se tiraba el resultado.
   it("escribe la nota del paso 3 aunque el evento no llegue a alertar", async () => {

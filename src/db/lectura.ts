@@ -91,6 +91,8 @@ export interface FilaEvento {
    * sigue entera en `body`, que es lo que hay.
    */
   analysis: AnalisisProfundo | null;
+  /** Decisión de relevancia explícita; independiente del acuse de Telegram. */
+  news_level?: string | null;
 }
 
 export function cliente(databaseUrl: string): Ejecutor {
@@ -119,9 +121,11 @@ export async function loImportante(
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
       coalesce(e.sentiment, a.sentiment)                     as sentiment,
       e.one_liner,
-      a.sent_at, a.deep_analysis, a.body, a.analysis
+      a.sent_at, a.deep_analysis, a.body, a.analysis, nd.level as news_level
     from events e left join alerts a on a.event_id = e.id
+    left join news_decisions nd on nd.event_id = e.id
     where e.importance_score is not null
+      and (nd.event_id is null or (nd.decision->'eligible'->>'dashboard')::boolean)
     order by e.importance_score desc, e.first_seen_at desc
     limit ${techo(opts.limite, 10)}
   `) as FilaEvento[]);
@@ -177,9 +181,11 @@ export async function listarEventos(
       coalesce(e.market_impact_score, a.market_impact_score) as market_impact_score,
       coalesce(e.sentiment, a.sentiment)                     as sentiment,
       e.one_liner,
-      a.sent_at, a.deep_analysis, a.body, a.analysis
+      a.sent_at, a.deep_analysis, a.body, a.analysis, nd.level as news_level
     from events e left join alerts a on a.event_id = e.id
+    left join news_decisions nd on nd.event_id = e.id
     where (cardinality(${kinds}::text[]) = 0 or e.kind = any(${kinds}::text[]))
+      and (nd.event_id is null or (nd.decision->'eligible'->>'dashboard')::boolean)
       and (cardinality(${sources}::text[]) = 0 or e.source = any(${sources}::text[]))
       and (${filtros.soloOficiales ?? false}::boolean = false or e.official)
       and (${importanciaMin}::int is null or e.importance_score >= ${importanciaMin}::int)

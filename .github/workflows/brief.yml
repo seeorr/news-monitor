@@ -26,6 +26,8 @@ jobs:
   preparar:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      MONITOR_MODE: ${{ vars.MONITOR_MODE }}
     steps:
       # Se evalúa antes del checkout, de instalar paquetes o de leer secretos.
       # Nunca ejecuta código ni recoge artefactos del workflow que disparó este.
@@ -46,7 +48,10 @@ jobs:
           const now = new Date();
           const morning = now.getUTCDay() >= 1 && now.getUTCDay() <= 5 &&
             now.getUTCHours() >= 6 && now.getUTCHours() < 12;
-          const enabled = trusted && (trigger === 'workflow_dispatch' || morning);
+          // Capturar no debe disparar indirectamente agenda/resumen ni Telegram.
+          const captureOnly = process.env.MONITOR_MODE === 'capture-only' ||
+            (trigger === 'workflow_run' && run?.display_title === 'Monitor (capture-only)');
+          const enabled = trusted && !captureOnly && (trigger === 'workflow_dispatch' || morning);
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `enabled=${enabled}\n`);
           NODE
       - uses: actions/checkout@v5

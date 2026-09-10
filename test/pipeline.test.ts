@@ -91,7 +91,7 @@ describe("filtro por reglas", () => {
     const ruido = { ...base, official: false, source: "rss" as const, title: "Una empresa abre oficina" };
     const d = applyRules(ruido);
     expect(d.pass).toBe(false);
-    expect(d.reason).toContain("sin ticker");
+    expect(d.reason).toContain("no_concrete_economic_fact");
   });
 
   it("deja pasar una noticia que menciona un ticker de la watchlist", () => {

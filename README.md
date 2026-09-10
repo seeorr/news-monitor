@@ -13,21 +13,33 @@ contextualiza y explica**, y manda una alerta a Telegram. No es un agregador.
 
 ## Estado
 
-Bloques 1 a 4 completos. Cinco fuentes entran por el mismo contrato y el ciclo
-procesa N eventos por vuelta:
+La ampliación de captura está implementada y comprobada en local. Requiere
+aplicar la migración de cola antes de ejecutar esta versión contra Neon.
+**No está activada en producción.** Los ocho feeds anteriores siguen siendo la
+selección predeterminada; las nuevas fuentes se habilitan por tandas.
+
+La política de **dos niveles de noticias** también está implementada en local:
+avisos breves, importantes con contexto, decisiones persistentes y cuotas
+separadas. Requiere además `20260910_news_control.sql` antes de desplegar monitor,
+dashboard o resumen. Ver [evaluación, configuración y procedimientos](docs/dos-niveles-noticias.md).
+
+Entrega y procedimientos: [cola, pruebas y capacidad](docs/captura-persistente.md),
+[fuentes y condiciones](docs/fuentes-cobertura.md),
+[cadencia y disparador externo](docs/disparador-externo.md).
 
 ```
 FRED (series)    ─┐
 Eurostat         ─┤
 feeds RSS/Atom   ─┤
-SEC EDGAR        ─┼→ evento normalizado → frescura → reglas → dedupe → agrupacion
-precios (Yahoo)  ─┘                                                        │
-                                                                           ▼
-                                                            scoring (Haiku, con techo)
-                                                                           │
-                              Telegram ← formato ← analisis (Opus, solo si importa)
-                                                                           │
-                                                                     Neon Postgres
+SEC EDGAR        ─┼→ evento normalizado → cola persistente (también descartes con motivo)
+precios (Yahoo)  ─┘                           │
+                                 pendientes por editor + antigüedad
+                                             │
+                                 puntuación con cupo, guardada
+                                             │
+                                 proyección a events + entrega
+                                             │
+                                 reclamo durable → Telegram
 ```
 
 Aparte del ciclo, una vez al dia: la **agenda macro** (`npm run agenda`), que
@@ -88,6 +100,8 @@ rompe en cuanto una migración lleve un punto y coma dentro de un texto.
 | `src/pipeline/rules.ts` | Paso 1 de la cascada: filtro gratis, sin LLM. Y la puerta de la alerta |
 | `src/pipeline/agrupar.ts` | La misma historia contada por cinco medios es una historia: se funde antes de gastar modelo |
 | `src/pipeline/seen.ts` | Idempotencia y registro de lo enviado. Interfaz común: archivo local o Neon |
+| `src/pipeline/queue.ts`, `src/db/queue.ts` | Cola independiente de capturas, leases y resultados pendientes de finalizar |
+| `src/pipeline/queue-cycle.ts`, `queue-plan.ts` | Captura temprana, cupo por editor, envejecimiento y entrega reanudable |
 | `src/db/neon.ts` | Implementación en Postgres de esa interfaz |
 | `src/lib/sql.ts` | Trocea un archivo SQL en sentencias respetando cadenas y comentarios |
 | `src/ai/cascade.ts` | Pasos 3 y 4: scoring barato y análisis profundo, con salida estructurada |

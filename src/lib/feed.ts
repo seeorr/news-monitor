@@ -20,6 +20,8 @@ export interface FeedItem {
   guid: string | null;
   /** La fecha tal y como la publica el feed. Sin convertir: eso es cosa de `toIso`. */
   date: string | null;
+  publicationDate?: string | null;
+  updatedDate?: string | null;
   summary: string | null;
   /** XML del elemento, para leer campos que solo existen en una fuente. */
   raw: string;
@@ -34,11 +36,12 @@ export function parseFeed(xml: string): FeedItem[] {
 function toItem(raw: string): FeedItem {
   const link = tagText(raw, "link") ?? attr(raw, "link", "href");
   const guid = tagText(raw, "guid") ?? tagText(raw, "id") ?? link;
-  const date =
+  const publicationDate =
     tagText(raw, "pubDate") ??
     tagText(raw, "date") ?? // dc:date
-    tagText(raw, "updated") ??
     tagText(raw, "published");
+  const updatedDate = tagText(raw, "updated");
+  const date = publicationDate ?? updatedDate;
   const summary = tagText(raw, "description") ?? tagText(raw, "summary");
 
   return {
@@ -46,6 +49,8 @@ function toItem(raw: string): FeedItem {
     link,
     guid,
     date,
+    publicationDate,
+    updatedDate,
     summary: summary === null ? null : sinHtml(summary),
     raw,
   };

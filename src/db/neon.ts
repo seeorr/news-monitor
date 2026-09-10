@@ -27,14 +27,14 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
     await sql`
       insert into events (
         id, source, source_url, kind, title, summary, country, series_id,
-        observed_at, retrieved_at,
+        observed_at, retrieved_at, first_seen_at,
         actual, previous, consensus, unit, surprises,
         stale, official,
         importance_score, market_impact_score, sentiment, one_liner
       ) values (
         ${event.id}, ${event.source}, ${event.source_url}, ${event.kind},
         ${event.title}, ${event.summary}, ${event.country}, ${event.series_id},
-        ${event.observed_at}, ${event.retrieved_at},
+        ${event.observed_at}, ${event.retrieved_at}, ${event.first_captured_at ?? event.retrieved_at}::timestamptz,
         ${event.actual}, ${event.previous}, ${event.consensus}, ${event.unit},
         ${JSON.stringify(event.surprises)}::jsonb,
         ${event.stale}, ${event.official},
@@ -51,6 +51,10 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
   };
 
   return {
+    async alertState(id) {
+      const rows = await sql`select state from alert_deliveries where event_id = ${id} limit 1` as Array<{ state: import("../pipeline/seen.ts").EstadoReclamo }>;
+      return rows[0]?.state ?? null;
+    },
     async has(id) {
       const filas = (await sql`select 1 from events where id = ${id} limit 1`) as unknown[];
       return filas.length > 0;

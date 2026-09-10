@@ -1,0 +1,17 @@
+{
+  "method": "Selección manual de ejemplos de la fotografía pública como calibración. Etiquetas propuestas por el agente, no por el usuario ni por el scoring. No se infiere actualidad fuera de la fecha de captura ni se miden envíos.",
+  "rows": [
+    {"id":"rss:yahoo-finance:3d5d067890e1","agentLabel":"brief","userLabel":null,"reason":"Ronda de financiación: hecho corporativo general; no requiere pertenecer a la watchlist."},
+    {"id":"rss:yahoo-finance:b069d8e43552","agentLabel":"brief","userLabel":null,"reason":"Ampliación de crédito y condiciones: separar el hecho del interrogante editorial."},
+    {"id":"rss:yahoo-finance:b7c7c0043544","agentLabel":"brief","userLabel":null,"reason":"Financiación confirmada; no asumir resultados clínicos ni rentabilidad."},
+    {"id":"rss:yahoo-finance:25e84ab10737","agentLabel":"brief","userLabel":null,"reason":"Adquisición completada; la pregunta sobre sinergias no demuestra retornos."},
+    {"id":"rss:eia-today:2ba2c9047bef","agentLabel":"brief","userLabel":null,"reason":"Diferencial regional de gas con récord: contexto energético primario."},
+    {"id":"rss:ecb-press:c721ebbe3a39","agentLabel":"none","userLabel":null,"reason":"Formato de charla, sin decisión concreta en el titular."},
+    {"id":"rss:boj-news:c1216e29550a","agentLabel":"digest","userLabel":null,"reason":"Posible contexto monetario; requiere leer contenido antes de promover a noticia. El filtro actual lo omite por rutina."},
+    {"id":"rss:boj-news:ab92a863fc78","agentLabel":"digest","userLabel":null,"reason":"Publicación estadística, sin inferir sorpresa por el título solo."},
+    {"id":"rss:boj-news:58e0d4050ce9","agentLabel":"none","userLabel":null,"reason":"Aviso antifraude institucional sin hecho de mercado."},
+    {"id":"rss:investing-economy:6f6aa0efe712","agentLabel":"important","userLabel":null,"reason":"Canal marítimo material potencial. La redacción no acredita cierre consumado: necesita confirmación y contexto antes de alerta; el filtro actual no lo eleva."},
+    {"id":"rss:investing-stocks:6586943e9c8f","agentLabel":"digest","userLabel":null,"reason":"Mezcla movimiento y recomendación de compra. El rechazo evita enviar consejo; podría recuperarse el hecho con extracción validada."},
+    {"id":"rss:yahoo-finance:1d6daef5b3f9","agentLabel":"none","userLabel":null,"reason":"Escenario hipotético de fusión, no una operación confirmada."}
+  ]
+}

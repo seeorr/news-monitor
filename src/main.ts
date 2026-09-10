@@ -1,22 +1,6 @@
-/**
- * El ciclo completo:
- *
- *   FRED + feeds + SEC EDGAR → normalización → frescura → filtro por reglas →
- *   dedupe → scoring → análisis (solo si importa) → Telegram → Neon
- *
- * Ya no es un slice vertical de un solo dato: son tres fuentes y N eventos por
- * vuelta. Tres reglas gobiernan el bucle, y las tres nacen del mismo miedo —que
- * el monitor se calle justo cuando hay noticia—:
- *
- * 1. Una fuente caída no tumba el ciclo; se sigue con las demás y se dice cuál.
- * 2. Un evento que falla no tumba a los siguientes.
- * 3. Hay techo de llamadas al modelo por ciclo. El ciclo corre cada 30 minutos y
- *    un feed puede soltar treinta elementos de golpe el primer día.
- *
- *   npm start              ejecuta el ciclo
- *   npm start -- --dry     todo menos enviar a Telegram
- *   npm start -- --force   ignora el registro de vistos y el reclamo de entrega;
- *                          es la única forma de reenviar una alerta a mano
+/** Captura durable → reglas → cola por editor y antigüedad → puntuación → entrega.
+ * --capture-only guarda sin modelos ni Telegram; --process-only consume la cola.
+ * --dry usa memoria y no envía, pero puede llamar al modelo. --force permite reenvío.
  */
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
@@ -24,15 +8,17 @@ import {
   analyzeEvent,
   FabricationError,
   scoreEvent,
+  Scoring,
   type Analysis,
   type CascadeDeps,
 } from "./ai/cascade.ts";
 import { loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
-import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
-import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
-import { registrarEmbudoFeeds } from "./pipeline/diagnostico.ts";
-import { priorizarGrupos } from "./pipeline/prioridad.ts";
+import { sameStory, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
+import { collectEvents, watchlistEfectiva, recientes } from "./pipeline/collect.ts";
+import { neonQueueStore } from "./db/queue.ts";
+import { fileQueueStore, memoryQueueStore, type QueueStore } from "./pipeline/queue.ts";
+import { captureCandidates, capturedEvent, processQueue, deliverQueue } from "./pipeline/queue-cycle.ts";
 import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import {
@@ -41,136 +27,196 @@ import {
 
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
+import { neonControlStore } from "./db/control.ts";
+import { BudgetExhausted, fileControlStore, memoryControlStore, type AiRecord } from "./pipeline/control.ts";
+import { decideNews } from "./pipeline/news-policy.ts";
+import { deliverNews } from "./pipeline/news-delivery.ts";
 
 // Seguro desde el arranque, incluso antes de cargar configuración y watchlist.
 const log = createLogger();
 let stage: LogStage = "startup";
 
 async function main(): Promise<number> {
+  loadDotEnv();
+  const mode = process.env["MONITOR_MODE"]?.trim() || "full";
+  if (!["full", "capture-only", "process-only"].includes(mode)) throw new Error("invalid_cycle_mode");
   const dry = process.argv.includes("--dry");
   const force = process.argv.includes("--force");
-
-  loadDotEnv();
+  const captureOnly = process.argv.includes("--capture-only") || mode === "capture-only";
+  const processOnly = process.argv.includes("--process-only") || mode === "process-only";
+  if ((captureOnly && (processOnly || force)) || (processOnly && (dry || force))) throw new Error("incompatible_cycle_modes");
   const config = loadConfig();
-  const missing = missingVars(config);
-
   log("CYCLE_START", { stage });
-  for (const variable of missing) {
-    // El logger valida también el nombre contra su enum cerrado en ejecución.
-    log("CONFIG_MISSING", { stage, count: missing.length, variable: variable.name as LogFields["variable"] });
+  for (const variable of missingVars(config)) {
+    log("CONFIG_MISSING", { stage, variable: variable.name as LogFields["variable"] });
   }
-
   const seen = abrirEstado(config);
+  // --dry conserva el contrato: no escribe, pero sí puede llamar al modelo.
+  // --force trabaja sobre una captura explícita efímera, sin reabrir la cola.
+  const queue: QueueStore = dry || force ? memoryQueueStore()
+    : config.databaseUrl ? neonQueueStore(config.databaseUrl) : fileQueueStore(config.stateDir);
+  const levels = config.newsDeliveryMode === "two-level";
+  const control = dry || !levels ? memoryControlStore() : config.databaseUrl ? neonControlStore(config.databaseUrl) : fileControlStore(config.stateDir);
   const retrievedAt = new Date().toISOString();
-
-  // ── Ingesta ────────────────────────────────────────────────────────────────
-  stage = "collect";
-  const { events, failures, ok, vigilados } = await collectEvents(config, { retrievedAt, logger: log });
-  if (ok === 0) {
-    log("NO_SOURCES", { stage, failed: failures.length });
-    return 1;
-  }
-  if (failures.length > 0) {
-    log("SOURCES_PARTIAL", { stage, failed: failures.length, ok });
-  }
-
-  // ── Frescura ───────────────────────────────────────────────────────────────
-  stage = "freshness";
-  const frescos = recientes(events, { now: new Date(), maxAgeHours: config.maxItemAgeHours });
-  log("FRESHNESS", { stage, total: events.length, count: frescos.length });
-
-  // ── Paso 1: reglas ─────────────────────────────────────────────────────────
-  // La watchlist del filtro es la misma que la de la ingesta: si se vigila a una
-  // empresa, su nombre en un titular también cuenta.
-  stage = "rules";
-  const watchlist = vigilados;
-  const candidatos = frescos.filter((e) => applyRules(e, { watchlist }).pass);
-  log("RULES", { stage, count: candidatos.length, discarded: frescos.length - candidatos.length });
-
-  // ── Paso 2: deduplicación ──────────────────────────────────────────────────
-  stage = "dedupe";
-  const nuevos: NormalizedEvent[] = [];
-  for (const event of porFecha(candidatos)) {
-    if (force || !(await seen.has(event.id))) nuevos.push(event);
-  }
-  log("DEDUPE", { stage, count: nuevos.length, discarded: candidatos.length - nuevos.length });
-  registrarEmbudoFeeds({ events, fresh: frescos, candidates: candidatos, nuevos, watchlist }, log);
-  if (nuevos.length === 0) return 0;
-
-  // ── Paso 2b: la misma historia contada por varios ──────────────────────────
-  stage = "group";
-  const grupos = priorizarGrupos(agrupar(nuevos, { umbral: config.umbralAgrupacion }));
-  const fundidos = nuevos.length - grupos.length;
-  if (fundidos > 0) {
-    log("GROUPED", { stage, count: grupos.length, discarded: fundidos });
-  }
-
-  if (!config.anthropicApiKey) {
-    log("SCORING_UNAVAILABLE", { stage: "scoring" });
-    return 1;
-  }
-
-  const deps: CascadeDeps = {
-    client: new Anthropic({ apiKey: config.anthropicApiKey }),
-    modelScoring: config.modelScoring,
-    modelAnalysis: config.modelAnalysis,
-    onFabrication: (intento, violations) =>
-      log("FABRICATION_RETRY", { stage: "analysis", attempt: intento, count: violations.length }),
-    onScoringSummaryFallback: () => log("SCORING_SUMMARY_FALLBACK", { stage: "scoring" }),
-  };
-
-  const porPuntuar = grupos.slice(0, config.maxScoringPerCycle);
-  if (grupos.length > porPuntuar.length) {
-    log("SCORING_LIMIT", { stage: "scoring", count: porPuntuar.length, discarded: grupos.length - porPuntuar.length });
-  }
-
-  // ── Pasos 3 y 4, y alerta ──────────────────────────────────────────────────
-  let profundos = 0;
-  let enviadas = 0;
-  let fallidos = 0;
-
-  for (const [index, grupo] of porPuntuar.entries()) {
-    try {
-      const resultado = await procesar(grupo, {
-        config,
-        deps,
-        seen,
-        dry,
-        force,
-        // El techo del modelo caro se comprueba aquí y no dentro: el orden del
-        // bucle (oficiales primero, después rondas por feed) reparte ese cupo.
-        analisisProfundo: profundos < config.maxDeepPerCycle,
-      });
-      if (resultado.deep) profundos++;
-      if (resultado.enviada) enviadas++;
-      // Una alerta que se compuso y no llegó a entregarse cuenta como fallo
-      // aunque nadie lanzara: es lo que tiene que poner el job en rojo.
-      if (resultado.fallida) fallidos++;
-    } catch (err) {
-      // Un evento que revienta no puede llevarse por delante a los que quedan:
-      // el siguiente puede ser el que importaba.
-      fallidos++;
-      log("EVENT_FAILED", { stage, source: grupo.representante.source,
-        feed: grupo.representante.source === "rss" ? grupo.representante.series_id ?? undefined : undefined,
-        index: index + 1, error: err });
+  let watchlist = processOnly ? await watchlistEfectiva(config) : [];
+  let sourceFailure = false;
+  if (!processOnly) {
+    stage = "collect";
+    const collected = await collectEvents(config, { retrievedAt, logger: log,
+      onCollected: async (events, source) => {
+        stage = "persist";
+        const counts = await captureCandidates(queue, events, { now: new Date().toISOString(),
+          maxAgeHours: config.maxItemAgeHours, watchlist: source.vigilados });
+        if (levels && !dry) for (const event of events) {
+          // No sobrescribir una decisión ya puntuada por una mera recaptura.
+          if (!await control.getDecision(event.id)) await control.putDecision(event.id,
+            decideNews(event, null, { now: retrievedAt, watchlist: source.vigilados, maxPendingHours: config.maxPendingHours, maxItemAgeHours: config.maxItemAgeHours }));
+        }
+        log("QUEUE_CAPTURE", { stage: "persist", source: source.source, feed: source.feed,
+          captured: counts.captured, unique: counts.unique });
+      },
+    });
+    watchlist = collected.vigilados;
+    sourceFailure = collected.ok === 0;
+    if (sourceFailure) log("NO_SOURCES", { stage, failed: collected.failures.length });
+    if (collected.failures.length > 0) log("SOURCES_PARTIAL", { stage, failed: collected.failures.length, ok: collected.ok });
+    // Capturadas/únicas salen del acuse de la cola, nunca se infieren de seen.
+    const fresh = recientes(collected.events, { now: new Date(retrievedAt), maxAgeHours: config.maxItemAgeHours });
+    const candidates = fresh.filter((event) => applyRules(event, { watchlist }).pass);
+    log("FRESHNESS", { stage: "freshness", total: collected.events.length, count: fresh.length });
+    log("RULES", { stage: "rules", count: candidates.length, discarded: fresh.length - candidates.length });
+    for (const event of fresh) {
+      log("RULE_REASON", { stage: "rules", source: event.source,
+        feed: event.source === "rss" ? event.series_id ?? undefined : undefined,
+        reason: applyRules(event, { watchlist }).reasonCode, count: 1 });
     }
   }
+  if (captureOnly) {
+    log("CAPTURE_ONLY", { stage: "persist" });
+    await reportQueue(queue);
+    return sourceFailure ? 1 : 0;
+  }
+  const deps: CascadeDeps | null = config.anthropicApiKey ? {
+    client: new Anthropic({ apiKey: config.anthropicApiKey, timeout: 60_000, maxRetries: 0 }),
+    modelScoring: config.modelScoring, modelAnalysis: config.modelAnalysis,
+    onFabrication: (attempt, violations) => log("FABRICATION_RETRY", { stage: "analysis", attempt, count: violations.length }),
+    onScoringSummaryFallback: () => log("SCORING_SUMMARY_FALLBACK", { stage: "scoring" }),
+  } : null;
+  if (deps && levels) {
+    const requests = new Map<string, Omit<AiRecord, "inputTokens" | "outputTokens" | "result" | "costUsd">>();
+    deps.beforeRequest = async (info) => {
+      const id = randomUUID();
+      const reservation = await control.reserve({ id, resource: "ai", units: 1, now: new Date().toISOString(), dayLimit: config.aiCallsDay ?? 120 });
+      if (!reservation.allowed) throw new BudgetExhausted(reservation.nextAt);
+      const record = { ...info, provider: "anthropic" };
+      requests.set(id, record);
+      await control.recordAi(id, { ...record, inputTokens: null, outputTokens: null, costUsd: null, result: "uncertain" });
+      return id;
+    };
+    deps.afterRequest = async (id, result) => {
+      const meta = requests.get(id)!;
+      const inputPrice = meta.stage === "scoring" ? config.aiScoringInputUsd : config.aiAnalysisInputUsd;
+      const outputPrice = meta.stage === "scoring" ? config.aiScoringOutputUsd : config.aiAnalysisOutputUsd;
+      const costUsd = inputPrice == null || outputPrice == null || result.inputTokens === null || result.outputTokens === null ? null
+        : (result.inputTokens * inputPrice + result.outputTokens * outputPrice) / 1_000_000;
+      await control.recordAi(id, { ...meta, ...result, costUsd });
+    };
+  }
+  let profundos = 0, deepAttempts = 0;
+  const attemptedDelivery = new Set<string>();
+  const deliver = (limit: number) => deliverQueue(queue, { limit, excludeIds: attemptedDelivery,
+    deliver: async (entry) => {
+      attemptedDelivery.add(entry.id);
+      const scoring = Scoring.parse(entry.score);
+      const duplicateEvents = (await queue.storyContext(entry.event))
+        .filter((row) => row.id !== entry.id && row.reason === "duplicate_story" &&
+          sameStory(entry.event, row.event, config.umbralAgrupacion)).map(capturedEvent);
+      const resultado = await procesar({ representante: capturedEvent(entry), duplicados: duplicateEvents }, {
+        config, deps, seen, dry, force, scoring,
+        analisisProfundo: deepAttempts < config.maxDeepPerCycle,
+        onDeepAttempt: () => { deepAttempts++; },
+      });
+      if (resultado.deep) profundos++;
+      return { complete: resultado.complete !== false, sent: resultado.enviada, failed: resultado.fallida };
+    },
+    onFailure: (entry, error) => log("EVENT_FAILED", { stage, source: entry.event.source, error }),
+  });
+  // Primero lo ya puntuado: un ciclo lento no puede posponer indefinidamente
+  // entregas anteriores detrás de doce nuevas llamadas al modelo.
+  const before = levels ? { sent: 0, failed: 0 } : await deliver(config.maxScoringPerCycle);
+  const attemptedLevels = new Set<string>();
+  let remainingDeepLevels = config.maxDeepPerCycle;
+  const sendTwoLevels = async () => { const result = await deliverNews({ now: new Date().toISOString(), deps, queue, control, seen, watchlist,
+    briefHour: config.briefNewsHour ?? 6, briefDay: config.briefNewsDay ?? 24,
+    importantHour: config.importantNewsHour ?? 3, importantDay: config.importantNewsDay ?? 12,
+    batchSize: config.briefBatchSize ?? 3, briefIntervalMinutes: config.briefIntervalMinutes ?? 60,
+    maxPendingHours: config.maxPendingHours ?? 48, maxDeep: remainingDeepLevels, excludeIds: attemptedLevels,
+    briefThreshold: config.briefNewsThreshold ?? 5, importantThreshold: config.alertThreshold,
+    watchlistImportantThreshold: config.watchlistImportantThreshold ?? 6,
+    canSend: Boolean(config.telegramBotToken && config.telegramChatId), dry, force,
+    maxItems: config.queueScanLimit ?? 500,
+    send: async (body) => {
+      const result = await sendTelegram(config.telegramBotToken!, config.telegramChatId!, body);
+      return result.state;
+    }, afterSent: async (body, event) => {
+      log("ALERT_SENT", { stage: "persist", source: event.source });
+      await copiarAlGrupo(config, event, body);
+    }, onFailure: (error) => log("EVENT_FAILED", { stage: "telegram", error }),
+  }); remainingDeepLevels -= result.deep; return result; };
+  const beforeLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
+  if (!deps) log("SCORING_UNAVAILABLE", { stage: "scoring" });
+  const processing = deps ? await processQueue(queue, {
+    maxScoring: config.maxScoringPerCycle, scanLimit: config.queueScanLimit,
+    leaseMs: config.processingLeaseMs, groupThreshold: config.umbralAgrupacion, watchlist,
+    maxPendingHours: levels ? config.maxPendingHours ?? 48 : undefined,
+    onDiscard: async (entry) => { if (!dry) await control.putDecision(entry.id, decideNews(capturedEvent(entry), null,
+      { now: new Date().toISOString(), watchlist, maxPendingHours: config.maxPendingHours })); },
+    hasProcessed: (id) => { stage = "dedupe"; return force ? Promise.resolve(false) : seen.has(id); },
+    score: (event) => { stage = "scoring"; return scoreEvent(event, deps); },
+    onPlan: (item) => log("QUEUE_PLAN", { stage: "scoring", source: item.group.representante.source,
+      feed: item.group.representante.source === "rss" ? item.group.representante.series_id ?? undefined : undefined,
+      priority: item.reason, publisher: item.publisher, points: item.points, agePoints: item.agePoints }),
+    onFailure: (entry, error) => log("EVENT_FAILED", { stage: "scoring", source: entry.event.source, error }),
+  }) : { pending: 0, attempted: 0, discarded: 0, scored: 0, failed: 0 };
+  log("DEDUPE", { stage: "dedupe", discarded: processing.discarded, count: processing.scored });
+  if (processing.attempted >= config.maxScoringPerCycle) log("SCORING_LIMIT", { stage: "scoring", count: processing.attempted });
+  const remaining = config.maxScoringPerCycle - attemptedDelivery.size;
+  const after = !levels && remaining > 0 ? await deliver(remaining) : { sent: 0, failed: 0 };
+  const afterLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
+  const delivery = { sent: before.sent + after.sent + beforeLevels.sent + afterLevels.sent,
+    failed: before.failed + after.failed + beforeLevels.failed + afterLevels.failed };
+  profundos += beforeLevels.deep + afterLevels.deep;
+  await reportQueue(queue);
+  const failed = processing.failed + delivery.failed;
+  log("CYCLE_END", { stage: "cycle", sent: delivery.sent, deep: profundos, failed });
+  return sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? 1 : 0;
+}
 
-  log("CYCLE_END", { stage: "cycle", sent: enviadas, deep: profundos, failed: fallidos });
-
-  // Que no haya nada que contar es un final normal. Que fallara todo lo que se
-  // intentó, no: eso tiene que salir en rojo y disparar el aviso del workflow.
-  return fallidos > 0 && enviadas === 0 ? 1 : 0;
+async function reportQueue(queue: QueueStore): Promise<void> {
+  for (const row of await queue.stats()) {
+    const [source, feed] = row.source_key.split(":");
+    log("QUEUE_STATS", { stage: "persist", source: source as LogFields["source"], feed,
+      captured: row.captured, unique: row.unique, pending: row.pending, processing: row.processing,
+      scored: row.scored, discarded: row.discarded, processed: row.processed,
+      retryable: row.retryable_failed, deliveryPending: row.delivery_pending,
+      oldestHours: Math.floor(row.oldest_pending_age_hours) });
+    for (const [reason, count] of Object.entries(row.discarded_by_reason)) {
+      log("QUEUE_DISCARDED", { stage: "persist", source: source as LogFields["source"], feed,
+        queueReason: reason as LogFields["queueReason"], count });
+    }
+  }
 }
 
 interface ProcesarDeps {
+  scoring: Scoring;
   config: Config;
-  deps: CascadeDeps;
+  deps: CascadeDeps | null;
   seen: SeenStore;
   dry: boolean;
   /** `--force`: reclama la entrega aunque ya tenga dueño. Lo pide una persona. */
   force: boolean;
   analisisProfundo: boolean;
+  onDeepAttempt: () => void;
 }
 
 /**
@@ -182,15 +228,15 @@ interface Resultado {
   enviada: boolean;
   deep: boolean;
   fallida?: boolean;
+  complete?: boolean;
 }
 
 async function procesar(
   grupo: Grupo,
-  { config, deps, seen, dry, force, analisisProfundo }: ProcesarDeps,
+  { config, deps, seen, dry, force, analisisProfundo, scoring, onDeepAttempt }: ProcesarDeps,
 ): Promise<Resultado> {
   const event = grupo.representante;
   stage = "scoring";
-  const scoring = await scoreEvent(event, deps);
   log("SCORED", { stage, source: event.source, feed: event.source === "rss" ? event.series_id ?? undefined : undefined,
     importance: scoring.importance_score, impact: scoring.market_impact_score });
 
@@ -209,10 +255,27 @@ async function procesar(
     return { enviada: false, deep: false };
   }
 
+  // Una recuperación tras el envío no vuelve a pagar análisis ni libera el
+  // reclamo existente. La comprobación final atómica sigue siendo claimAlert.
+  const priorDelivery = !dry && !force ? await seen.alertState?.(event.id) : null;
+  if (priorDelivery) {
+    stage = "persist";
+    await marcarGrupo(seen, grupo, puntuacion);
+    log("ALERT_BLOCKED", { stage, source: event.source });
+    return { enviada: false, deep: false, fallida: priorDelivery !== "sent" };
+  }
+  if (!dry && (!config.telegramBotToken || !config.telegramChatId)) {
+    // Proyectar la nota tampoco depende de las credenciales de Telegram.
+    await marcarGrupo(seen, grupo, puntuacion);
+    log("TELEGRAM_MISSING", { stage: "telegram" });
+    return { enviada: false, deep: false, complete: false, fallida: true };
+  }
+
   let analysis: Analysis | null = null;
-  if (scoring.importance_score >= config.deepAnalysisThreshold && analisisProfundo) {
+  if (scoring.importance_score >= config.deepAnalysisThreshold && analisisProfundo && deps) {
     try {
       stage = "analysis";
+      onDeepAttempt();
       analysis = await analyzeEvent(event, deps);
       log("ANALYSIS_OK", { stage, source: event.source });
     } catch (err) {
@@ -240,7 +303,7 @@ async function procesar(
   // vuelta, que es lo que se quiere cuando falta una variable de entorno.
   if (!config.telegramBotToken || !config.telegramChatId) {
     log("TELEGRAM_MISSING", { stage: "telegram" });
-    return { enviada: false, deep };
+    return { enviada: false, deep, complete: false, fallida: true };
   }
 
   // ── Reclamar, enviar, cerrar ───────────────────────────────────────────────

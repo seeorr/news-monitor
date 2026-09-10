@@ -10,7 +10,11 @@
  * La interfaz es asíncrona porque la de verdad habla con una base de datos; el
  * archivo paga ese coste sin usarlo, y sale barato comparado con tener dos.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync,
+  renameSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type { NormalizedEvent } from "../schema/event.ts";
 
@@ -159,6 +163,8 @@ export interface SeenStore {
    * `force` reclama una entrega que ya tiene dueño.
    */
   claimAlert(eventId: string, reclamo: Reclamo): Promise<boolean>;
+  /** Lectura sin reclamar ni liberar; permite cerrar la cola sin repetir análisis. */
+  alertState?(eventId: string): Promise<EstadoReclamo | null>;
   /**
    * Cierra la entrega que este proceso reclamó.
    *
@@ -175,14 +181,14 @@ export interface SeenStore {
 /**
  * La máquina de estados de la entrega, en memoria.
  *
- * La comparten el estado local y el de los tests porque la regla es una y se
- * escribe una vez: se reclama solo lo que no tiene dueño y se cierra solo lo
- * propio. La versión que manda es la de Neon (`src/db/neon.ts`), y es SQL.
+ * Se reclama solo lo que no tiene dueño y se cierra solo lo propio. El archivo
+ * local aplica la misma regla dentro de un bloqueo y Neon la expresa en SQL.
  */
 function reclamosEnMemoria() {
   const entregas = new Map<string, { estado: EstadoReclamo; token: string }>();
   return {
     entregas,
+    alertState: async (eventId: string): Promise<EstadoReclamo | null> => entregas.get(eventId)?.estado ?? null,
     claimAlert: async (eventId: string, { token, force = false }: Reclamo): Promise<boolean> => {
       if (entregas.has(eventId) && !force) return false;
       entregas.set(eventId, { estado: "sending", token });
@@ -198,6 +204,109 @@ function reclamosEnMemoria() {
   };
 }
 
+interface FileDelivery { eventId: string; estado: EstadoReclamo; token: string }
+const DELIVERY_STATES: readonly EstadoReclamo[] = ["sending", "sent", "rejected", "uncertain"];
+
+/**
+ * Reclamos duraderos: el archivo de la cola puede sobrevivir a un envío, por
+ * lo que proteger solo seen.json o la memoria ya no impide repetir Telegram.
+ * Nunca caducan. Un archivo ilegible falla cerrado, incluso con --force.
+ */
+function reclamosEnArchivo(stateDir: string) {
+  const path = join(stateDir, "alert-deliveries.json");
+  const lockPath = `${path}.lock`;
+  const read = (): Map<string, FileDelivery> => {
+    if (!existsSync(path)) return new Map();
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { version?: unknown; deliveries?: unknown };
+    if (!raw || raw.version !== 1 || !Array.isArray(raw.deliveries)) throw new Error("invalid_alert_delivery_state");
+    const deliveries = new Map<string, FileDelivery>();
+    for (const row of raw.deliveries as Array<Partial<FileDelivery> | null>) {
+      if (!row || typeof row.eventId !== "string" || !row.eventId || typeof row.token !== "string" || !row.token ||
+          !row.estado || !DELIVERY_STATES.includes(row.estado) || deliveries.has(row.eventId)) {
+        throw new Error("invalid_alert_delivery_state");
+      }
+      deliveries.set(row.eventId, { eventId: row.eventId, estado: row.estado, token: row.token });
+    }
+    return deliveries;
+  };
+  const acquire = async (): Promise<number> => {
+    mkdirSync(dirname(path), { recursive: true });
+    for (let attempt = 0; attempt < 80; attempt++) {
+      let fd: number;
+      try { fd = openSync(lockPath, "wx"); }
+      catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        // Windows puede devolver EPERM/EACCES durante delete-pending, aunque
+        // el dueño ya cerró el archivo. Reintentar conserva el bloqueo y sigue
+        // fallando cerrado tras el plazo; nunca equivale a haberlo adquirido.
+        if (code !== "EEXIST" && !(process.platform === "win32" && (code === "EPERM" || code === "EACCES"))) throw err;
+        // Nunca se roba un bloqueo: comprobar PID y borrar después introduce
+        // una carrera si otro proceso lo ha recuperado entre ambas operaciones.
+        // Si murió el dueño, detener los consumidores y revisar el archivo de
+        // reclamos antes de retirar manualmente solo el .lock.
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      try {
+        writeFileSync(fd, JSON.stringify({ pid: process.pid }), "utf8");
+        fsyncSync(fd);
+        return fd;
+      } catch (err) {
+        closeSync(fd);
+        unlinkSync(lockPath);
+        throw err;
+      }
+    }
+    throw new Error("alert_delivery_file_busy");
+  };
+  const change = async <T>(update: (rows: Map<string, FileDelivery>) => T): Promise<T> => {
+    const fd = await acquire();
+    let temporary: string | null = null;
+    try {
+      const rows = read();
+      const result = update(rows);
+      temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+      const out = openSync(temporary, "wx");
+      try {
+        writeFileSync(out, JSON.stringify({ version: 1, deliveries: [...rows.values()] }), "utf8");
+        fsyncSync(out);
+      } finally { closeSync(out); }
+      for (let attempt = 0; ; attempt++) {
+        try { renameSync(temporary, path); break; }
+        catch (error) {
+          if (attempt >= 40 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+      temporary = null;
+      return result;
+    } finally {
+      closeSync(fd);
+      unlinkSync(lockPath);
+      if (temporary && existsSync(temporary)) unlinkSync(temporary);
+    }
+  };
+  return {
+    alertState: async (eventId: string): Promise<EstadoReclamo | null> => read().get(eventId)?.estado ?? null,
+    claimAlert: async (eventId: string, { token, force = false }: Reclamo): Promise<boolean> => {
+      if (!eventId || !token) throw new Error("invalid_alert_claim");
+      return change((rows) => {
+        if (rows.has(eventId) && !force) return false;
+        rows.set(eventId, { eventId, estado: "sending", token });
+        return true;
+      });
+    },
+    finishAlert: async (eventId: string, token: string, estado: EstadoEntrega): Promise<void> => {
+      if (!["sent", "rejected", "uncertain"].includes(estado)) throw new Error("invalid_alert_delivery_state");
+      await change((rows) => {
+        const previous = rows.get(eventId);
+        if (!previous || previous.estado !== "sending" || previous.token !== token) throw new Error("alert_claim_lost");
+        rows.set(eventId, { eventId, estado, token });
+      });
+    },
+  };
+}
+
 /**
  * Estado en un archivo JSON. Para desarrollo local: **no sobrevive a un job de
  * GitHub Actions**, que arranca con el disco limpio. En producción va Neon.
@@ -207,11 +316,9 @@ function reclamosEnMemoria() {
  * dar por procesado el evento y la puntuación que reciba `mark` se descarta. Es
  * una degradación consciente del modo local, no un olvido.
  *
- * La entrega tampoco se guarda en el archivo: vive en memoria y muere con el
- * proceso. Y es suficiente aquí, porque en local no hay dos ciclos pisándose y
- * el evento se marca antes de enviar, así que la vuelta siguiente lo descarta en
- * la deduplicación igual que antes. El reclamo de verdad, el que sobrevive a un
- * proceso muerto, solo lo puede dar una base de datos.
+ * La entrega vive en alert-deliveries.json, separado de los ids procesados y
+ * de queue.json. Así una entrega pendiente que sobrevive a un proceso muerto
+ * sigue bloqueada aunque todavía no se hubiese marcado el id en seen.json.
  */
 export function fileSeenStore(stateDir: string): SeenStore {
   const path = join(stateDir, "seen.json");
@@ -233,7 +340,7 @@ export function fileSeenStore(stateDir: string): SeenStore {
     writeFileSync(path, JSON.stringify([...ids].slice(-5000), null, 0), "utf8");
   };
 
-  const { claimAlert, finishAlert } = reclamosEnMemoria();
+  const { claimAlert, finishAlert, alertState } = reclamosEnArchivo(stateDir);
 
   return {
     has: async (id) => ids.has(id),
@@ -242,6 +349,7 @@ export function fileSeenStore(stateDir: string): SeenStore {
       persist();
     },
     claimAlert,
+    alertState,
     finishAlert,
     saveAlert: async (event) => {
       ids.add(event.id);
@@ -262,12 +370,13 @@ export function memorySeenStore(
   const ids = new Set(initial);
   const alerts: AlertRecord[] = [];
   const puntuaciones = new Map<string, Puntuacion>();
-  const { entregas, claimAlert, finishAlert } = reclamosEnMemoria();
+  const { entregas, claimAlert, finishAlert, alertState } = reclamosEnMemoria();
   return {
     alerts,
     puntuaciones,
     entregas,
     claimAlert,
+    alertState,
     finishAlert,
     has: async (id) => ids.has(id),
     mark: async (event, puntuacion) => {

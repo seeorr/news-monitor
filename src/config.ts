@@ -13,8 +13,8 @@ export interface Config {
   telegramBotToken: string | null;
   telegramChatId: string | null;
   /**
-   * Grupo opcional donde se comparte **solo** lo que el monitor habría marcado
-   * con la watchlist vacía (ver `src/notify/compartir.ts`). No entra en
+   * Grupo opcional donde se copia la misma alerta, según la decisión registrada
+   * en main.ts/copiarAlGrupo. No entra en
    * `missingVars`: sin ella el sistema se comporta exactamente igual que antes
    * de que el grupo existiera. Es un id negativo, no un @nombre.
    */
@@ -28,17 +28,39 @@ export interface Config {
   secUserAgent: string | null;
   /** Tickers cuyos documentos de la SEC se vigilan. Dato personal: viene de fuera. */
   secWatchlist: string[];
-  /** Tickers que, mencionados en un titular, lo hacen pasar el filtro por reglas. */
+  /** Tickers de respaldo que aportan contexto personal, no admisión automática. */
   watchlist: string[];
-  /** Ids de `FEEDS` que se leen. Vacío = todos. */
+  /** Ids habilitados de `FEEDS`. Vacío = tandas seleccionadas, core por defecto. */
   feeds: string[];
+  rssFeedBatches?: string[];
+  sourceConcurrency?: number;
+  sourceTimeoutMs?: number;
+  collectionTimeoutMs?: number;
+  edgarMaxFilings?: number;
+  queueScanLimit?: number;
+  processingLeaseMs?: number;
+  newsDeliveryMode?: "legacy" | "two-level";
+  briefNewsThreshold?: number;
+  watchlistImportantThreshold?: number;
+  briefNewsHour?: number;
+  briefNewsDay?: number;
+  importantNewsHour?: number;
+  importantNewsDay?: number;
+  briefBatchSize?: number;
+  briefIntervalMinutes?: number;
+  maxPendingHours?: number;
+  aiCallsDay?: number;
+  aiScoringInputUsd?: number | null;
+  aiScoringOutputUsd?: number | null;
+  aiAnalysisInputUsd?: number | null;
+  aiAnalysisOutputUsd?: number | null;
   /** Tipos de documento de EDGAR que interesan. Vacío = los de por defecto. */
   edgarForms: string[];
   /** Más viejo que esto, ni se puntúa: un feed trae su historial, y eso no es noticia. */
   maxItemAgeHours: number;
   /** Techo de llamadas al modelo barato por ciclo. El ciclo corre cada 30 minutos. */
   maxScoringPerCycle: number;
-  /** Techo de llamadas al modelo caro por ciclo. Ahí está el gasto de verdad. */
+  /** Techo de eventos con análisis profundo; cada análisis admite 2 intentos. */
   maxDeepPerCycle: number;
   /** Cuántos días mira hacia delante la agenda macro. */
   agendaDias: number;
@@ -90,10 +112,32 @@ export function loadConfig(): Config {
     secWatchlist: lista("SEC_WATCHLIST"),
     watchlist: lista("WATCHLIST"),
     feeds: lista("RSS_FEEDS"),
+    rssFeedBatches: lista("RSS_FEED_BATCHES").length ? lista("RSS_FEED_BATCHES") : ["core"],
+    sourceConcurrency: entero("SOURCE_CONCURRENCY", 3, 1, 8),
+    sourceTimeoutMs: entero("SOURCE_TIMEOUT_MS", 45_000, 1_000, 120_000),
+    collectionTimeoutMs: entero("COLLECTION_TIMEOUT_MS", 180_000, 5_000, 300_000),
+    edgarMaxFilings: entero("EDGAR_MAX_FILINGS", 1000, 1, 5000),
+    queueScanLimit: entero("QUEUE_SCAN_LIMIT", 500, 12, 5000),
+    processingLeaseMs: entero("PROCESSING_LEASE_MS", 900_000, 60_000, 3600_000),
+    newsDeliveryMode: deliveryMode(),
+    briefNewsThreshold: entero("BRIEF_NEWS_THRESHOLD", 5, 3, 8),
+    watchlistImportantThreshold: entero("WATCHLIST_IMPORTANT_THRESHOLD", 6, 5, 10),
+    briefNewsHour: entero("BRIEF_NEWS_PER_HOUR", 6, 0, 100),
+    briefNewsDay: entero("BRIEF_NEWS_PER_DAY", 24, 0, 500),
+    importantNewsHour: entero("IMPORTANT_NEWS_PER_HOUR", 3, 0, 50),
+    importantNewsDay: entero("IMPORTANT_NEWS_PER_DAY", 12, 0, 100),
+    briefBatchSize: entero("BRIEF_BATCH_SIZE", 3, 1, 6),
+    briefIntervalMinutes: entero("BRIEF_INTERVAL_MINUTES", 60, 0, 360),
+    maxPendingHours: entero("MAX_PENDING_HOURS", 48, 1, 168),
+    aiCallsDay: entero("AI_CALLS_PER_DAY", 120, 0, 2000),
+    aiScoringInputUsd: optionalPrice("AI_SCORING_INPUT_USD_PER_MILLION"),
+    aiScoringOutputUsd: optionalPrice("AI_SCORING_OUTPUT_USD_PER_MILLION"),
+    aiAnalysisInputUsd: optionalPrice("AI_ANALYSIS_INPUT_USD_PER_MILLION"),
+    aiAnalysisOutputUsd: optionalPrice("AI_ANALYSIS_OUTPUT_USD_PER_MILLION"),
     edgarForms: lista("EDGAR_FORMS"),
     maxItemAgeHours: Number(env("MAX_ITEM_AGE_HOURS") ?? 72),
-    maxScoringPerCycle: Number(env("MAX_SCORING_PER_CYCLE") ?? 12),
-    maxDeepPerCycle: Number(env("MAX_DEEP_PER_CYCLE") ?? 3),
+    maxScoringPerCycle: entero("MAX_SCORING_PER_CYCLE", 12, 1, 100),
+    maxDeepPerCycle: entero("MAX_DEEP_PER_CYCLE", 3, 0, 20),
     agendaDias: Number(env("AGENDA_DIAS") ?? 7),
     umbralAgrupacion: Number(env("GROUP_THRESHOLD") ?? 0.6),
     modelScoring: env("MODEL_SCORING") ?? "claude-haiku-4-5",
@@ -102,6 +146,27 @@ export function loadConfig(): Config {
     alertThreshold: Number(env("ALERT_THRESHOLD") ?? 7),
     stateDir: env("STATE_DIR") ?? ".cache",
   };
+}
+
+function deliveryMode(): "legacy" | "two-level" {
+  const value = env("NEWS_DELIVERY_MODE") ?? "two-level";
+  if (value !== "legacy" && value !== "two-level") throw new Error("invalid_news_delivery_mode");
+  return value;
+}
+
+function optionalPrice(name: string): number | null {
+  const raw = env(name); if (raw === null) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) throw new Error("invalid_model_price");
+  return value;
+}
+
+function entero(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(env(name) ?? fallback);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error("invalid_bounded_configuration");
+  }
+  return value;
 }
 
 /** Qué falta y para qué, con dónde conseguirlo. Vacío = todo listo. */

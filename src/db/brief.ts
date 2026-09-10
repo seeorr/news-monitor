@@ -13,10 +13,13 @@ export async function recentBriefEvents(sql: Ejecutor, now: Date): Promise<Brief
       e.first_seen_at, e.stale,
       coalesce(e.importance_score, a.importance_score) as importance_score
     from events e left join alerts a on a.event_id = e.id
+    left join news_decisions nd on nd.event_id = e.id
     where coalesce(e.importance_score, a.importance_score) is not null
       and e.kind <> 'calendar'
       and e.first_seen_at >= ${desde}::timestamptz
       and e.first_seen_at < ${hasta}::timestamptz
+      and (nd.event_id is null or (nd.decision->'eligible'->>'morningBrief')::boolean)
+      and (nd.event_id is null or not exists(select 1 from alert_deliveries delivered where delivered.event_id=e.id))
     order by coalesce(e.importance_score, a.importance_score) desc,
       e.first_seen_at desc, e.id asc
     limit 5

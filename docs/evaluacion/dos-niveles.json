@@ -1,0 +1,1058 @@
+{
+  "scope": "Casos sintéticos de evaluación. Etiquetas propuestas por el agente antes de ejecutar la reserva; no preferencias del usuario. Scoring de entrada simulado, común a ambos sistemas. La reserva no se utiliza para reajustar reglas.",
+  "sha256": "8838f87f6dfe789b76c7f0eec0f0638bd6ddf2483b0ffc62bbae233d8a83147b",
+  "limitations": [
+    "No mide la precisión real del modelo: usa puntuaciones simuladas iguales en ambos sistemas.",
+    "Etiquetas del agente, ninguna etiqueta del usuario.",
+    "No capturadas por un feed no se pueden contar a partir de lo que el feed sí contiene.",
+    "Reserva no utilizada para ajustar reglas después de esta evaluación."
+  ],
+  "calibration": {
+    "before": {
+      "count": 12,
+      "brief": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 4,
+        "precision": 0,
+        "recall": 0
+      },
+      "important": {
+        "tp": 2,
+        "fp": 1,
+        "fn": 1,
+        "precision": 0.6666666666666666,
+        "recall": 0.6666666666666666
+      },
+      "usefulReached": 6,
+      "usefulOmitted": 2,
+      "noiseAdmitted": 3,
+      "weightedPenalty": 16,
+      "scoringCalls": 9,
+      "proposedBriefItems": 1,
+      "proposedImportant": 3,
+      "digestOrDashboard": 5
+    },
+    "after": {
+      "count": 12,
+      "brief": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1,
+        "recall": 1
+      },
+      "important": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1,
+        "recall": 1
+      },
+      "usefulReached": 8,
+      "usefulOmitted": 0,
+      "noiseAdmitted": 0,
+      "weightedPenalty": 0,
+      "scoringCalls": 8,
+      "proposedBriefItems": 4,
+      "proposedImportant": 3,
+      "digestOrDashboard": 1
+    }
+  },
+  "holdout": {
+    "before": {
+      "count": 16,
+      "brief": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 6,
+        "precision": 0,
+        "recall": 0
+      },
+      "important": {
+        "tp": 1,
+        "fp": 1,
+        "fn": 3,
+        "precision": 0.5,
+        "recall": 0.25
+      },
+      "usefulReached": 6,
+      "usefulOmitted": 5,
+      "noiseAdmitted": 3,
+      "weightedPenalty": 24,
+      "scoringCalls": 9,
+      "proposedBriefItems": 1,
+      "proposedImportant": 2,
+      "digestOrDashboard": 6
+    },
+    "after": {
+      "count": 16,
+      "brief": {
+        "tp": 6,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.8571428571428571,
+        "recall": 1
+      },
+      "important": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1,
+        "recall": 1
+      },
+      "usefulReached": 11,
+      "usefulOmitted": 0,
+      "noiseAdmitted": 1,
+      "weightedPenalty": 1,
+      "scoringCalls": 12,
+      "proposedBriefItems": 7,
+      "proposedImportant": 4,
+      "digestOrDashboard": 1
+    }
+  },
+  "grouping": {
+    "input": 4,
+    "expectedStories": 3,
+    "before": 2,
+    "after": 3
+  },
+  "rows": [
+    {
+      "id": "c1",
+      "split": "calibration",
+      "title": "Copper production falls during maintenance",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "cambio concreto de produccion, oferta o inventarios"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "c2",
+      "split": "calibration",
+      "title": "Acme cuts earnings guidance by 50 percent",
+      "score": 6,
+      "label": "important",
+      "materialWatchlist": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "concrete_economic_fact; direct_material_watchlist"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "direct_material_watchlist",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "c3",
+      "split": "calibration",
+      "title": "Acme earnings call transcript",
+      "score": 6,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "promotional_or_technical_noise"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "promotional_or_technical_noise",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "c4",
+      "split": "calibration",
+      "title": "Central bank raises interest rate",
+      "score": 8,
+      "label": "important",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "important",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "c5",
+      "split": "calibration",
+      "title": "Monetary Policy Report",
+      "score": 4,
+      "label": "digest",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "digest",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_digest"
+      ]
+    },
+    {
+      "id": "c6",
+      "split": "calibration",
+      "title": "Rumours: Acme could buy Beta",
+      "score": 7,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "important",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "unconfirmed_claim"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "unconfirmed_claim",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "c7",
+      "split": "calibration",
+      "title": "Gold surges as supply falls",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "movimiento o tension de mercado, energia o banca"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "c8",
+      "split": "calibration",
+      "title": "Fireside chat on monetary policy",
+      "score": 6,
+      "label": "none",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "brief",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "routine_without_new_decision"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "routine_without_new_decision",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "c9",
+      "split": "calibration",
+      "title": "Arden signs supply contract",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "c10",
+      "split": "calibration",
+      "title": "Vela announces financing agreement",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "c11",
+      "split": "calibration",
+      "title": "The bank of Aster cuts interest rates",
+      "score": 7,
+      "label": "important",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "important",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "macro",
+          "reason": "termino macro: interest rates"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "macro",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "c12",
+      "split": "calibration",
+      "title": "Best CD rates today",
+      "score": 6,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "transcripcion u oferta sin empresa vigilada"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "promotional_or_technical_noise"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "promotional_or_technical_noise",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "h1",
+      "split": "holdout",
+      "title": "Orion vende activos de producción de gas",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h2",
+      "split": "holdout",
+      "title": "Lumen anuncia financiación para ampliar producción",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h3",
+      "split": "holdout",
+      "title": "Delta firma contrato de suministro de cobre",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h4",
+      "split": "holdout",
+      "title": "Acme anuncia resultados y recorta previsiones",
+      "score": 6,
+      "label": "important",
+      "materialWatchlist": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "concrete_economic_fact; direct_material_watchlist"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "direct_material_watchlist",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "h5",
+      "split": "holdout",
+      "title": "Acme refinances a loan after financing problems",
+      "score": 6,
+      "label": "important",
+      "materialWatchlist": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "concrete_economic_fact; direct_material_watchlist"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "direct_material_watchlist",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "h6",
+      "split": "holdout",
+      "title": "El banco central recorta tipos de interés",
+      "score": 8,
+      "label": "important",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "important",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "h7",
+      "split": "holdout",
+      "title": "Summary of Opinions at the Monetary Policy Meeting",
+      "score": 4,
+      "label": "digest",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "digest",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "topic_without_confirmed_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "topic_without_confirmed_fact",
+        "assigned_digest"
+      ]
+    },
+    {
+      "id": "h8",
+      "split": "holdout",
+      "title": "Lumen may buy Nova according to sources",
+      "score": 8,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "unconfirmed_claim"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "unconfirmed_claim",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "h9",
+      "split": "holdout",
+      "title": "Acme sponsored investment outlook",
+      "score": 8,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "important",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "watchlist_name",
+          "reason": "menciona el nombre de una empresa vigilada"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "promotional_or_technical_noise"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "promotional_or_technical_noise",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "h10",
+      "split": "holdout",
+      "title": "Should copper production fall, gold could rise",
+      "score": 5,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "cambio concreto de produccion, oferta o inventarios"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h11",
+      "split": "holdout",
+      "title": "Aster acquires Boreal after regulatory approval",
+      "score": 8,
+      "label": "important",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "important",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "corporate",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_important"
+      ]
+    },
+    {
+      "id": "h12",
+      "split": "holdout",
+      "title": "Nimbus suspende la producción de petróleo",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "market",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h13",
+      "split": "holdout",
+      "title": "Five reasons to love silver jewellery",
+      "score": 5,
+      "label": "none",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "none",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "sin ticker, nombre vigilado ni señal macro, de mercado o corporativa"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "no_match",
+          "reason": "no_concrete_economic_fact"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "no_concrete_economic_fact",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "h14",
+      "split": "holdout",
+      "title": "Central bank seminar on inflation",
+      "score": 6,
+      "label": "none",
+      "official": true,
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "brief",
+      "after": "none",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "official",
+          "reason": "fuente oficial"
+        },
+        "currentRules": {
+          "pass": false,
+          "reasonCode": "low_signal",
+          "reason": "routine_without_new_decision"
+        },
+        "queue": "discarded_rules",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "policy_excluded"
+      },
+      "reasons": [
+        "routine_without_new_decision",
+        "assigned_none"
+      ]
+    },
+    {
+      "id": "h15",
+      "split": "holdout",
+      "title": "Cargo blockage disrupts grain exports",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "geopolitics",
+          "reason": "conflicto o interrupcion con canal economico identificable"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "geopolitics",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    },
+    {
+      "id": "h16",
+      "split": "holdout",
+      "title": "Bond yields rise as retail sales rebound",
+      "score": 5,
+      "label": "brief",
+      "userLabel": null,
+      "synthetic": true,
+      "labelOrigin": "agent_proposed",
+      "before": "digest",
+      "after": "brief",
+      "stages": {
+        "capture": "fixture_available_not_live",
+        "beforeRules": {
+          "pass": true,
+          "reasonCode": "macro",
+          "reason": "termino macro: retail sales"
+        },
+        "currentRules": {
+          "pass": true,
+          "reasonCode": "macro",
+          "reason": "concrete_economic_fact"
+        },
+        "queue": "eligible_not_lost_by_cap",
+        "scoring": "simulated_common_input",
+        "telegram": "not_sent_simulation",
+        "morning": "eligible_before_top5_and_delivery_exclusion"
+      },
+      "reasons": [
+        "concrete_economic_fact",
+        "assigned_brief"
+      ]
+    }
+  ]
+}

@@ -3,13 +3,16 @@ import type { Config } from "../src/config.ts";
 import type { Vigilado } from "../src/db/watchlist.ts";
 import type { CascadeDeps } from "../src/ai/cascade.ts";
 import type { LogCode, LogFields } from "../src/lib/log.ts";
+import { memoryQueueStore } from "../src/pipeline/queue.ts";
+import { memoryControlStore } from "../src/pipeline/control.ts";
 
 // Solo datos inventados. Se ejecutan main, collect, normalizadores y logger reales.
 // Los dobles se limitan a las fronteras de servicios: no red, LLM ni escrituras.
 const mocks = vi.hoisted(() => ({
   config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
   filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), fred: vi.fn(), eurostat: vi.fn(),
-  score: vi.fn(), analyze: vi.fn(), send: vi.fn(), state: vi.fn(),
+  score: vi.fn(), analyze: vi.fn(), send: vi.fn(), state: vi.fn(), queue: vi.fn(),
+  control: vi.fn(),
   seen: { has: vi.fn(), mark: vi.fn(), saveAlert: vi.fn(), claimAlert: vi.fn(), finishAlert: vi.fn() },
 }));
 vi.mock("../src/config.ts", async (original) => ({
@@ -47,6 +50,11 @@ vi.mock("../src/notify/telegram.ts", async (original) => ({
   ...await original<typeof import("../src/notify/telegram.ts")>(), sendTelegram: mocks.send,
 }));
 vi.mock("../src/db/neon.ts", () => ({ neonSeenStore: mocks.state }));
+vi.mock("../src/db/queue.ts", () => ({ neonQueueStore: mocks.queue }));
+vi.mock("../src/db/control.ts", () => ({ neonControlStore: mocks.control }));
+vi.mock("../src/pipeline/queue.ts", async (original) => ({
+  ...await original<typeof import("../src/pipeline/queue.ts")>(), fileQueueStore: mocks.queue,
+}));
 vi.mock("../src/pipeline/seen.ts", async (original) => ({
   ...await original<typeof import("../src/pipeline/seen.ts")>(), fileSeenStore: mocks.state,
 }));
@@ -83,6 +91,8 @@ beforeEach(() => {
   mocks.feed.mockResolvedValue([]);
   mocks.eurostat.mockRejectedValue(Object.assign(new Error(payload), { query: payload }));
   mocks.state.mockReturnValue(mocks.seen);
+  mocks.queue.mockReturnValue(memoryQueueStore());
+  mocks.control.mockReturnValue(memoryControlStore());
   mocks.seen.has.mockResolvedValue(false);
   mocks.score.mockResolvedValue({ importance_score: 8, market_impact_score: 8,
     sentiment: "bullish", needs_alert: true, one_liner: `Prosa scoring ${payload}` });
@@ -257,6 +267,18 @@ describe("bordes reales de collect", () => {
 });
 
 describe("consola del main real", () => {
+  it("dos niveles: main persiste decisión y envía breve; grupo después del acuse", async () => {
+    mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level", feeds: ["cnbc-markets"] });
+    mocks.watchlist.mockResolvedValue([]);
+    mocks.feed.mockResolvedValue([{ title: "Copper production falls during maintenance", link: "https://example.test/copper", guid: "copper", date: new Date().toISOString(), summary: null, raw: "<item/>" }]);
+    mocks.score.mockResolvedValue({ importance_score: 5, market_impact_score: 5, sentiment: "neutral", needs_alert: false, one_liner: "La producción de cobre cae durante el mantenimiento." });
+    const { exit } = await ejecutarMain(false);
+    expect(exit).toHaveBeenCalledWith(0); expect(mocks.analyze).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.seen.finishAlert.mock.invocationCallOrder[0]).toBeLessThan(mocks.send.mock.invocationCallOrder[1]!);
+    const event = mocks.score.mock.calls[0]![0];
+    expect(await mocks.control.mock.results[0]!.value.getDecision(event.id)).toMatchObject({ level: "brief" });
+  });
   it.each(["true", ""])("no imprime título, alerta ni prosa en --dry (Actions=%s)", async (actions) => {
     vi.stubEnv("GITHUB_ACTIONS", actions);
     const { records, exit } = await ejecutarMain();
@@ -288,7 +310,7 @@ describe("consola del main real", () => {
     const { records } = await ejecutarMain();
     expect(records.filter((r) => r.code === "CONFIG_MISSING")).toEqual(
       ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DATABASE_URL", "SEC_USER_AGENT"]
-        .map((variable) => ({ code: "CONFIG_MISSING", stage: "startup", count: 6, variable })),
+        .map((variable) => ({ code: "CONFIG_MISSING", stage: "startup", variable })),
     );
   });
 
@@ -309,7 +331,7 @@ describe("consola del main real", () => {
     "protege errores por evento y termina con código de fallo", async (error) => {
       mocks.score.mockRejectedValue(error);
       const { records, exit } = await ejecutarMain();
-      expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "scoring", index: 1, error: "UNKNOWN" });
+      expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "scoring", error: "UNKNOWN" });
       expect(exit).toHaveBeenCalledWith(1);
     },
   );
@@ -365,7 +387,7 @@ describe("copia al grupo compartido", () => {
     mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
       telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
     mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
-    mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
+    mocks.feed.mockResolvedValue([{ title: "El BCE eleva los tipos de interés",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
     mocks.send.mockResolvedValue({ ok: true, state: "sent" });
@@ -384,7 +406,7 @@ describe("copia al grupo compartido", () => {
     mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
       telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
     mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
-    mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
+    mocks.feed.mockResolvedValue([{ title: "El BCE eleva los tipos de interés",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
     mocks.send.mockResolvedValueOnce({ ok: true, state: "sent" })

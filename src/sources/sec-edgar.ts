@@ -11,14 +11,17 @@
  *    devuelven 403. Como este repositorio es público, ese contacto no puede
  *    vivir aquí: entra por `SEC_USER_AGENT`. Sin esa variable, la fuente se
  *    salta y se dice por qué — no se intenta a escondidas con otro agente.
- * 2. **Diez peticiones por segundo como máximo.** Aquí se pide una por empresa
- *    de la watchlist, con una pausa corta entre ellas.
+ * 2. **Diez peticiones por segundo como máximo.** Cada intento HTTP comparte
+ *    un limitador de 150 ms, incluidas resolución, empresas y reintentos.
  */
-import { fetchJson, fetchText, type RetryOptions } from "../lib/http.ts";
+import { fetchJson, type RetryOptions } from "../lib/http.ts";
+import { createRateLimiter, positiveInteger } from "../lib/concurrency.ts";
 import { blocks, tagText } from "../lib/feed.ts";
 import { eventId, type NormalizedEvent } from "../schema/event.ts";
 
 const BASE = "https://www.sec.gov";
+const SUBMISSIONS = "https://data.sec.gov/submissions";
+const limitSec = createRateLimiter(150);
 
 /**
  * Documentos que mueven el precio. El resto del catálogo de EDGAR —sobre todo
@@ -45,7 +48,19 @@ export interface Filing {
 
 /** El User-Agent que la SEC exige. Sin contacto no hay peticiones. */
 export function secHeaders(userAgent: string): Record<string, string> {
-  return { "User-Agent": userAgent, Accept: "application/atom+xml, text/xml" };
+  if (!userAgent.trim()) throw new Error("SEC_CONTACT_MISSING");
+  return { "User-Agent": userAgent, Accept: "application/json, application/atom+xml, text/xml" };
+}
+
+function secOptions(userAgent: string, opts: RetryOptions): RetryOptions {
+  return {
+    ...opts,
+    headers: secHeaders(userAgent),
+    beforeAttempt: async (signal) => {
+      await opts.beforeAttempt?.(signal);
+      await limitSec(signal);
+    },
+  };
 }
 
 interface TickerRow {
@@ -55,6 +70,7 @@ interface TickerRow {
 }
 
 let cacheTickers: Map<string, Company> | null = null;
+let loadingTickers: Promise<void> | null = null;
 
 /**
  * Resuelve tickers a CIK con el mapa oficial de la SEC.
@@ -72,41 +88,142 @@ export async function resolveTickers(
   if (tickers.length === 0) return { companies: [], unknown: [] };
 
   if (cacheTickers === null) {
-    const raw = await fetchJson<Record<string, TickerRow>>(`${BASE}/files/company_tickers.json`, {
-      ...opts,
-      headers: secHeaders(userAgent),
-    });
-    cacheTickers = new Map();
-    for (const row of Object.values(raw)) {
-      if (!row?.ticker) continue;
-      cacheTickers.set(row.ticker.toUpperCase(), {
-        cik: String(row.cik_str).padStart(10, "0"),
-        ticker: row.ticker.toUpperCase(),
-        name: row.title ?? null,
-      });
-    }
+    loadingTickers ??= (async () => {
+      const raw = await fetchJson<Record<string, TickerRow>>(`${BASE}/files/company_tickers.json`, secOptions(userAgent, opts));
+      const parsed = new Map<string, Company>();
+      for (const row of Object.values(raw)) {
+        if (!row?.ticker) continue;
+        parsed.set(row.ticker.toUpperCase(), {
+          cik: String(row.cik_str).padStart(10, "0"),
+          ticker: row.ticker.toUpperCase(),
+          name: row.title ?? null,
+        });
+      }
+      if (parsed.size === 0) throw Object.assign(new Error("SEC_SHAPE"), { code: "SEC_SHAPE" });
+      cacheTickers = parsed;
+    })().finally(() => { loadingTickers = null; });
+    await loadingTickers;
   }
 
   const companies: Company[] = [];
   const unknown: string[] = [];
   for (const t of tickers) {
-    const found = cacheTickers.get(t.trim().toUpperCase());
+    const found = cacheTickers!.get(t.trim().toUpperCase());
     if (found) companies.push(found);
     else unknown.push(t.trim().toUpperCase());
   }
   return { companies, unknown };
 }
 
-/** Últimos documentos de una empresa, sin filtrar por tipo (el filtro es local). */
+interface SubmissionColumns {
+  accessionNumber?: string[];
+  form?: string[];
+  filingDate?: string[];
+  acceptanceDateTime?: string[];
+  primaryDocument?: string[];
+  primaryDocDescription?: string[];
+  items?: string[];
+}
+
+interface SubmissionFile {
+  name: string;
+  filingFrom: string;
+  filingTo: string;
+}
+
+export interface FilingCoverage {
+  /** Filas leídas antes de filtrar formularios. */
+  total: number;
+  returned: number;
+  archivesRead: number;
+  archiveFailures: number;
+  /** Ventana incompleta o más formularios relevantes que el límite. */
+  truncated: boolean;
+}
+
+function allowedForm(formType: string, forms: readonly string[]): boolean {
+  const type = formType.toUpperCase();
+  return forms.some((form) => type === form.toUpperCase() || type === `${form.toUpperCase()}/A`);
+}
+
+/** Arrays de columnas oficiales, sin truncar los tipos irrelevantes por delante. */
+export function parseSubmissions(columns: SubmissionColumns, company: Company): Filing[] {
+  if (!Array.isArray(columns.accessionNumber) || !Array.isArray(columns.form) ||
+      !Array.isArray(columns.filingDate) || columns.form.length !== columns.accessionNumber.length ||
+      columns.filingDate.length !== columns.accessionNumber.length) {
+    throw Object.assign(new Error("SEC_SHAPE"), { code: "SEC_SHAPE" });
+  }
+  return columns.accessionNumber.flatMap((accession, index) => {
+    const formType = columns.form![index];
+    const filedAt = columns.acceptanceDateTime?.[index] || columns.filingDate![index];
+    if (!accession || !formType || !filedAt || !Number.isFinite(Date.parse(filedAt))) return [];
+    const document = columns.primaryDocument?.[index];
+    const cik = company.cik.replace(/^0+/, "") || "0";
+    const archive = `${BASE}/Archives/edgar/data/${cik}/${accession.replaceAll("-", "")}`;
+    return [{
+      accession, formType,
+      formName: columns.primaryDocDescription?.[index] || null,
+      filedAt,
+      url: document ? `${archive}/${document.split("/").map(encodeURIComponent).join("/")}` : `${archive}/${accession}-index.html`,
+      items: columns.items?.[index] || null,
+    }];
+  });
+}
+
+/**
+ * Submissions oficial: al menos un año o 1.000 documentos, lo que sea mayor.
+ * Filtra los tipos antes del límite (antes se leían solo diez de cualquier tipo).
+ * Para una ventana anterior a recent consulta como mucho dos archivos históricos
+ * cuyos rangos se solapen. La cobertura incompleta se devuelve explícitamente;
+ * un archivo fallido no elimina los documentos ya descargados de esa empresa.
+ * https://www.sec.gov/search-filings/edgar-application-programming-interfaces
+ */
 export async function fetchFilings(
   company: Company,
   userAgent: string,
-  opts: RetryOptions & { count?: number } = {},
+  opts: RetryOptions & {
+    count?: number;
+    forms?: string[];
+    since?: string;
+    maxArchiveFiles?: number;
+    onCoverage?: (coverage: FilingCoverage) => void;
+  } = {},
 ): Promise<Filing[]> {
-  const url =
-    `${BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(company.cik)}` +
-    `&type=&dateb=&owner=include&count=${opts.count ?? 10}&output=atom`;
-  return parseFilings(await fetchText(url, { ...opts, headers: secHeaders(userAgent) }));
+  const cik = company.cik.padStart(10, "0");
+  if (!/^\d{10}$/.test(cik)) throw Object.assign(new Error("SEC_SHAPE"), { code: "SEC_SHAPE" });
+  const body = await fetchJson<{ filings?: { recent?: SubmissionColumns; files?: SubmissionFile[] } }>(
+    `${SUBMISSIONS}/CIK${cik}.json`, secOptions(userAgent, opts));
+  const all = parseSubmissions(body.filings?.recent ?? {}, company);
+  const since = opts.since ? Date.parse(opts.since) : NaN;
+  const oldest = all.reduce((min, item) => Math.min(min, Date.parse(item.filedAt)), Infinity);
+  const archives = Number.isFinite(since) && oldest > since
+    ? (body.filings?.files ?? []).filter((f) => Date.parse(f.filingTo) + 86_400_000 >= since)
+      .sort((a, b) => b.filingTo.localeCompare(a.filingTo)) : [];
+  const archiveLimit = opts.maxArchiveFiles === 0 ? 0 : positiveInteger(opts.maxArchiveFiles, 2, 2);
+  let archivesRead = 0;
+  let archiveFailures = 0;
+  for (const file of archives.slice(0, archiveLimit)) {
+    if (!/^CIK\d{10}-submissions-\d+\.json$/.test(file.name)) { archiveFailures++; continue; }
+    try {
+      const columns = await fetchJson<SubmissionColumns>(`${SUBMISSIONS}/${file.name}`, secOptions(userAgent, opts));
+      all.push(...parseSubmissions(columns, company));
+      archivesRead++;
+    } catch {
+      // El deadline de tarea corta la recolección desde fuera. Con un fallo HTTP
+      // de un archivo, conservar recent y señalar cobertura parcial es mejor.
+      archiveFailures++;
+    }
+  }
+  const forms = opts.forms ?? FORMS_DEFECTO;
+  const unique = [...new Map(all.map((filing) => [filing.accession, filing])).values()];
+  const relevant = unique.filter((f) => allowedForm(f.formType, forms) &&
+    (!Number.isFinite(since) || Date.parse(f.filedAt) >= since))
+    .sort((a, b) => Date.parse(b.filedAt) - Date.parse(a.filedAt));
+  const count = positiveInteger(opts.count, 1_000, 5_000);
+  const result = relevant.slice(0, count);
+  opts.onCoverage?.({ total: all.length, returned: result.length, archivesRead, archiveFailures,
+    truncated: relevant.length > count || archives.length > archiveLimit || archiveFailures > 0 });
+  return result;
 }
 
 /**
@@ -174,7 +291,7 @@ export function toEvents(
   return filings
     // "8-K/A" es una corrección de un 8-K: mismo peso informativo, así que se
     // compara por prefijo en vez de por igualdad.
-    .filter((f) => forms.some((permitido) => f.formType.toUpperCase().startsWith(permitido)))
+    .filter((f) => allowedForm(f.formType, forms))
     .map((f) => ({
       // El número de registro identifica el documento: una empresa puede
       // presentar dos el mismo día, y la fecha sola los confundiría.
@@ -187,6 +304,8 @@ export function toEvents(
       country: "🇺🇸",
       series_id: company.ticker,
       observed_at: f.filedAt,
+      publication_at: f.filedAt,
+      data_period_at: null,
       retrieved_at: opts.retrievedAt,
 
       actual: null,
