@@ -94,7 +94,30 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     }
     try {
       while (items.length) {
-        const body = formatNewsBatch(items.map((i) => ({ event: capturedEvent(i.entry), scoring: i.scoring })));
+        // Un breve cuya redaccion no se puede respaldar con cifras del original
+        // lanza `short_fact_not_supported`, y eso esta bien: el guardarrail
+        // antifabricacion hace su trabajo. Lo que estaba mal es que salia del
+        // lote ENTERO. Como la cola ordena por critico y luego por antiguedad,
+        // esa misma noticia encabezaba el lote en cada ciclo y bloqueaba detras
+        // a las sanas hasta que todas caducaban a las 48 h sin enviarse nunca.
+        // La ruta de importantes ya aislaba el fallo por noticia; esta no.
+        const sanos: Ready[] = [];
+        for (const item of items) {
+          try { formatInteresting(capturedEvent(item.entry), item.scoring); sanos.push(item); }
+          catch (error) { failed++; options.onFailure?.(error); await defer(item, "unsupported_fact", null); }
+        }
+        items = sanos;
+        if (!items.length) break;
+        let body: string;
+        // Un lote demasiado largo se reduce; si ni una sola cabe, se aparta ella
+        // y no el canal, por el mismo motivo que arriba.
+        try { body = formatNewsBatch(items.map((i) => ({ event: capturedEvent(i.entry), scoring: i.scoring }))); }
+        catch (error) {
+          options.onFailure?.(error);
+          const solo = items.length === 1 ? items[0] : undefined;
+          if (solo) { failed++; await defer(solo, "too_long", null); break; }
+          items = items.slice(0, -1); continue;
+        }
         const reservation = await control.reserve({ id: `batch:${randomUUID()}`, resource: "brief", units: items.length,
           now: options.now, hourLimit: options.briefHour, dayLimit: options.briefDay,
           minimumIntervalMs: options.briefIntervalMinutes * 60_000 });

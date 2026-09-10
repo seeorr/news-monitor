@@ -125,6 +125,21 @@ describe("dos niveles, con transportes simulados", () => {
     expect((await o.control.getDecision("old"))?.reasons).toContain("expired_interest");
     expect(await o.queue.listDeliveryPending()).toHaveLength(0);
   });
+  it("un breve irredactable se aparta solo y no bloquea el canal", async () => {
+    // Regresión: el guardarraíl antifabricación salía del lote entero, así que
+    // la noticia con una cifra sin respaldo encabezaba la cola cada ciclo y las
+    // sanas caducaban a las 48 h sin enviarse. Debe apartarse ella, no el canal.
+    const o = options();
+    await prepare(o, event("veneno"), score(5, "El cobre cae un 9 % tras el cierre de la planta."));
+    await prepare(o, event("sana-1")); await prepare(o, event("sana-2"));
+    expect(await deliverNews(o)).toMatchObject({ sent: 1, failed: 1 });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    const cuerpo = o.send.mock.calls[0]![0] as string;
+    expect(cuerpo).not.toContain("9 %");
+    expect(cuerpo.match(/producción de cobre/g)).toHaveLength(2);
+    expect((await o.control.getDecision("veneno"))?.reasons).toContain("deferred_unsupported_fact");
+    expect((await o.queue.listDeliveryPending()).map((r) => r.id)).toEqual(["veneno"]);
+  });
   it("fallo profundo degrada al hecho breve sin inventar números", async () => {
     const o = options({ deps: deps(vi.fn().mockRejectedValue(new Error("network"))) });
     await prepare(o, event("fallback"), score(8)); await deliverNews(o);
