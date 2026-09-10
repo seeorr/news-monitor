@@ -26,6 +26,16 @@ export const Scoring = z.object({
 });
 export type Scoring = z.infer<typeof Scoring>;
 
+// El SDK convierte maxLength en una descripción para el servidor, pero vuelve
+// a exigirlo al parsear. Un resumen de 201 caracteres puede tirar una puntuación
+// válida. Se separa el transporte del resultado final: solo la longitud admite
+// un respaldo local; los tipos, rangos y categorías conservan su validación.
+const ScoringResponse = Scoring.extend({
+  one_liner: z.string().describe(
+    "Una frase en español de máximo 180 caracteres, usando solo los datos del evento.",
+  ),
+});
+
 export const Analysis = z.object({
   why_it_matters: z.string(),
   catalysts: z.array(z.string()),
@@ -181,6 +191,8 @@ export interface CascadeDeps {
   modelAnalysis: string;
   /** Aviso de cada intento descartado, para que quede en el log del cron. */
   onFabrication?: (intento: number, violations: string[]) => void;
+  /** Resumen demasiado largo reemplazado sin repetir la llamada al modelo. */
+  onScoringSummaryFallback?: () => void;
 }
 
 /** Paso 3. Barato, corto, sobre todo lo que pasó el filtro. */
@@ -195,7 +207,7 @@ export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Pro
         content: `Puntua la relevancia de mercado de este evento.\n\nDATOS:\n${eventFacts(event)}`,
       },
     ],
-    output_config: { format: zodOutputFormat(Scoring) },
+    output_config: { format: zodOutputFormat(ScoringResponse) },
   });
 
   if (res.stop_reason === "refusal") {
@@ -203,7 +215,16 @@ export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Pro
   }
   const parsed = res.parsed_output;
   if (!parsed) throw new Error(`Scoring sin salida valida para ${event.id}`);
-  return parsed;
+  if (parsed.one_liner.length <= 200) return Scoring.parse(parsed);
+
+  // No se corta una frase: perder una negación al final invertiría el hecho.
+  // El titular se conserva entero, o se declara la ausencia de resumen breve.
+  const one_liner = event.title.length <= 200
+    ? event.title
+    : "Sin resumen breve; consulta el titular completo y la fuente.";
+  const scoring = Scoring.parse({ ...parsed, one_liner });
+  deps.onScoringSummaryFallback?.();
+  return scoring;
 }
 
 /**

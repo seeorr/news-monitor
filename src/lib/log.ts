@@ -13,7 +13,7 @@ const CODES = [
   "SOURCE_OK", "SOURCE_FAILED", "FEED_NORMALIZED", "FEED_FUNNEL", "RULE_REASON",
   "AUDIT_COMPLETE", "NO_SOURCES", "SOURCES_PARTIAL", "FRESHNESS",
   "RULES", "DEDUPE", "GROUPED", "SCORING_UNAVAILABLE", "SCORING_LIMIT",
-  "SCORED", "ALERT_SKIPPED", "FABRICATION_RETRY", "ANALYSIS_OK",
+  "SCORED", "SCORING_SUMMARY_FALLBACK", "ALERT_SKIPPED", "FABRICATION_RETRY", "ANALYSIS_OK",
   "ANALYSIS_FALLBACK", "ANALYSIS_LIMIT", "ALERT_READY", "DRY_RUN",
   "TELEGRAM_MISSING", "ALERT_SENT",
   // Los cuatro finales que no son "entregada", y que existen para no tener que
@@ -109,6 +109,14 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
             "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
             "EUROSTAT_SHAPE", "FEED_INVALID"].includes(errorCode)) {
           record.error = errorCode;
+        } else {
+          // El SDK envuelve los errores de Zod en un Error sin código ni status.
+          // Solo se reconoce su prefijo fijo; nunca se publica la explicación,
+          // que puede contener fragmentos de la respuesta del modelo.
+          const message = dato(error, "message");
+          if (typeof message === "string" && message.startsWith("Failed to parse structured output")) {
+            record.error = "MODEL_OUTPUT_INVALID";
+          }
         }
       }
     }

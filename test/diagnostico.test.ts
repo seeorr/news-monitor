@@ -13,6 +13,20 @@ const noticia = (id: string, feed = "cnbc-markets", title = "Central bank cuts i
 afterEach(() => vi.unstubAllGlobals());
 
 describe("diagnóstico del embudo por feed", () => {
+  it("clasifica el fallo de formato del SDK sin imprimir su respuesta ni ejecutar getters", () => {
+    const lines: string[] = [];
+    const log = createLogger((l) => lines.push(l));
+    log("EVENT_FAILED", { stage: "scoring", source: "rss", feed: "cnbc-markets",
+      error: new Error("Failed to parse structured output: información-privada") });
+    const getter = vi.fn(() => "información-privada");
+    const err = Object.defineProperty({}, "message", { get: getter });
+    log("EVENT_FAILED", { error: err });
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { code: "EVENT_FAILED", source: "rss", stage: "scoring", feed: "cnbc-markets", error: "MODEL_OUTPUT_INVALID" },
+      { code: "EVENT_FAILED", error: "UNKNOWN" },
+    ]);
+    expect(getter).not.toHaveBeenCalled();
+  });
   it("separa antigüedad, rechazo de reglas y deduplicación sin publicar titulares", () => {
     const vieja = noticia("vieja");
     const rechazada = noticia("rechazada", "cnbc-markets", "My favourite holiday photos");

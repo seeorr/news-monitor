@@ -116,6 +116,7 @@ async function main(): Promise<number> {
     modelAnalysis: config.modelAnalysis,
     onFabrication: (intento, violations) =>
       log("FABRICATION_RETRY", { stage: "analysis", attempt: intento, count: violations.length }),
+    onScoringSummaryFallback: () => log("SCORING_SUMMARY_FALLBACK", { stage: "scoring" }),
   };
 
   const porPuntuar = grupos.slice(0, config.maxScoringPerCycle);
@@ -149,7 +150,9 @@ async function main(): Promise<number> {
       // Un evento que revienta no puede llevarse por delante a los que quedan:
       // el siguiente puede ser el que importaba.
       fallidos++;
-      log("EVENT_FAILED", { stage, source: grupo.representante.source, index: index + 1, error: err });
+      log("EVENT_FAILED", { stage, source: grupo.representante.source,
+        feed: grupo.representante.source === "rss" ? grupo.representante.series_id ?? undefined : undefined,
+        index: index + 1, error: err });
     }
   }
 
