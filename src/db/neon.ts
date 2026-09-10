@@ -10,7 +10,9 @@
  */
 import { neon } from "@neondatabase/serverless";
 import type { Ejecutor } from "./cliente.ts";
-import type { AlertRecord, Puntuacion, SeenStore } from "../pipeline/seen.ts";
+import type {
+  AlertRecord, EstadoEntrega, Puntuacion, Reclamo, SeenStore,
+} from "../pipeline/seen.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
 /**
@@ -80,9 +82,66 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
     mark,
 
     /**
+     * Reclamar es un `insert` que compite contra el resto por la clave primaria.
+     *
+     * `on conflict ... do update ... where` es la parte que importa: si la fila
+     * ya existe, la condición decide si se puede tomar. Sin `force` la condición
+     * es literalmente falsa, así que **una entrega con dueño no se reclama
+     * jamás**, esté en vuelo, entregada, rechazada o en duda. No hay caducidad
+     * que valga: liberar un `sending` por tiempo es reenviar un mensaje que
+     * quizá ya está leído.
+     *
+     * Con `force`, la condición es cierta y la fila cambia de dueño: es la
+     * puerta que deja a una persona repetir un envío a mano, y `settled_at`
+     * vuelve a null porque la entrega que se está reclamando aún no ha ocurrido.
+     * `attempts` no se reinicia nunca: es el rastro de cuántas veces se intentó.
+     *
+     * Esta tabla **no tiene clave foránea a `events`** a propósito, y por eso el
+     * reclamo puede escribirse antes de que el evento exista. Si el proceso muere
+     * justo aquí, el evento sigue sin marcar y la vuelta siguiente lo vuelve a
+     * mirar; se encuentra el reclamo puesto y no envía, que es exactamente la
+     * propiedad que se compra con todo esto.
+     */
+    async claimAlert(eventId: string, { token, force = false }: Reclamo) {
+      const filas = (await sql`
+        insert into alert_deliveries (event_id, state, claim_token, claimed_at, attempts)
+        values (${eventId}, 'sending', ${token}, now(), 1)
+        on conflict (event_id) do update set
+          state = 'sending', claim_token = ${token}, claimed_at = now(),
+          settled_at = null, attempts = alert_deliveries.attempts + 1, updated_at = now()
+        where ${force}::boolean
+        returning event_id
+      `) as unknown[];
+      return filas.length === 1;
+    },
+
+    /**
+     * Cerrar solo lo propio: `claim_token` y `state = 'sending'` en el `where`.
+     *
+     * Que no cambie ninguna fila no es un caso raro que se pueda tragar. Significa
+     * que el reclamo dejó de ser nuestro —otro proceso lo forzó— o que ya estaba
+     * cerrado, y quien llama tiene que enterarse: lo que queda es una entrega en
+     * `sending` que nadie va a liberar.
+     */
+    async finishAlert(eventId: string, token: string, estado: EstadoEntrega) {
+      const filas = (await sql`
+        update alert_deliveries
+        set state = ${estado}, settled_at = now(), updated_at = now()
+        where event_id = ${eventId} and claim_token = ${token} and state = 'sending'
+        returning event_id
+      `) as unknown[];
+      if (filas.length !== 1) throw new Error("alert_claim_lost");
+    },
+
+    /**
      * El evento se guarda primero: `alerts.event_id` tiene clave foránea y una
      * alerta sin su evento no debe existir. El índice único de `alerts` es la
      * segunda red contra el reenvío, por si el registro de vistos falla.
+     *
+     * Esto se escribe **después** de que Telegram acepte, y por eso `alerts`
+     * sigue significando lo que siempre significó: lo que de verdad salió. El
+     * estado de la entrega vive aparte, en `alert_deliveries`, para que el
+     * dashboard no tenga que acordarse de filtrar filas que nunca se enviaron.
      *
      * La puntuación viaja a las dos tablas a propósito: `alerts` guarda con qué
      * nota se anunció y `events` deja ordenar todo lo puntuado por la misma

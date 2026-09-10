@@ -102,7 +102,7 @@ cp .env.example .env      # y rellena las claves
 npm run db:migrate        # crea el esquema en Neon
 npm start                 # ciclo completo
 npm start -- --dry        # todo menos enviar a Telegram
-npm start -- --force      # ignora el registro de vistos
+npm start -- --force      # ignora el registro de vistos y el reclamo de entrega
 npm run check             # typecheck + tests
 
 npm run agenda            # agenda macro de la semana a Telegram
@@ -254,6 +254,20 @@ protección que cubra todas sus URLs, incluidas acciones de escritura.
   tablas —los activos afectados se consultan con `@>` sobre el `jsonb`— porque
   una tabla que hoy no consulta nadie es esquema muerto, y el `jsonb` guarda lo
   suficiente para rellenarla el día que se gane su sitio.
+- **La alerta se reclama antes de enviarse, no se registra después.** Hasta el 10
+  de septiembre se mandaba a Telegram y solo después se escribía en `alerts`:
+  morir en esos quince segundos de red dejaba el registro vacío y la vuelta
+  siguiente escribía otra vez al teléfono de alguien. El índice único de `alerts`
+  impide duplicar la fila, no retirar un mensaje entregado. Ahora la entrega tiene
+  su propia máquina de estados en `alert_deliveries` —`sending → sent | rejected |
+  uncertain`, con `claim_token`—, igual que el resumen matinal en `daily_briefs`:
+  se reclama, se envía y se cierra. **`sending` no caduca jamás** y `uncertain` no
+  se recupera solo, porque Telegram no ofrece idempotencia y liberar por tiempo es
+  exactamente lo que produce el doble envío; el único camino de vuelta es
+  `--force`, que es una persona decidiendo. El log dice cuál de los cuatro finales
+  fue (`ALERT_SENT`, `ALERT_BLOCKED`, `ALERT_REJECTED`, `ALERT_UNCERTAIN`,
+  `ALERT_RECORD_FAILED`) y `alerts` se sigue escribiendo solo cuando Telegram
+  acepta, así que sigue significando lo que de verdad salió.
 - **El estado vive en Neon, no en disco.** El job de Actions arranca con el disco
   vacío: sin base de datos remota, el cron no recuerda nada y repite la alerta
   en cada vuelta. El archivo local queda solo para desarrollo.

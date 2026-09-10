@@ -103,6 +103,36 @@ export interface AlertRecord extends Puntuacion {
   analysis: AnalisisProfundo | null;
 }
 
+/**
+ * El desenlace de un envío: las tres únicas cosas que se pueden afirmar después
+ * de hablar con Telegram.
+ *
+ * `rejected` es un rechazo coherente —la API dice que no y dice con qué código—,
+ * así que el mensaje no salió. `uncertain` es todo lo demás: un timeout, un 502
+ * de un proxy, un JSON ilegible. Pudo llegar y pudo no llegar, y la diferencia
+ * importa porque ninguna de las dos se puede reintentar a ciegas.
+ */
+export type EstadoEntrega = "sent" | "rejected" | "uncertain";
+
+/**
+ * El estado en vuelo, más los tres desenlaces.
+ *
+ * `sending` **no se libera nunca por tiempo**, y es la pieza que arregla el
+ * defecto: liberar por caducidad es justo lo que produce el doble envío, porque
+ * Telegram no ofrece idempotencia y un mensaje ya entregado no se retira del
+ * teléfono de nadie. El único camino de vuelta es `--force`, que es una persona
+ * decidiendo.
+ */
+export type EstadoReclamo = "sending" | EstadoEntrega;
+
+/** Quién reclama la entrega, y si lo pide una persona a mano. */
+export interface Reclamo {
+  /** Identifica a este proceso: solo su dueño puede cerrar la entrega. */
+  token: string;
+  /** `--force`: reclama aunque la entrega esté en vuelo o ya cerrada. */
+  force?: boolean;
+}
+
 export interface SeenStore {
   /** ¿Se procesó ya esta observación? */
   has(id: string): Promise<boolean>;
@@ -115,9 +145,57 @@ export interface SeenStore {
    * la verdad, y no un 5 de relleno.
    */
   mark(event: NormalizedEvent, puntuacion?: Puntuacion | null): Promise<void>;
+  /**
+   * Reclama la entrega de una alerta **antes** de tocar la red.
+   *
+   * Es la diferencia entre "la fila no se duplica" y "el mensaje no se duplica".
+   * El índice único de `alerts` impedía lo primero y no lo segundo: la alerta se
+   * mandaba y solo después se registraba, así que morir en esos quince segundos de
+   * red dejaba el registro vacío y la vuelta siguiente volvía a escribir al
+   * teléfono de alguien.
+   *
+   * Devuelve `false` cuando el reclamo es de otro o la entrega ya está cerrada, y
+   * entonces **no se envía**: ni en vuelo, ni entregada, ni en duda. Solo
+   * `force` reclama una entrega que ya tiene dueño.
+   */
+  claimAlert(eventId: string, reclamo: Reclamo): Promise<boolean>;
+  /**
+   * Cierra la entrega que este proceso reclamó.
+   *
+   * Lanza si el reclamo ya no es suyo o si la entrega no sigue en vuelo: perder
+   * el acuse tiene que verse, porque lo que queda es una fila en `sending` que
+   * nadie va a liberar.
+   */
+  finishAlert(eventId: string, token: string, estado: EstadoEntrega): Promise<void>;
   /** Se envió esta alerta. */
   saveAlert(event: NormalizedEvent, alert: AlertRecord): Promise<void>;
   size(): Promise<number>;
+}
+
+/**
+ * La máquina de estados de la entrega, en memoria.
+ *
+ * La comparten el estado local y el de los tests porque la regla es una y se
+ * escribe una vez: se reclama solo lo que no tiene dueño y se cierra solo lo
+ * propio. La versión que manda es la de Neon (`src/db/neon.ts`), y es SQL.
+ */
+function reclamosEnMemoria() {
+  const entregas = new Map<string, { estado: EstadoReclamo; token: string }>();
+  return {
+    entregas,
+    claimAlert: async (eventId: string, { token, force = false }: Reclamo): Promise<boolean> => {
+      if (entregas.has(eventId) && !force) return false;
+      entregas.set(eventId, { estado: "sending", token });
+      return true;
+    },
+    finishAlert: async (eventId: string, token: string, estado: EstadoEntrega): Promise<void> => {
+      const entrega = entregas.get(eventId);
+      if (!entrega || entrega.estado !== "sending" || entrega.token !== token) {
+        throw new Error("alert_claim_lost");
+      }
+      entregas.set(eventId, { estado, token });
+    },
+  };
 }
 
 /**
@@ -128,6 +206,12 @@ export interface SeenStore {
  * del paso 4 necesitan una base de datos, así que aquí `saveAlert` se limita a
  * dar por procesado el evento y la puntuación que reciba `mark` se descarta. Es
  * una degradación consciente del modo local, no un olvido.
+ *
+ * La entrega tampoco se guarda en el archivo: vive en memoria y muere con el
+ * proceso. Y es suficiente aquí, porque en local no hay dos ciclos pisándose y
+ * el evento se marca antes de enviar, así que la vuelta siguiente lo descarta en
+ * la deduplicación igual que antes. El reclamo de verdad, el que sobrevive a un
+ * proceso muerto, solo lo puede dar una base de datos.
  */
 export function fileSeenStore(stateDir: string): SeenStore {
   const path = join(stateDir, "seen.json");
@@ -149,12 +233,16 @@ export function fileSeenStore(stateDir: string): SeenStore {
     writeFileSync(path, JSON.stringify([...ids].slice(-5000), null, 0), "utf8");
   };
 
+  const { claimAlert, finishAlert } = reclamosEnMemoria();
+
   return {
     has: async (id) => ids.has(id),
     mark: async (event) => {
       ids.add(event.id);
       persist();
     },
+    claimAlert,
+    finishAlert,
     saveAlert: async (event) => {
       ids.add(event.id);
       persist();
@@ -166,13 +254,21 @@ export function fileSeenStore(stateDir: string): SeenStore {
 /** Para tests: nada toca el disco ni la red. */
 export function memorySeenStore(
   initial: string[] = [],
-): SeenStore & { alerts: AlertRecord[]; puntuaciones: Map<string, Puntuacion> } {
+): SeenStore & {
+  alerts: AlertRecord[];
+  puntuaciones: Map<string, Puntuacion>;
+  entregas: Map<string, { estado: EstadoReclamo; token: string }>;
+} {
   const ids = new Set(initial);
   const alerts: AlertRecord[] = [];
   const puntuaciones = new Map<string, Puntuacion>();
+  const { entregas, claimAlert, finishAlert } = reclamosEnMemoria();
   return {
     alerts,
     puntuaciones,
+    entregas,
+    claimAlert,
+    finishAlert,
     has: async (id) => ids.has(id),
     mark: async (event, puntuacion) => {
       ids.add(event.id);

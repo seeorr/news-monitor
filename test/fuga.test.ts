@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
   filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), fred: vi.fn(), eurostat: vi.fn(),
   score: vi.fn(), analyze: vi.fn(), send: vi.fn(), state: vi.fn(),
-  seen: { has: vi.fn(), mark: vi.fn(), saveAlert: vi.fn() },
+  seen: { has: vi.fn(), mark: vi.fn(), saveAlert: vi.fn(), claimAlert: vi.fn(), finishAlert: vi.fn() },
 }));
 vi.mock("../src/config.ts", async (original) => ({
   ...await original<typeof import("../src/config.ts")>(),
@@ -88,7 +88,8 @@ beforeEach(() => {
     sentiment: "bullish", needs_alert: true, one_liner: `Prosa scoring ${payload}` });
   mocks.analyze.mockResolvedValue({ why_it_matters: `Prosa profunda ${payload}`,
     catalysts: [payload], risks: [payload], affected_assets: [], what_to_watch: [payload] });
-  mocks.send.mockResolvedValue({ ok: true });
+  mocks.seen.claimAlert.mockResolvedValue(true);
+  mocks.send.mockResolvedValue({ ok: true, state: "sent" });
 });
 afterEach(() => {
   expect(fetch).not.toHaveBeenCalled();
@@ -328,14 +329,18 @@ describe("consola del main real", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  // La descripción de un rechazo la escribe Telegram y puede llevar dentro el
+  // texto del mensaje. El código del log dice qué pasó; la descripción no sale.
   it("protege la descripción de rechazo de Telegram (doble sin red)", async () => {
-    mocks.send.mockResolvedValue({ ok: false, description: payload });
+    mocks.send.mockResolvedValue({ ok: false, state: "rejected", description: payload });
     const { records, exit } = await ejecutarMain(false);
     expect(mocks.send).toHaveBeenCalledTimes(1);
     expect(mocks.send.mock.calls[0]?.[2]).toContain("Prosa profunda");
-    expect(records).toContainEqual({ code: "EVENT_FAILED", source: "yahoo", stage: "telegram", index: 1, error: "UNKNOWN" });
+    expect(records).toContainEqual({ code: "ALERT_REJECTED", source: "yahoo", stage: "persist" });
     expect(exit).toHaveBeenCalledWith(1);
     expect(mocks.seen.saveAlert).not.toHaveBeenCalled();
+    // El rechazo queda cerrado en la entrega: ni se reenvía ni se pierde.
+    expect(mocks.seen.finishAlert.mock.calls[0]?.[2]).toBe("rejected");
   });
 });
 
@@ -345,7 +350,7 @@ describe("copia al grupo compartido", () => {
   // Alberto, y el test lo fija para que dejar de hacerlo tenga que ser un
   // cambio deliberado y no un efecto colateral.
   it("un movimiento de precio de la watchlist tambien se copia al grupo", async () => {
-    mocks.send.mockResolvedValue({ ok: true });
+    mocks.send.mockResolvedValue({ ok: true, state: "sent" });
     const { records, exit } = await ejecutarMain(false);
     expect(mocks.send).toHaveBeenCalledTimes(2);
     const [privado, grupo] = mocks.send.mock.calls;
@@ -363,7 +368,7 @@ describe("copia al grupo compartido", () => {
     mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
-    mocks.send.mockResolvedValue({ ok: true });
+    mocks.send.mockResolvedValue({ ok: true, state: "sent" });
 
     const { records, exit } = await ejecutarMain(false);
     expect(mocks.send).toHaveBeenCalledTimes(2);
@@ -382,7 +387,7 @@ describe("copia al grupo compartido", () => {
     mocks.feed.mockResolvedValue([{ title: "El BCE avisa de que la inflación sigue alta",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
-    mocks.send.mockResolvedValueOnce({ ok: true })
+    mocks.send.mockResolvedValueOnce({ ok: true, state: "sent" })
       .mockRejectedValueOnce(Object.assign(new Error(payload), { code: "ECONNRESET" }));
 
     const { records, exit } = await ejecutarMain(false);

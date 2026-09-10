@@ -5,6 +5,10 @@
  * toca la red.
  */
 import type { Analysis, Scoring } from "../ai/cascade.ts";
+// El desenlace de un envío se declara donde vive la máquina de estados de la
+// entrega, y no otra vez aquí: dos uniones idénticas con dos nombres son dos
+// uniones que un día dicen cosas distintas.
+import type { EstadoEntrega } from "../pipeline/seen.ts";
 import type { NormalizedEvent, Surprise, SurpriseBasis } from "../schema/event.ts";
 
 const IMPACT: Record<Scoring["sentiment"], string> = {
@@ -169,17 +173,40 @@ function arrows(direction: "up" | "down" | "unclear", confidence: number): strin
   return icon.repeat(Math.max(1, Math.min(3, Math.round(confidence))));
 }
 
+/**
+ * Manda el mensaje y dice **qué se puede afirmar** de lo que pasó.
+ *
+ * `ok` seguía respondiendo a "¿salió?" con un booleano, y un booleano no tiene
+ * sitio para la tercera respuesta, que es la que hay casi siempre que algo va
+ * mal: no se sabe. Un 502 de un proxy, un JSON ilegible o un cuerpo sin
+ * `message_id` no demuestran ni que llegara ni que no.
+ *
+ * Solo un rechazo coherente —4xx que no sea 408, con `ok:false` y un
+ * `error_code` que coincida con el estado HTTP— demuestra que el mensaje no
+ * salió. Es la misma regla que ya aplica `sendBriefTelegram()` en el resumen
+ * matinal, y se escribe igual a propósito: dos lecturas distintas de la misma
+ * respuesta acabarían tratando el mismo fallo de dos maneras.
+ *
+ * `ok` se mantiene para quien solo necesita saber si salió —la agenda y la copia
+ * al grupo— y ahora significa exactamente `state === "sent"`.
+ */
 export async function sendTelegram(
   token: string,
   chatId: string,
   text: string,
-): Promise<{ ok: boolean; description?: string }> {
+): Promise<{ ok: boolean; state: EstadoEntrega; description?: string }> {
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
     signal: AbortSignal.timeout(15_000),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-  return { ok: res.ok && body.ok === true, description: body.description };
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: unknown; error_code?: unknown; description?: string; result?: { message_id?: unknown };
+  };
+  const entregado = res.ok && body.ok === true && Number.isInteger(body.result?.message_id);
+  const rechazado = res.status >= 400 && res.status < 500 && res.status !== 408 &&
+    body.ok === false && body.error_code === res.status;
+  const state: EstadoEntrega = entregado ? "sent" : rechazado ? "rejected" : "uncertain";
+  return { ok: state === "sent", state, description: body.description };
 }

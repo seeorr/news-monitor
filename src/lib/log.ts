@@ -11,7 +11,15 @@ const CODES = [
   "RULES", "DEDUPE", "GROUPED", "SCORING_UNAVAILABLE", "SCORING_LIMIT",
   "SCORED", "ALERT_SKIPPED", "FABRICATION_RETRY", "ANALYSIS_OK",
   "ANALYSIS_FALLBACK", "ANALYSIS_LIMIT", "ALERT_READY", "DRY_RUN",
-  "TELEGRAM_MISSING", "ALERT_SENT", "EVENT_FAILED", "CYCLE_END",
+  "TELEGRAM_MISSING", "ALERT_SENT",
+  // Los cuatro finales que no son "entregada", y que existen para no tener que
+  // abrir el job de Actions para saber qué pasó. Se leen junto a la tabla
+  // `alert_deliveries`, que es donde queda el estado: BLOCKED, la entrega ya
+  // tenía dueño y no se reenvía; REJECTED, Telegram dijo que no y el mensaje no
+  // salió; UNCERTAIN, pudo salir y pudo no salir; RECORD_FAILED, se perdió el
+  // acuse de Neon y la entrega se queda en `sending`, que nadie libera.
+  "ALERT_BLOCKED", "ALERT_REJECTED", "ALERT_UNCERTAIN", "ALERT_RECORD_FAILED",
+  "EVENT_FAILED", "CYCLE_END",
   // Copia al grupo compartido. Dicen si salió o si Telegram la rechazó. No dicen
   // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
   // diagnosticar.

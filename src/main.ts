@@ -15,8 +15,10 @@
  *
  *   npm start              ejecuta el ciclo
  *   npm start -- --dry     todo menos enviar a Telegram
- *   npm start -- --force   ignora el registro de vistos (reenvía)
+ *   npm start -- --force   ignora el registro de vistos y el reclamo de entrega;
+ *                          es la única forma de reenviar una alerta a mano
  */
+import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   analyzeEvent,
@@ -31,7 +33,9 @@ import { agrupar, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
 import { collectEvents, porFecha, recientes } from "./pipeline/collect.ts";
 import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
-import { fileSeenStore, type Puntuacion, type SeenStore } from "./pipeline/seen.ts";
+import {
+  fileSeenStore, type EstadoEntrega, type Puntuacion, type SeenStore,
+} from "./pipeline/seen.ts";
 
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
 import type { NormalizedEvent } from "./schema/event.ts";
@@ -128,12 +132,16 @@ async function main(): Promise<number> {
         deps,
         seen,
         dry,
+        force,
         // El techo del modelo caro se comprueba aquí y no dentro: el orden del
         // bucle (lo más reciente primero) es el que decide quién se lo lleva.
         analisisProfundo: profundos < config.maxDeepPerCycle,
       });
       if (resultado.deep) profundos++;
       if (resultado.enviada) enviadas++;
+      // Una alerta que se compuso y no llegó a entregarse cuenta como fallo
+      // aunque nadie lanzara: es lo que tiene que poner el job en rojo.
+      if (resultado.fallida) fallidos++;
     } catch (err) {
       // Un evento que revienta no puede llevarse por delante a los que quedan:
       // el siguiente puede ser el que importaba.
@@ -154,13 +162,26 @@ interface ProcesarDeps {
   deps: CascadeDeps;
   seen: SeenStore;
   dry: boolean;
+  /** `--force`: reclama la entrega aunque ya tenga dueño. Lo pide una persona. */
+  force: boolean;
   analisisProfundo: boolean;
+}
+
+/**
+ * `fallida` no es lo contrario de `enviada`: un evento que no llega al umbral no
+ * se envía y no ha fallado nada. Marca las alertas que sí se compusieron y no se
+ * pudieron dar por entregadas, que son las que hay que mirar.
+ */
+interface Resultado {
+  enviada: boolean;
+  deep: boolean;
+  fallida?: boolean;
 }
 
 async function procesar(
   grupo: Grupo,
-  { config, deps, seen, dry, analisisProfundo }: ProcesarDeps,
-): Promise<{ enviada: boolean; deep: boolean }> {
+  { config, deps, seen, dry, force, analisisProfundo }: ProcesarDeps,
+): Promise<Resultado> {
   const event = grupo.representante;
   stage = "scoring";
   const scoring = await scoreEvent(event, deps);
@@ -201,34 +222,80 @@ async function procesar(
   const text = formatAlert(event, scoring, analysis, { tambien: tambienLoCuentan(grupo) });
   log("ALERT_READY", { stage, source: event.source });
 
+  const deep = analysis !== null;
+
   if (dry) {
     log("DRY_RUN", { stage });
-    return { enviada: false, deep: analysis !== null };
+    return { enviada: false, deep };
   }
+  // Sin credenciales no se reclama nada: el evento vuelve entero en la siguiente
+  // vuelta, que es lo que se quiere cuando falta una variable de entorno.
   if (!config.telegramBotToken || !config.telegramChatId) {
     log("TELEGRAM_MISSING", { stage: "telegram" });
-    return { enviada: false, deep: analysis !== null };
+    return { enviada: false, deep };
+  }
+
+  // ── Reclamar, enviar, cerrar ───────────────────────────────────────────────
+  // El orden es el arreglo entero. Antes se enviaba y se registraba después, así
+  // que morir en los quince segundos de red de Telegram dejaba el registro vacío
+  // y la vuelta siguiente escribía otra vez al teléfono de alguien: el índice
+  // único de `alerts` impide duplicar la fila, no retirar un mensaje entregado.
+  //
+  // Es el mismo patrón que ya usa el resumen matinal en `src/pipeline/brief.ts`.
+  stage = "persist";
+  const token = randomUUID();
+  const reclamada = await seen.claimAlert(event.id, { token, force });
+
+  // Marcar va justo después del reclamo y **pase lo que pase con él**. Si el
+  // reclamo es ajeno y el evento se quedara sin marcar, volvería cada media hora
+  // a puntuarse con Haiku para chocar otra vez contra el mismo reclamo.
+  await marcarGrupo(seen, grupo, puntuacion);
+
+  if (!reclamada) {
+    // Ni en vuelo, ni entregada, ni en duda: nada de eso se reenvía solo.
+    log("ALERT_BLOCKED", { stage, source: event.source });
+    return { enviada: false, deep, fallida: true };
   }
 
   stage = "telegram";
-  const sent = await sendTelegram(config.telegramBotToken, config.telegramChatId, text);
-  if (!sent.ok) {
-    // Sin registrar: se reintenta en la vuelta siguiente. Es preferible arriesgar
-    // un duplicado a perder la alerta.
-    throw new Error("TELEGRAM_REJECTED");
+  let estado: EstadoEntrega;
+  try {
+    estado = (await sendTelegram(config.telegramBotToken, config.telegramChatId, text)).state;
+  } catch {
+    // Timeout, DNS, socket cortado. Pudo llegar: no se sabe y no se finge saber.
+    estado = "uncertain";
   }
 
-  // `analysis` viaja entero a la base, además de formateado dentro de `text`.
-  // Antes solo iba la prosa: se pagaba Opus por un análisis que la base no podía
-  // consultar y la ficha de detalle no tenía de dónde sacar catalizadores,
-  // riesgos ni activos afectados.
   stage = "persist";
-  await seen.saveAlert(event, { ...puntuacion, deep: analysis !== null, body: text, analysis });
-  await marcarDuplicados(seen, grupo);
+  try {
+    // `analysis` viaja entero a la base, además de formateado dentro de `text`.
+    // Antes solo iba la prosa: se pagaba Opus por un análisis que la base no
+    // podía consultar y la ficha de detalle no tenía de dónde sacar
+    // catalizadores, riesgos ni activos afectados.
+    //
+    // Solo se escribe si Telegram lo aceptó, porque `alerts` significa lo que de
+    // verdad salió y el dashboard lo lee con ese significado.
+    if (estado === "sent") {
+      await seen.saveAlert(event, { ...puntuacion, deep, body: text, analysis });
+    }
+    await seen.finishAlert(event.id, token, estado);
+  } catch {
+    // Se perdió el acuse de Neon. La entrega se queda en `sending` y nadie la
+    // libera: preferible una alerta sin cerrar a una alerta repetida. No se
+    // cuenta como enviada aunque saliera, porque lo que no se pudo registrar no
+    // se puede afirmar.
+    log("ALERT_RECORD_FAILED", { stage, source: event.source });
+    return { enviada: false, deep, fallida: true };
+  }
+
+  if (estado !== "sent") {
+    log(estado === "rejected" ? "ALERT_REJECTED" : "ALERT_UNCERTAIN", { stage, source: event.source });
+    return { enviada: false, deep, fallida: true };
+  }
   log("ALERT_SENT", { stage, source: event.source });
 
   await copiarAlGrupo(config, event, text);
-  return { enviada: true, deep: analysis !== null };
+  return { enviada: true, deep };
 }
 
 /**
@@ -245,10 +312,11 @@ async function procesar(
  * este, y el criterio defendible sería "solo lo que el monitor habría marcado
  * con la watchlist vacía".
  *
- * Va después de registrar el envío privado y no entre el envío y el registro: si
- * el proceso muere durante estos quince segundos de red, la alerta privada ya
- * está anotada y no se repite en la vuelta siguiente. El grupo es el destino
- * secundario y paga él ese riesgo.
+ * Va al final, después de que la entrega privada esté cerrada, y sigue ahí por lo
+ * mismo de siempre: si el proceso muere durante estos quince segundos de red, la
+ * alerta privada ya está entregada y anotada, y no se repite en la vuelta
+ * siguiente. El grupo es el destino secundario y paga él ese riesgo —no tiene
+ * reclamo propio, así que un `--force` le manda una copia otra vez—.
  *
  * Nada de lo que ocurra aquí puede tumbar el ciclo ni tocar el resultado de la
  * alerta privada, que es la que importa: se registra qué pasó y se sigue. Un
@@ -273,6 +341,10 @@ async function copiarAlGrupo(config: Config, event: NormalizedEvent, text: strin
  * representante —que ya está visto— y entonces sí se puntúan y se anuncian por
  * separado. El agrupamiento habría servido para retrasar el ruido quince
  * minutos.
+ *
+ * En el camino de la alerta esto ocurre **antes** de enviar, y no después como
+ * antes: marcar es barato y reversible, enviar no. Lo caro es lo que tiene que
+ * quedarse para el final.
  */
 async function marcarGrupo(seen: SeenStore, grupo: Grupo, puntuacion: Puntuacion): Promise<void> {
   await seen.mark(grupo.representante, puntuacion);
