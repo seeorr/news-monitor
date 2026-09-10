@@ -267,7 +267,8 @@ describe("reclamos, fallos y recuperación", () => {
     expect(reclaimed).toMatchObject([{ attempts: 2, lease_token: "new", reason: "processing_expired" }]);
     await expect(queue.finish(id, "old", { state: "scored", score, needs_delivery: true }, t1)).rejects.toThrow("processing_claim_lost");
     expect(await seen.claimAlert(id, { token: "telegram-new" })).toBe(false);
-    expect(seen.entregas.get(id)).toEqual({ estado: "sending", token: "telegram-original" });
+    // Sin plazo: `sending` no se libera por tiempo, así que no tiene ninguno.
+    expect(seen.entregas.get(id)).toEqual({ estado: "sending", token: "telegram-original", nextAttemptAt: null });
   });
 
   it("un worker no cierra después de su plazo aunque nadie haya reclamado todavía", async () => {

@@ -11,18 +11,18 @@
  * `"use client"` puede importarlo.
  */
 import { cookies } from "next/headers";
-import { COOKIE_SESION, VARIABLE_SECRETO, secretoUtilizable, verificarSesion } from "./sesion.ts";
+import { COOKIE_SESION, VARIABLE_SECRETO, secretoEfectivo, secretoUtilizable, verificarSesion } from "./sesion.ts";
 
 /**
  * El secreto, del entorno y de ningún otro sitio.
  *
- * Se recorta: Vercel guarda con frecuencia un salto de línea de más al pegar el
- * valor, y un secreto que sólo falla en producción por un carácter invisible es
- * el peor de los fallos posibles. Vacío y ausente son lo mismo.
+ * La normalización **no se repite aquí**: la hace `secretoEfectivo()`, en el
+ * módulo puro, que es el mismo que usa el proxy. Tenerla escrita dos veces fue
+ * justo el fallo —una puerta recortaba y la otra no—, y dos copias de una regla
+ * son dos copias que un día dicen cosas distintas.
  */
 export function secretoDeAcceso(): string | null {
-  const valor = process.env[VARIABLE_SECRETO];
-  return valor && valor.trim() !== "" ? valor.trim() : null;
+  return secretoEfectivo(process.env[VARIABLE_SECRETO]);
 }
 
 /**

@@ -17,7 +17,7 @@ describe("reloj externo, todas las peticiones simuladas", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, request] = fetch.mock.calls[0]!;
     expect(url).toBe("https://api.github.com/repos/example/monitor/actions/workflows/monitor.yml/dispatches");
-    expect(request).toMatchObject({ method: "POST", redirect: "error", headers: { Accept: "application/vnd.github+json",
+    expect(request).toMatchObject({ method: "POST", redirect: "manual", headers: { Accept: "application/vnd.github+json",
       Authorization: `Bearer ${env.GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2026-03-10" } });
     expect(JSON.parse(request.body)).toEqual({ ref: "release/clock", inputs: { profile: "fast", origin: "external", mode: "capture-only" } });
     expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
@@ -35,6 +35,17 @@ describe("reloj externo, todas las peticiones simuladas", () => {
     expect(hanging.mock.calls).toHaveLength(1);
     const leaking = vi.fn().mockRejectedValue(new Error(env.GITHUB_TOKEN));
     await expect(dispatch(at(23), env, { fetch: leaking, log })).rejects.toThrow("dispatch_uncertain");
+    expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
+  });
+  // El fallo del 10-09: workerd rechaza `redirect: "error"` con un TypeError
+  // síncrono al construir la petición. Registrarlo como `uncertain` lo confundió
+  // con un corte de red pasajero durante cinco horas. Un TypeError aquí es la
+  // petición mal construida: permanente, y hay que arreglarla, no esperar.
+  it("una petición que el runtime no acepta es invalid_request, no uncertain", async () => {
+    const log = vi.fn();
+    const rejecting = vi.fn().mockRejectedValue(new TypeError(`Invalid redirect value ${env.GITHUB_TOKEN}`));
+    await expect(dispatch(at(23), env, { fetch: rejecting, log })).rejects.toThrow("dispatch_invalid_request");
+    expect(log.mock.calls).toEqual([[{ state: "invalid_request", profile: "fast" }]]);
     expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
   });
   it("desactivado no requiere secreto; configuración hostil no llega a la red", async () => {

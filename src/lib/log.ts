@@ -67,6 +67,45 @@ export interface LogFields extends Partial<Record<typeof COUNTS[number], number>
 }
 export type Logger = (code: LogCode, fields?: LogFields) => void;
 
+/**
+ * Códigos de red, TLS y base reconocidos. Son identificadores del sistema
+ * operativo, del driver o nuestros: nunca traen cuerpo de respuesta ni URL.
+ */
+const ERROR_CODES = [
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
+  "EHOSTUNREACH", "ENETUNREACH", "EPIPE",
+  // undici sí pone código propio cuando el fallo es suyo, pero lo deja en
+  // `cause`; sin recorrer la cadena se perdían todos.
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+  // TLS: un certificado caducado no es "no responde" y no se arregla esperando.
+  "CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "28P01", "42P01", "42703", "53300", "57P01",
+  // Eurostat responde 200 a una consulta que no vigila nada: sin estos
+  // codigos, "no responde" y "responde y no trae nada" se leerian
+  // igual en el log, y es justo la diferencia que hay que ver.
+  "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
+  "EUROSTAT_SHAPE", "FEED_INVALID", "SOURCE_TIMEOUT", "COLLECTION_TIMEOUT", "SEC_SHAPE",
+  "SEC_COVERAGE_LIMIT", "SEC_ARCHIVE_FAILED", "AI_BUDGET_EXHAUSTED",
+] as const;
+/**
+ * Fallos propios con código estable (C5). Son literales de este repositorio, no
+ * texto de terceros: publicarlos no filtra nada, y evita que una configuración
+ * inválida o un reclamo perdido —justo los errores que explican por qué el
+ * ciclo no funciona— se lean como UNKNOWN.
+ */
+const SAFE_FAILURES = [
+  "invalid_health_limit", "invalid_health_arguments", "invalid_monitor_profile", "invalid_monitor_origin",
+  "invalid_cycle_mode", "incompatible_cycle_modes", "invalid_capture_profile", "invalid_news_delivery_mode",
+  "invalid_agenda_days", "invalid_bounded_configuration", "invalid_model_price", "invalid_flags",
+  "health_database_required", "health_notice_configuration_missing",
+  "invalid_budget_reservation", "budget_reservation_conflict", "budget_reservation_missing",
+  "ai_reservation_missing", "invalid_control_state", "control_file_busy",
+  "queue_file_busy", "alert_delivery_file_busy", "invalid_alert_claim", "invalid_alert_delivery_state",
+  "alert_claim_lost", "brief_claim_lost", "processing_claim_lost", "capture_ack_missing",
+  "invalid_queue_state", "invalid_queue_limit", "invalid_queue_response", "invalid_queue_stats",
+  "queue_enrichment_identity_changed", "duplicate_queue_entry", "scored_queue_entry_missing",
+] as const;
+
 /** Lee propiedades de datos sin ejecutar getters, toJSON, inspect ni toString. */
 function dato(value: unknown, key: string): unknown {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return undefined;
@@ -75,6 +114,44 @@ function dato(value: unknown, key: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Clasifica un eslabón de la cadena de errores. Devuelve `null` cuando no
+ * reconoce nada: quien llama sigue bajando por `cause`. Solo publica vocabulario
+ * cerrado; ningún mensaje libre llega al log, ni siquiera recortado.
+ */
+function clasificarError(value: unknown): Record<string, string | number> | null {
+  const status = dato(value, "status");
+  if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
+    return { error: "HTTP", status };
+  }
+  const code = dato(value, "code");
+  if (typeof code === "string" && (ERROR_CODES as readonly string[]).includes(code)) return { error: code };
+  // DOMException guarda `name` en el prototipo: `dato` no lo ve y el getter es
+  // nativo, así que leerlo aquí no ejecuta código ajeno. Un plazo agotado y una
+  // cancelación son dos diagnósticos distintos y ninguno es UNKNOWN.
+  if (value instanceof DOMException) {
+    if (value.name === "TimeoutError") return { error: "REQUEST_TIMEOUT" };
+    if (value.name === "AbortError") return { error: "REQUEST_ABORTED" };
+    return null;
+  }
+  // Un esquema que no valida no es un fallo de red. `issues` es propiedad
+  // propia de ZodError; su contenido nunca se publica, solo su existencia.
+  if (Array.isArray(dato(value, "issues"))) return { error: "SCHEMA_INVALID" };
+  // Una respuesta que no es JSON: su mensaje incluye el fragmento recibido, así
+  // que se publica el hecho y no el texto.
+  if (value instanceof SyntaxError) return { error: "PAYLOAD_INVALID_JSON" };
+  const message = dato(value, "message");
+  if (typeof message !== "string") return null;
+  // El SDK envuelve los errores de Zod en un Error sin código ni status.
+  // Solo se reconoce su prefijo fijo; nunca se publica la explicación,
+  // que puede contener fragmentos de la respuesta del modelo.
+  if (message.startsWith("Failed to parse structured output")) return { error: "MODEL_OUTPUT_INVALID" };
+  // Igualdad exacta contra la lista cerrada: un mensaje que *contenga* un código
+  // conocido sigue siendo texto libre y no entra.
+  if ((SAFE_FAILURES as readonly string[]).includes(message)) return { error: message.toUpperCase() };
+  return null;
 }
 
 export function createLogger(sink: (line: string) => void = (line) => console.log(line)): Logger {
@@ -111,29 +188,14 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
       const error = dato(fields, "error");
       if (error !== undefined) {
         record.error = "UNKNOWN";
-        const status = dato(error, "status");
-        const errorCode = dato(error, "code");
-        if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
-          record.error = "HTTP";
-          record.status = status;
-        } else if (typeof errorCode === "string" &&
-          ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
-            "28P01", "42P01", "42703", "53300", "57P01",
-            // Eurostat responde 200 a una consulta que no vigila nada: sin estos
-            // codigos, "no responde" y "responde y no trae nada" se leerian
-            // igual en el log, y es justo la diferencia que hay que ver.
-            "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
-            "EUROSTAT_SHAPE", "FEED_INVALID", "SOURCE_TIMEOUT", "COLLECTION_TIMEOUT", "SEC_SHAPE",
-            "SEC_COVERAGE_LIMIT", "SEC_ARCHIVE_FAILED", "AI_BUDGET_EXHAUSTED"].includes(errorCode)) {
-          record.error = errorCode;
-        } else {
-          // El SDK envuelve los errores de Zod en un Error sin código ni status.
-          // Solo se reconoce su prefijo fijo; nunca se publica la explicación,
-          // que puede contener fragmentos de la respuesta del modelo.
-          const message = dato(error, "message");
-          if (typeof message === "string" && message.startsWith("Failed to parse structured output")) {
-            record.error = "MODEL_OUTPUT_INVALID";
-          }
+        // `fetch` envuelve el fallo real: TypeError("fetch failed") por fuera y
+        // ECONNRESET/ENOTFOUND en `cause`. Sin bajar por la cadena, quedarse sin
+        // DNS y que el modelo devuelva basura se leían igual —UNKNOWN— y era
+        // justo la diferencia que hay que ver. Profundidad acotada: una cadena
+        // cíclica no puede colgar el logger, y `dato` no ejecuta el getter.
+        for (let link: unknown = error, hop = 0; link !== undefined && hop < 4; link = dato(link, "cause"), hop++) {
+          const clasificado = clasificarError(link);
+          if (clasificado) { Object.assign(record, clasificado); break; }
         }
       }
     }

@@ -119,15 +119,49 @@ export interface AlertRecord extends Puntuacion {
 export type EstadoEntrega = "sent" | "rejected" | "uncertain";
 
 /**
- * El estado en vuelo, más los tres desenlaces.
+ * Lo que se puede afirmar de un envío, con el rechazo abierto en dos.
  *
- * `sending` **no se libera nunca por tiempo**, y es la pieza que arregla el
- * defecto: liberar por caducidad es justo lo que produce el doble envío, porque
- * Telegram no ofrece idempotencia y un mensaje ya entregado no se retira del
- * teléfono de nadie. El único camino de vuelta es `--force`, que es una persona
- * decidiendo.
+ * `rejected` a secas era demasiado grueso y costaba noticias: un 429 y un 400
+ * llegan por el mismo camino y significan cosas opuestas. En los dos Telegram
+ * dice que **no aceptó nada** —por eso reintentar no puede duplicar—, pero el
+ * 429 dice "ahora no" y hasta cuándo, y el 400 dice "este mensaje no, nunca".
+ * Cerrarlos igual convertía una limitación de ritmo en una noticia perdida para
+ * siempre, porque `claimAlert` no vuelve a reclamar una fila cerrada sin `force`.
+ *
+ * `code` es un código propio y seguro (`telegram_429`), nunca la `description`
+ * que devuelve la API: ese texto puede llevar dentro el token del bot.
  */
-export type EstadoReclamo = "sending" | EstadoEntrega;
+export type ResultadoEnvio = {
+  state: EstadoEntrega;
+  /** Solo con `state === "rejected"`. 429 es el único recuperable. */
+  rejection?: "recoverable" | "permanent";
+  /** Solo con `rejection === "recoverable"`: de `parameters.retry_after`. */
+  retryAfterMs?: number;
+  code?: string;
+};
+
+/**
+ * El estado en vuelo, los tres desenlaces del transporte y los dos cierres que
+ * no pasan por él.
+ *
+ * `sending` y `uncertain` **no se liberan nunca por tiempo**, y es la pieza que
+ * arregla el defecto original: liberar por caducidad es justo lo que produce el
+ * doble envío, porque Telegram no ofrece idempotencia y un mensaje ya entregado
+ * no se retira del teléfono de nadie. El único camino de vuelta es `--force`,
+ * que es una persona decidiendo.
+ *
+ * `deferred` es la excepción, y solo porque es la única que puede demostrarlo:
+ * se escribe **exclusivamente** tras un rechazo recuperable, donde Telegram ha
+ * dicho por escrito que no aceptó el mensaje. Es el único estado que `claimAlert`
+ * vuelve a reclamar sin una persona, y aun así no antes de su `nextAttemptAt`.
+ *
+ * `undeliverable` cierra lo que no se puede redactar —una cifra que la fuente no
+ * respalda, un cuerpo que no cabe—. No se envió nada y no se enviará: repetir un
+ * fallo determinista solo gasta la ventana de la cola. Es un cierre explícito y
+ * distinto de `sent` a propósito: `alerts` sigue significando "salió de verdad".
+ */
+export type EstadoCierre = EstadoEntrega | "deferred" | "undeliverable";
+export type EstadoReclamo = "sending" | EstadoCierre;
 
 /** Quién reclama la entrega, y si lo pide una persona a mano. */
 export interface Reclamo {
@@ -135,6 +169,14 @@ export interface Reclamo {
   token: string;
   /** `--force`: reclama aunque la entrega esté en vuelo o ya cerrada. */
   force?: boolean;
+  /** Reloj del ciclo, para vencer un `deferred`. El de pared si no se da. */
+  now?: string;
+}
+
+/** Estado de la entrega y, si está aplazada, desde cuándo se puede reintentar. */
+export interface EntregaReclamada {
+  estado: EstadoReclamo;
+  nextAttemptAt: string | null;
 }
 
 export interface SeenStore {
@@ -160,19 +202,35 @@ export interface SeenStore {
    *
    * Devuelve `false` cuando el reclamo es de otro o la entrega ya está cerrada, y
    * entonces **no se envía**: ni en vuelo, ni entregada, ni en duda. Solo
-   * `force` reclama una entrega que ya tiene dueño.
+   * `force` reclama una entrega que ya tiene dueño, con una excepción escrita en
+   * `EstadoCierre`: un `deferred` vencido, que es el único caso donde consta que
+   * Telegram no aceptó nada.
    */
   claimAlert(eventId: string, reclamo: Reclamo): Promise<boolean>;
   /** Lectura sin reclamar ni liberar; permite cerrar la cola sin repetir análisis. */
   alertState?(eventId: string): Promise<EstadoReclamo | null>;
+  /** Lo mismo, con el plazo: quien decide la ventana necesita saber hasta cuándo. */
+  alertDelivery?(eventId: string): Promise<EntregaReclamada | null>;
   /**
    * Cierra la entrega que este proceso reclamó.
    *
    * Lanza si el reclamo ya no es suyo o si la entrega no sigue en vuelo: perder
    * el acuse tiene que verse, porque lo que queda es una fila en `sending` que
    * nadie va a liberar.
+   *
+   * `nextAttemptAt` solo tiene sentido con `deferred`; con cualquier otro cierre
+   * se ignora, porque ninguno se reintenta solo.
    */
-  finishAlert(eventId: string, token: string, estado: EstadoEntrega): Promise<void>;
+  finishAlert(eventId: string, token: string, estado: EstadoCierre, nextAttemptAt?: string | null): Promise<void>;
+  /**
+   * Cierra una entrega que nunca llegó a reclamarse porque no hay nada que
+   * enviar: el texto no se puede redactar sin inventar.
+   *
+   * No reclama y no pisa: si ya hay fila —en vuelo o cerrada— devuelve `false` y
+   * se respeta lo que decidiera su dueño. Se escribe sin token a propósito,
+   * igual que el relleno histórico: aquí no hubo reclamo que fingir.
+   */
+  markUndeliverable?(eventId: string): Promise<boolean>;
   /** Se envió esta alerta. */
   saveAlert(event: NormalizedEvent, alert: AlertRecord): Promise<void>;
   size(): Promise<number>;
@@ -184,28 +242,64 @@ export interface SeenStore {
  * Se reclama solo lo que no tiene dueño y se cierra solo lo propio. El archivo
  * local aplica la misma regla dentro de un bloqueo y Neon la expresa en SQL.
  */
+/** Una fila de la máquina de estados. Sin token en los cierres sin reclamo. */
+interface Entrega { estado: EstadoReclamo; token: string | null; nextAttemptAt: string | null }
+
+/**
+ * La ÚNICA puerta por la que una entrega vuelve a estar disponible sin que lo
+ * pida una persona.
+ *
+ * Si estás aquí buscando dónde liberar un `sending` colgado o un `uncertain`
+ * viejo: no está, y no se añade. Los dos significan "pudo haber salido", y
+ * Telegram no retira un mensaje entregado. `deferred` es distinto porque solo se
+ * escribe cuando la propia API ha respondido que no aceptó nada.
+ */
+function aplazamientoVencido(entrega: Entrega, now?: string): boolean {
+  if (entrega.estado !== "deferred") return false;
+  if (entrega.nextAttemptAt === null) return true;
+  return Date.parse(now ?? new Date().toISOString()) >= Date.parse(entrega.nextAttemptAt);
+}
+
+/** El plazo solo lo lleva `deferred`: ningún otro cierre se reintenta solo. */
+function plazo(estado: EstadoCierre, nextAttemptAt?: string | null): string | null {
+  if (estado !== "deferred" || nextAttemptAt == null) return null;
+  if (!Number.isFinite(Date.parse(nextAttemptAt))) throw new Error("invalid_alert_retry_instant");
+  return nextAttemptAt;
+}
+
 function reclamosEnMemoria() {
-  const entregas = new Map<string, { estado: EstadoReclamo; token: string }>();
+  const entregas = new Map<string, Entrega>();
   return {
     entregas,
     alertState: async (eventId: string): Promise<EstadoReclamo | null> => entregas.get(eventId)?.estado ?? null,
-    claimAlert: async (eventId: string, { token, force = false }: Reclamo): Promise<boolean> => {
-      if (entregas.has(eventId) && !force) return false;
-      entregas.set(eventId, { estado: "sending", token });
+    alertDelivery: async (eventId: string): Promise<EntregaReclamada | null> => {
+      const entrega = entregas.get(eventId);
+      return entrega ? { estado: entrega.estado, nextAttemptAt: entrega.nextAttemptAt } : null;
+    },
+    claimAlert: async (eventId: string, reclamo: Reclamo): Promise<boolean> => {
+      const entrega = entregas.get(eventId);
+      if (entrega && !reclamo.force && !aplazamientoVencido(entrega, reclamo.now)) return false;
+      entregas.set(eventId, { estado: "sending", token: reclamo.token, nextAttemptAt: null });
       return true;
     },
-    finishAlert: async (eventId: string, token: string, estado: EstadoEntrega): Promise<void> => {
+    finishAlert: async (eventId: string, token: string, estado: EstadoCierre, nextAttemptAt?: string | null): Promise<void> => {
       const entrega = entregas.get(eventId);
       if (!entrega || entrega.estado !== "sending" || entrega.token !== token) {
         throw new Error("alert_claim_lost");
       }
-      entregas.set(eventId, { estado, token });
+      entregas.set(eventId, { estado, token, nextAttemptAt: plazo(estado, nextAttemptAt) });
+    },
+    markUndeliverable: async (eventId: string): Promise<boolean> => {
+      if (entregas.has(eventId)) return false;
+      entregas.set(eventId, { estado: "undeliverable", token: null, nextAttemptAt: null });
+      return true;
     },
   };
 }
 
-interface FileDelivery { eventId: string; estado: EstadoReclamo; token: string }
-const DELIVERY_STATES: readonly EstadoReclamo[] = ["sending", "sent", "rejected", "uncertain"];
+interface FileDelivery extends Entrega { eventId: string }
+const CIERRES: readonly EstadoCierre[] = ["sent", "rejected", "uncertain", "deferred", "undeliverable"];
+const DELIVERY_STATES: readonly EstadoReclamo[] = ["sending", ...CIERRES];
 
 /**
  * Reclamos duraderos: el archivo de la cola puede sobrevivir a un envío, por
@@ -221,11 +315,18 @@ function reclamosEnArchivo(stateDir: string) {
     if (!raw || raw.version !== 1 || !Array.isArray(raw.deliveries)) throw new Error("invalid_alert_delivery_state");
     const deliveries = new Map<string, FileDelivery>();
     for (const row of raw.deliveries as Array<Partial<FileDelivery> | null>) {
-      if (!row || typeof row.eventId !== "string" || !row.eventId || typeof row.token !== "string" || !row.token ||
+      // El token falta solo en un cierre que nadie reclamó; el plazo, solo en
+      // un archivo anterior al campo. Cualquier otra forma falla cerrado.
+      const cierreSinReclamo = row?.estado === "undeliverable" && (row.token ?? null) === null;
+      const plazoValido = row?.nextAttemptAt == null ||
+        (typeof row.nextAttemptAt === "string" && Number.isFinite(Date.parse(row.nextAttemptAt)));
+      if (!row || typeof row.eventId !== "string" || !row.eventId ||
+          (!cierreSinReclamo && (typeof row.token !== "string" || !row.token)) || !plazoValido ||
           !row.estado || !DELIVERY_STATES.includes(row.estado) || deliveries.has(row.eventId)) {
         throw new Error("invalid_alert_delivery_state");
       }
-      deliveries.set(row.eventId, { eventId: row.eventId, estado: row.estado, token: row.token });
+      deliveries.set(row.eventId, { eventId: row.eventId, estado: row.estado,
+        token: row.token ?? null, nextAttemptAt: row.nextAttemptAt ?? null });
     }
     return deliveries;
   };
@@ -288,20 +389,34 @@ function reclamosEnArchivo(stateDir: string) {
   };
   return {
     alertState: async (eventId: string): Promise<EstadoReclamo | null> => read().get(eventId)?.estado ?? null,
-    claimAlert: async (eventId: string, { token, force = false }: Reclamo): Promise<boolean> => {
+    alertDelivery: async (eventId: string): Promise<EntregaReclamada | null> => {
+      const entrega = read().get(eventId);
+      return entrega ? { estado: entrega.estado, nextAttemptAt: entrega.nextAttemptAt } : null;
+    },
+    claimAlert: async (eventId: string, { token, force = false, now }: Reclamo): Promise<boolean> => {
       if (!eventId || !token) throw new Error("invalid_alert_claim");
       return change((rows) => {
-        if (rows.has(eventId) && !force) return false;
-        rows.set(eventId, { eventId, estado: "sending", token });
+        const previous = rows.get(eventId);
+        if (previous && !force && !aplazamientoVencido(previous, now)) return false;
+        rows.set(eventId, { eventId, estado: "sending", token, nextAttemptAt: null });
         return true;
       });
     },
-    finishAlert: async (eventId: string, token: string, estado: EstadoEntrega): Promise<void> => {
-      if (!["sent", "rejected", "uncertain"].includes(estado)) throw new Error("invalid_alert_delivery_state");
+    finishAlert: async (eventId: string, token: string, estado: EstadoCierre, nextAttemptAt?: string | null): Promise<void> => {
+      if (!CIERRES.includes(estado)) throw new Error("invalid_alert_delivery_state");
+      const hasta = plazo(estado, nextAttemptAt);
       await change((rows) => {
         const previous = rows.get(eventId);
         if (!previous || previous.estado !== "sending" || previous.token !== token) throw new Error("alert_claim_lost");
-        rows.set(eventId, { eventId, estado, token });
+        rows.set(eventId, { eventId, estado, token, nextAttemptAt: hasta });
+      });
+    },
+    markUndeliverable: async (eventId: string): Promise<boolean> => {
+      if (!eventId) throw new Error("invalid_alert_claim");
+      return change((rows) => {
+        if (rows.has(eventId)) return false;
+        rows.set(eventId, { eventId, estado: "undeliverable", token: null, nextAttemptAt: null });
+        return true;
       });
     },
   };
@@ -340,7 +455,7 @@ export function fileSeenStore(stateDir: string): SeenStore {
     writeFileSync(path, JSON.stringify([...ids].slice(-5000), null, 0), "utf8");
   };
 
-  const { claimAlert, finishAlert, alertState } = reclamosEnArchivo(stateDir);
+  const { claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable } = reclamosEnArchivo(stateDir);
 
   return {
     has: async (id) => ids.has(id),
@@ -350,7 +465,9 @@ export function fileSeenStore(stateDir: string): SeenStore {
     },
     claimAlert,
     alertState,
+    alertDelivery,
     finishAlert,
+    markUndeliverable,
     saveAlert: async (event) => {
       ids.add(event.id);
       persist();
@@ -365,19 +482,21 @@ export function memorySeenStore(
 ): SeenStore & {
   alerts: AlertRecord[];
   puntuaciones: Map<string, Puntuacion>;
-  entregas: Map<string, { estado: EstadoReclamo; token: string }>;
+  entregas: Map<string, Entrega>;
 } {
   const ids = new Set(initial);
   const alerts: AlertRecord[] = [];
   const puntuaciones = new Map<string, Puntuacion>();
-  const { entregas, claimAlert, finishAlert, alertState } = reclamosEnMemoria();
+  const { entregas, claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable } = reclamosEnMemoria();
   return {
     alerts,
     puntuaciones,
     entregas,
     claimAlert,
     alertState,
+    alertDelivery,
     finishAlert,
+    markUndeliverable,
     has: async (id) => ids.has(id),
     mark: async (event, puntuacion) => {
       ids.add(event.id);

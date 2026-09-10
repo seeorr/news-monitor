@@ -60,8 +60,37 @@ export const MENSAJE_ACCESO_DENEGADO = "No se ha podido entrar.";
 /** Qué falta cuando falta. Se enseña sin ningún valor dentro: el repositorio es público. */
 export const VARIABLE_SECRETO = "DASHBOARD_PASSWORD";
 
+/**
+ * El secreto **efectivo**: el que de verdad firma y verifica.
+ *
+ * Vive aquí, en el módulo puro, y no en cada puerta, porque durante un tiempo
+ * estuvo en dos: `secretoDeAcceso()` recortaba y el proxy pasaba la variable
+ * cruda. Un valor pegado en el panel de Vercel con un salto de línea al final
+ * —que es como se pega con el ratón— derivaba entonces **dos claves HMAC
+ * distintas**: el login firmaba la cookie con una y el proxy la verificaba con
+ * la otra, así que se entraba bien y la navegación siguiente devolvía al
+ * formulario, en bucle. En local no se reproducía nunca, porque el `.env` no
+ * lleva ese salto.
+ *
+ * Recortar en un solo sitio no es una comodidad: es lo que hace imposible que
+ * las tres puertas vuelvan a discrepar. Vacío y ausente son lo mismo.
+ */
+export function secretoEfectivo(secreto: string | null | undefined): string | null {
+  if (typeof secreto !== "string") return null;
+  const limpio = secreto.trim();
+  return limpio === "" ? null : limpio;
+}
+
+/**
+ * La longitud se mide **sobre el secreto efectivo**, no sobre la variable cruda.
+ * Medirla sobre la cruda hacía que un valor de quince caracteres más un salto
+ * midiera dieciséis para el proxy y quince para el login: el proxy servía el
+ * formulario y el login denegaba siempre. Una pantalla que no puede aceptar
+ * nada es exactamente lo que `decidir()` dice que quiere evitar.
+ */
 export function secretoUtilizable(secreto: string | null | undefined): secreto is string {
-  return typeof secreto === "string" && secreto.length >= LONGITUD_MINIMA_SECRETO;
+  const efectivo = secretoEfectivo(secreto);
+  return efectivo !== null && efectivo.length >= LONGITUD_MINIMA_SECRETO;
 }
 
 /**
@@ -245,10 +274,13 @@ export type Decision =
  *    una cabecera interna es una dependencia menos que se puede renombrar.
  */
 export async function decidir(peticion: Peticion): Promise<Decision> {
-  if (!secretoUtilizable(peticion.secreto)) return { tipo: "sin-configurar" };
+  // Quien llama pasa la variable **cruda**, que es lo que le da el runtime; la
+  // decisión de qué es «el secreto» se toma aquí y en ningún otro sitio.
+  const efectivo = secretoEfectivo(peticion.secreto);
+  if (!secretoUtilizable(efectivo)) return { tipo: "sin-configurar" };
   if (esRutaPublica(peticion.pathname)) return { tipo: "pasa" };
 
-  const verificacion = await verificarSesion(peticion.cookie, peticion.secreto, peticion.ahora);
+  const verificacion = await verificarSesion(peticion.cookie, efectivo, peticion.ahora);
   if (verificacion.valido) return { tipo: "pasa" };
 
   const soloLectura = peticion.metodo === "GET" || peticion.metodo === "HEAD";

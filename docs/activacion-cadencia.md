@@ -504,3 +504,522 @@ haberla intentado.
 
 La lista de tareas vive en la ficha del proyecto en Second Brain. El procedimiento
 de activación y reversión completo permanece en el documento de arquitectura.
+
+## Diagnóstico del Agente 1, 10-09 23:05 Madrid (21:05 UTC)
+
+Continuación de la comprobación de las 16:05 UTC. **Todo lo de abajo es lectura.**
+No se ha desplegado, disparado, migrado ni enviado nada. Las correcciones de
+código quedan **propuestas**, no aplicadas.
+
+### La pregunta central, respondida
+
+**¿Ha disparado Cloudflare a GitHub de forma automática desde las 15:31 UTC del
+10-09? No. Ni una sola vez en cinco horas y media.** Pero la causa **ha cambiado
+a mitad de camino**, y lo que hay ahora son dos fallos distintos, uno detrás del
+otro. El segundo estaba escondido debajo del primero.
+
+| Ventana | Qué ocurre | Cómo se sabe |
+| --- | --- | --- |
+| 15:33 – 16:53 UTC | El planificador **no invocaba** al Worker | Nueve slots seguidos, escucha continua (234 ping/pong), cero eventos; panel de Cloudflare: «no events found» |
+| 20:53 y 21:03 UTC | El planificador **sí invoca**, y el Worker **falla antes de tocar la red** | Dos slots consecutivos con evento de cron registrado, `outcome: "exception"`, `wallTime: 1 ms`, `cpuTime: 0`, mismo registro exacto |
+
+Ninguna ejecución de GitHub creada por el reloj, en ninguna de las dos ventanas.
+
+**Ni una ejecución manual ni el respaldo `schedule` de GitHub prueban que el cron
+externo funcione.** No se ha demostrado ningún disparo automático desde
+Cloudflare. Se ha demostrado lo contrario, y ahora además con el motivo exacto.
+
+### La causa raíz de la segunda ventana: `redirect: "error"` no existe en el runtime de Cloudflare
+
+Escucha propia de `wrangler tail news-monitor-clock --format json`, slot `:53`
+del 10-09 (`scheduledTime` 20:53:55 UTC). Registro íntegro del Worker, sin
+recortar nada relevante y sin ningún valor de secreto:
+
+```json
+{ "wallTime": 1, "cpuTime": 0, "outcome": "exception",
+  "scriptName": "news-monitor-clock",
+  "scriptVersion": { "id": "0a109b3f-d942-4412-9dd5-e3b4483e4213" },
+  "event": { "cron": "3,13,23,33,43,53 * * * *", "scheduledTime": 1789073635000 },
+  "logs": [ { "message": ["{\"state\":\"uncertain\",\"profile\":\"fast\"}"] } ],
+  "exceptions": [ { "name": "Error", "message": "dispatch_uncertain",
+    "stack": "at fail (worker.js:17:11) at dispatch (worker.js:58:12) at async Object.scheduled (worker.js:72:5)" } ] }
+```
+
+Lo que ese registro demuestra, paso a paso:
+
+- El cron **se ejecuta**: hay `event.cron` con la expresión correcta.
+- `ENABLED` vale `true`, `selectProfile` acierta y devuelve `fast`: el registro
+  lleva `profile: "fast"`, que solo se escribe después de esa selección.
+- Toda la validación de configuración pasa —propietario, repositorio, workflow,
+  referencia, presencia del secreto y modo—, porque si no el estado sería
+  `invalid_config`.
+- Y entonces el `fetch` **revienta en 1 milisegundo, con 0 ms de CPU**. Eso no es
+  una red lenta ni un timeout: es una excepción **síncrona**, lanzada al construir
+  la petición, antes de que salga un solo byte hacia `api.github.com`.
+
+El motivo está escrito, literalmente, dentro del binario `workerd` que trae
+wrangler 4.130.0 (`node_modules/@cloudflare/workerd-windows-64/bin/workerd.exe`):
+
+```
+TypeError: Invalid redirect value, must be one of "follow" or "manual"
+("error" won't be implemented since it does not make sense at the edge;
+ use "manual" and check the response status code).
+```
+
+Y `cloudflare-dispatcher/src/worker.ts:48` pide exactamente eso:
+
+```ts
+method: "POST", redirect: "error", signal: controller.signal,
+```
+
+El slot siguiente, `:03` (`scheduledTime` 21:03:55 UTC), produjo **exactamente el
+mismo registro**: `outcome: "exception"`, `wallTime: 1 ms`,
+`{"state":"uncertain","profile":"fast"}`, `dispatch_uncertain`. Dos de dos. No es
+intermitente.
+
+**Cada invocación del reloj falla igual, siempre, por construcción.** GitHub no
+rechaza nada porque GitHub nunca se entera: no hay 401, 403, 404 ni 422 que
+buscar. No es propagación, no es el token, no es el alcance, no es la referencia.
+
+**Por qué 664 pruebas en verde no lo vieron.** Dos motivos que se refuerzan:
+
+1. `test/clock-worker.test.ts:14` inyecta un `fetch` simulado por
+   `dependencies.fetch`. El objeto de inicialización nunca llega a `workerd`, así
+   que nadie valida `redirect`. Peor: la línea 20 **afirma** `redirect: "error"`,
+   de modo que la suite fija el valor que el runtime real rechaza.
+2. `cloudflare-dispatcher/` **no tiene `tsconfig.json` ni
+   `@cloudflare/workers-types`**. El worker se comprueba con las definiciones del
+   proyecto principal, donde `RequestRedirect` incluye `'error'`
+   (`node_modules/undici/types/fetch.d.ts:173`). TypeScript da por bueno un valor
+   que el runtime de destino no acepta.
+3. `npm run validate` es `wrangler deploy --dry-run`: empaqueta, no ejecuta.
+
+Es el fallo clásico de un módulo probado contra un runtime distinto del suyo.
+
+### Estado efectivo de los cinco disparadores, 21:05 UTC
+
+| Disparador | Estado real | Modo efectivo |
+| --- | --- | --- |
+| **Worker `news-monitor-clock`** | Cron registrado y **ahora sí invocado**; **cero dispatch entregados** por el fallo de `redirect` | `ENABLED=true`, `STRATEGY=fast-only`, `MONITOR_MODE=capture-only`; versión activa `0a109b3f` |
+| **Worker `news-monitor-clock-2`** | Desplegado 16:57:17 UTC, versión `eceb0051`, **sin `GITHUB_TOKEN`**, inerte a propósito | Su prueba ya no aporta nada: el original sí se ejecuta. Candidato a retirar |
+| **Monitor (`monitor.yml`)** | `active`. Solo lo dispara el respaldo `schedule` de GitHub, tarde y a saltos | `capture-only` por `vars.MONITOR_MODE`; `schedule` fuerza perfil `full` |
+| **Agenda (`agenda.yml`)** | `disabled_manually` | No se ejecuta en absoluto |
+| **Resumen (`brief.yml`)** | `disabled_manually` | No se ejecuta; su puerta además leería `capture-only` |
+| **Latido (`keepalive.yml`)** | `active`, sin cambios | Próximo disparo el día 15 |
+
+### Lo que sí corre, y por qué no basta
+
+Desde la activación del reloj solo se han creado **dos** ejecuciones, ambas del
+respaldo `schedule` de GitHub, y con el hueco de siempre:
+
+```
+gh run list --workflow monitor.yml --json databaseId,event,status,conclusion,createdAt,displayTitle
+34518310109  schedule          success  2026-09-10T19:05:30Z  Monitor (capture-only) [full]
+34515683949  schedule          success  2026-09-10T18:39:34Z  Monitor (capture-only) [full]
+34495721148  workflow_dispatch success  2026-09-10T15:27:09Z  Monitor (capture-only) [full]   <- manual, previa al reloj
+34495563870  workflow_dispatch success  2026-09-10T15:25:42Z  Monitor (capture-only) [fast]   <- manual, previa al reloj
+34488318355  schedule          success  2026-09-10T14:19:42Z  Monitor
+```
+
+**Cuatro horas y veinte minutos sin ninguna ejecución** entre las 14:19:42 y las
+18:39:34 UTC. Es el mismo comportamiento que motivó todo este trabajo.
+
+En Neon, `monitor_runs` tiene **cuatro filas** y ninguna `external`:
+
+| trigger | perfil | modo | n | última |
+| --- | --- | --- | ---: | --- |
+| `schedule` | full | capture-only | 2 | 19:05:52 UTC |
+| `manual` | full | capture-only | 1 | 15:27:33 UTC |
+| `manual` | fast | capture-only | 1 | 15:26:00 UTC |
+| `external` | — | — | **0** | — |
+
+La fase de observación se está respetando de forma verificable: `news_usage`
+**vacía** (cero llamadas a modelos), `alert_deliveries` con las mismas **14 filas
+`sent`** y el mismo último acuse de las **14:20:37 UTC**, y `events` sin filas
+nuevas desde las 14:21:02 UTC. La cola sí crece: **38 `pending`** (5 críticos) y
+205 `discarded`, con la más antigua en 15:26:00 UTC.
+
+`npm run audit:health` a las 20:49:45 UTC: `["no_recent_execution", "aged_queue"]`,
+edad de fast y full **103,5 minutos** sobre límites de 15 y 45, `blocked: 0`,
+`criticalFailed: []`. Los dos incumplimientos que reporta salen del arranque de la
+cola, no del objetivo publicación→captura.
+
+### Cómo se distingue un disparo del reloj de uno de Alberto
+
+Los dos llegan a GitHub como `event = workflow_dispatch` y con el mismo actor
+—`seeorr`, el dueño del token—, así que el evento y el actor **no** distinguen
+nada. Lo que sí distingue, por orden de fiabilidad:
+
+1. **La fila de `monitor_runs`.** El Worker manda `origin: "external"`, y
+   `monitor.yml:92` lo convierte en `MONITOR_ORIGIN`, que `profile.ts:9` guarda
+   como `trigger`. Un manual por la interfaz trae `origin` con su valor por
+   defecto `manual`. **Es la única señal que llega hasta la base de datos.**
+   Advertencia honesta: `origin` es una etiqueta operativa, no autenticación —
+   cualquiera puede elegir `external` en el desplegable.
+2. **El `displayTitle` combinado con el minuto.** El Worker con `fast-only` pide
+   siempre `fast`, así que un disparo suyo se lee `Monitor (capture-only) [fast]`
+   y cae en `:03`, `:13`, `:23`, `:33`, `:43` o `:53` UTC, con pocos segundos de
+   margen. Un manual raramente cae justo en esos minutos, y por defecto pide
+   `full`. Un `schedule` de GitHub no lleva inputs y siempre sale `[full]`.
+3. **La regularidad.** Seis por hora, siempre los mismos minutos. Una sola
+   ejecución en un minuto correcto es coincidencia posible; seis seguidas no.
+
+Las dos ejecuciones `workflow_dispatch` de hoy —15:25:42 y 15:27:09 UTC— fallan
+las tres pruebas: minutos que no son del cron, `trigger=manual` en Neon y una
+`[fast]` seguida de una `[full]` a minuto y medio. Son manuales, y además
+**anteriores** a la activación del reloj a las 15:32:04.
+
+### Precedencia de configuración: el orden real, de arriba abajo
+
+Confirmado leyendo el código, no la documentación. Gana el primero que exista:
+
+| # | Fuente | Dónde | Alcance |
+| --- | --- | --- | --- |
+| 1 | Banderas de CLI `--capture-only` / `--process-only` | `src/main.ts:50-51` | Solo ejecución local: `npm start` no pasa banderas |
+| 2 | Input `mode` del `workflow_dispatch`, **si no es `auto`** | `monitor.yml:90` | Solo `workflow_dispatch`. **El Worker manda siempre `mode: env.MONITOR_MODE`** (`worker.ts:53`) |
+| 3 | Variable de repositorio `vars.MONITOR_MODE` | `monitor.yml:90`, `brief.yml:52` | `schedule`, manuales con `auto`, y la puerta del Resumen |
+| 4 | Valor por defecto `full` | `monitor.yml:90`, `profile.ts:8` | Cuando no hay nada más |
+
+Para el perfil manda otra cadena distinta, y conviene no confundirlas:
+`github.event_name == 'schedule'` **fuerza `full`** (`monitor.yml:91`) por encima
+de cualquier input; solo si no es `schedule` se mira `inputs.profile`; el
+defecto es `full`. Es decir: **el respaldo `:07`/`:37` siempre corre `full`,
+aunque el Worker esté en `fast-only`.** No es un error, pero cuesta el doble.
+
+Las variables del Worker (`ENABLED`, `STRATEGY`, `MONITOR_MODE`) no compiten con
+las del repositorio: viven en otro sitio y solo deciden **qué pide** el Worker.
+La contradicción aparece en el escalón 2 contra el 3.
+
+**Dónde una configuración puede contradecir a la otra, hoy mismo:**
+
+- **La doble llave del modo.** Cambiar `vars.MONITOR_MODE` a `full` no basta: el
+  input del Worker gana y los ciclos externos seguirían capturando sin procesar.
+  Cambiar solo el Worker tampoco: el respaldo `schedule` y la puerta de
+  `brief.yml:52` leen la variable del repositorio. **Hay que cambiar las dos.**
+- **La trampa de `wrangler.json:11`.** El archivo versionado conserva
+  `ENABLED: "false"` mientras producción tiene `true`. Cualquier
+  `npx wrangler deploy` sin `--var ENABLED:true` **apaga el reloj** como efecto
+  colateral de cualquier otro cambio. Y ahora hace falta desplegar para arreglar
+  `redirect`, así que la trampa está armada justo delante del siguiente paso.
+- **`STRATEGY` contra el respaldo.** `fast-only` en el Worker no impide que
+  `:07`/`:37` corran `full`. La estrategia no es global.
+
+### Agenda y Resumen durante `capture-only`
+
+- **Agenda** no tiene ninguna protección de modo: sus tres crons y su
+  `workflow_dispatch` envían Telegram sin mirar `MONITOR_MODE`. **Lo único que la
+  contiene hoy es que está `disabled_manually`.** Al restaurarla vuelve a enviar.
+  Su idempotencia es por día (`seen.has(event.id)`), no por modo.
+- **Resumen** sí tiene puerta, y es buena: se evalúa **antes** del checkout, de
+  `npm ci` y de leer secretos (`brief.yml:38-60`). Bloquea si
+  `vars.MONITOR_MODE == 'capture-only'`, si el `workflow_run` que lo despertó
+  lleva título `Monitor (capture-only)`, si es `[fast]` o `[process]`, si el
+  origen no es de confianza o si el run anterior no acabó en `success`. Además de
+  eso está `disabled_manually`.
+- Consecuencia práctica para el orden de activación: **poner
+  `vars.MONITOR_MODE=full` reabre la puerta del Resumen**, pero mientras siga
+  `disabled_manually` no se ejecuta. La protección real durante la primera
+  ventana de procesamiento es el estado `disabled_manually`, no la variable.
+
+### El hueco del aviso: quién se entera de un rechazo
+
+Lo que **sí** está bien y no hay que tocar:
+
+- El Worker clasifica correctamente las respuestas de GitHub: 401, 403, 404, 422
+  y 429 → `rejected` con su `http`; cualquier otro estado → `uncertain`; corte por
+  `AbortSignal` → `timeout`. No lee cuerpos, no imprime el token, no reintenta.
+- `sendTelegram` (`src/notify/telegram.ts:207-210`) **sí** detecta `ok:false`:
+  exige `res.ok && body.ok === true && Number.isInteger(body.result.message_id)`
+  para declarar `sent`, y solo llama `rejected` a un 4xx coherente con
+  `error_code === status`. Todo lo demás queda `uncertain` y **bloqueado**.
+
+El hueco es otro, y son tres capas:
+
+1. **`uncertain` mezcla dos cosas incompatibles.** El fallo de hoy es
+   determinista y permanente —un valor que el runtime no acepta— y se registra
+   con el mismo estado que un corte de red pasajero. `catch { return fail(...) }`
+   descarta el error entero (`worker.ts:55`), así que ni el nombre de la
+   excepción sobrevive. Un estado que dice «incierto» invita a esperar; este
+   fallo había que arreglarlo. **Cinco horas perdidas salen justo de ahí.**
+2. **Nadie fuera de Cloudflare se entera.** No hay ningún camino del Worker a
+   Neon, a Telegram ni a GitHub. Un dispatch rechazado o incierto vive solo en
+   Cron Events. Si nadie mira el panel, el sistema calla.
+3. **`sendOperationalNotice` no está cableado en ninguna parte automática.**
+   Existe, funciona y está probado, pero su único invocador es
+   `scripts/auditar-salud.ts:49`, tras `--notify` **y** `HEALTH_NOTICES_ENABLED=true`.
+   `grep` sobre `.github/workflows/` no encuentra ni una referencia a
+   `audit:health`. **`src/main.ts` no lo llama nunca.** No existe observador
+   independiente. Confirmado: la parada del reloj la descubrió una persona
+   mirando, no el sistema.
+   Y aunque estuviera cableado, `evaluateHealth` no tiene hoy un estado que
+   signifique «solo hay ejecuciones manuales»: una captura manual reciente
+   devuelve `healthy`. Ese estado (`trigger_inactive`) es trabajo del Agente 3.
+
+Además, `monitor.yml:169` apaga el aviso de fallo por Telegram cuando
+`MONITOR_MODE == 'capture-only'`. Es coherente con la fase, pero significa que
+**durante toda la observación no hay ningún aviso de ningún tipo**. Es una
+decisión, no un error; conviene decirla en voz alta.
+
+### Diffs propuestos para la oleada 2 — NO aplicados
+
+**D1 · `cloudflare-dispatcher/src/worker.ts` — arreglar el disparo y dejar de
+llamar «incierto» a un fallo permanente.**
+
+```diff
+-      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, {
+-        method: "POST", redirect: "error", signal: controller.signal,
++      // workerd no implementa redirect:"error" y lanza TypeError al construir la
++      // petición: con "manual" la redirección NO se sigue y llega como 3xx, que
++      // esta función clasifica abajo. Misma garantía, runtime real.
++      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, {
++        method: "POST", redirect: "manual", signal: controller.signal,
+```
+
+y, para que un fallo determinista no vuelva a disfrazarse de red inestable:
+
+```diff
+-export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config";
++export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config" | "invalid_request";
+```
+
+```diff
+-  } catch { return fail(controller.signal.aborted ? "timeout" : "uncertain"); }
++  } catch (error) {
++    if (controller.signal.aborted) return fail("timeout");
++    // Un TypeError aquí es la petición mal construida —valor no soportado por el
++    // runtime—, no un problema de red: es permanente y hay que arreglarlo, no esperar.
++    return fail(error instanceof TypeError ? "invalid_request" : "uncertain");
++  }
+```
+
+Nada de esto imprime el error, la URL ni el token: solo el nombre del estado.
+Una redirección sigue sin seguirse; un 301/302 cae en la rama `uncertain` con su
+`http`, que es más información que hoy, no menos.
+
+**D2 · `test/clock-worker.test.ts` — que la suite deje de fijar el valor roto.**
+
+```diff
+-    expect(request).toMatchObject({ method: "POST", redirect: "error", headers: { Accept: "application/vnd.github+json",
++    expect(request).toMatchObject({ method: "POST", redirect: "manual", headers: { Accept: "application/vnd.github+json",
+```
+
+Y una prueba nueva que cubra el hueco de verdad: un `fetch` inyectado que rechace
+con `new TypeError(...)` debe producir `invalid_request`, no `uncertain`.
+
+**D3 · `cloudflare-dispatcher/` — comprobar el worker contra su propio runtime.**
+La prueba anterior sigue siendo simulada. Lo que impediría la reincidencia es
+añadir `@cloudflare/workers-types` y un `tsconfig.json` propio en
+`cloudflare-dispatcher/` con `"types": ["@cloudflare/workers-types"]`, para que
+`redirect: "error"` **no compile**. Es la única de las tres que ataca la causa y
+no el síntoma. Decisión de producto: añade una dependencia de desarrollo.
+
+**D4 · `cloudflare-dispatcher/wrangler.json` — desarmar la trampa de `ENABLED`.**
+Hoy el archivo dice `false` y producción dice `true`; un `deploy` distraído apaga
+el reloj. Dos salidas, y hay que elegir una antes de desplegar el arreglo:
+
+- **(a)** Poner `"ENABLED": "true"` en `wrangler.json`. Un `deploy` normal pasa a
+  ser idempotente con producción. Coste: cualquiera que despliegue desde su
+  portátil enciende un reloj.
+- **(b)** Conservar `false` arriba y añadir un entorno explícito
+  `"env": { "produccion": { "name": "news-monitor-clock", "vars": { ...las siete, con ENABLED true... } } }`,
+  desplegando siempre con `--env produccion`. Ojo: los `vars` de un entorno
+  **no heredan** los de arriba en wrangler; hay que repetir las siete.
+
+Recomendación: **(b)**, porque hace explícito el acto de encender y no depende de
+recordar un `--var`. Necesita la decisión de Alberto.
+
+**D5 · Detección de la parada.** Fuera del alcance de esta oleada porque toca
+`src/main.ts` (prohibido) y el vocabulario de salud (Agente 3). Lo que sí cabe en
+`.github/workflows/` es un workflow `salud.yml` de solo lectura que ejecute
+`npm run audit:health` **sin `--notify`**: su código de salida 1 pinta el run en
+rojo y eso ya es una señal visible. Advertencia que no hay que esconder: lo
+dispararía el mismo planificador de GitHub que descarta crons, así que es un
+detector débil. La detección honesta es un observador independiente del reloj que
+falla. Queda como decisión pendiente, no como diff.
+
+## Procedimiento para pasar de `capture-only` a funcionamiento completo
+
+Escrito para ejecutarse **después** de la oleada 2 y con autorización expresa de
+Alberto para efectos reales. **Aquí no se ejecuta ninguno de estos pasos.**
+Cada paso lleva su comprobación y su reversión; ninguno se da por bueno sin ella.
+
+### Paso 0 · Bloqueos previos, antes de tocar nada
+
+1. **El backlog del BCE tiene que estar decidido.** Sigue abierto: el comunicado
+   `rss:ecb-press:148e1a88b2fd` (12:15 UTC) y las dos reescrituras de prensa no
+   tienen entrega propia, y habilitar el procesamiento las pondría en cola.
+   Alberto pospuso la elección a este punto. **Sin decisión escrita, no se sigue.**
+2. **El arreglo del reloj tiene que estar aplicado y probado en local**
+   (`npm test`, `npm run typecheck`, `npm run validate` en `cloudflare-dispatcher/`).
+3. Anotar el estado de partida para poder volver:
+   `gh workflow list --all`, `gh variable list`,
+   `npx wrangler versions view <id activo>`, y la lectura de
+   `npm run audit:health`. Guardarlo con fecha.
+
+### Paso 1 · Arreglar el reloj, todavía en `capture-only`
+
+Desplegar el Worker corregido **sin cambiar ningún modo**:
+
+```powershell
+cd cloudflare-dispatcher
+npx wrangler deploy            # con D4(b) aplicado: --env produccion
+```
+
+**Comprobar, y no seguir sin esto:**
+
+- `npx wrangler versions view <nueva versión>` sigue diciendo `ENABLED="true"`,
+  `STRATEGY="fast-only"`, `MONITOR_MODE="capture-only"` y secreto `GITHUB_TOKEN`
+  presente. Si `ENABLED` salió `false`, la trampa de `wrangler.json` se disparó:
+  volver a desplegar con el valor correcto antes de nada más.
+- `npx wrangler tail news-monitor-clock --format json` durante un slot completo:
+  el registro tiene que decir `{"state":"accepted","profile":"fast","http":200}`
+  o `204`. Si dice `rejected` con `http`, es el token o el alcance —corregir eso,
+  no volver a desplegar a ciegas—. Si dice `invalid_request`, el arreglo no está
+  completo.
+- **La prueba que de verdad cierra el paso**, y la única que vale:
+
+```powershell
+gh run list --workflow monitor.yml --limit 10 --json databaseId,event,createdAt,displayTitle
+```
+
+  tiene que enseñar ejecuciones `workflow_dispatch` con título
+  `Monitor (capture-only) [fast]` en los minutos `:03/:13/:23/:33/:43/:53`, y en
+  Neon tiene que aparecer al fin `trigger = external`:
+
+```sql
+select record->>'trigger', count(*) from monitor_runs
+where started_at > now() - interval '2 hours' group by 1;
+```
+
+- **Observar al menos una hora**, es decir seis slots. Un solo dispatch aceptado
+  no es cadencia. Comprobar de paso que recapturar sube apariciones y no únicas,
+  que `news_usage` sigue vacía y que `alert_deliveries` no crece.
+
+**Reversión del paso 1:** `ENABLED=false` en el Worker, o revocar el token en
+GitHub si hace falta parar ya. El respaldo `:07`/`:37` sigue vivo. Nada que
+deshacer en la base: capturar es aditivo.
+
+### Paso 2 · Un solo ciclo completo, controlado y observado
+
+Antes de cambiar ninguna configuración permanente, un único disparo manual con
+el modo explícito. Es el primer efecto real —modelos y Telegram— y necesita el
+«adelante» de Alberto en ese momento, con la cola delante:
+
+```powershell
+gh workflow run monitor.yml -f profile=full -f mode=full -f origin=manual
+```
+
+**Comprobar:** el run acaba `success`; `news_usage` tiene filas por primera vez y
+dentro del presupuesto; `alert_deliveries` crece solo con estados `sent`
+—ninguna fila `uncertain` o `sending` colgada—; los mensajes recibidos son los
+que se esperaban y **no** un reenvío del incidente del BCE. Si aparece una fila
+`uncertain`, **parar aquí**: no se libera por tiempo, hay que reconciliarla.
+
+**Reversión del paso 2:** ninguna posible sobre lo ya enviado. Por eso el paso 0.1
+es bloqueante. Lo que sí se hace es no continuar.
+
+### Paso 3 · La doble llave del modo, las dos a la vez
+
+Primero la variable del repositorio, que es instantánea y se revierte con una
+orden, y afecta como mucho a dos ejecuciones por hora:
+
+```powershell
+gh variable set MONITOR_MODE --body full
+```
+
+Inmediatamente después, el Worker (`MONITOR_MODE: "full"` en `wrangler.json`,
+o `--var MONITOR_MODE:full --var ENABLED:true`):
+
+```powershell
+cd cloudflare-dispatcher; npx wrangler deploy
+```
+
+**Comprobación de coherencia — el paso que impide que una configuración
+contradiga a la otra.** Las tres fuentes tienen que decir lo mismo:
+
+1. `gh variable list` → `MONITOR_MODE  full`
+2. `npx wrangler versions view <activa>` → `env.MONITOR_MODE ("full")` **y**
+   `env.ENABLED ("true")`
+3. `gh run list --workflow monitor.yml --limit 10 --json displayTitle,event,createdAt`
+   → **todas** las ejecuciones nuevas, de los dos orígenes, tienen que leerse
+   `Monitor (full) [...]`. Si queda una sola `Monitor (capture-only)`, hay una
+   llave sin girar: si es `event=schedule`, falta la variable del repositorio; si
+   es `event=workflow_dispatch` en minuto del cron, falta el Worker.
+4. En Neon, la comprobación definitiva, porque mira el modo que el programa
+   realmente aplicó y no el que el título anuncia:
+
+```sql
+select record->>'trigger' as origen, record->>'mode' as modo, count(*)
+from monitor_runs where started_at > now() - interval '1 hour' group by 1,2;
+```
+
+   No debe quedar ninguna combinación con `modo = 'capture-only'`.
+
+**Reversión del paso 3:** `gh variable set MONITOR_MODE --body capture-only` y
+desplegar el Worker con `MONITOR_MODE:capture-only`. Las dos, otra vez, o queda
+medio sistema procesando. Volver a correr la comprobación de coherencia con el
+valor contrario. Nada de lo ya enviado se deshace.
+
+### Paso 4 · Restaurar Agenda y Resumen a su estado previo
+
+Estado anterior registrado en `.cache/activation-remote-settings-before.json`
+(10-09 15:22:25 UTC): `agenda.yml` **`active`**, `brief.yml` **`active`**,
+`monitor.yml` **`active`**, y **ninguna variable de repositorio definida**.
+
+Se restaura **después** del paso 3 y no antes, porque reactivar `brief.yml`
+reabre su disparador `workflow_run` sobre cada Monitor y su puerta ya no bloquea
+en cuanto la variable dice `full`:
+
+```powershell
+gh workflow enable agenda.yml
+gh workflow enable brief.yml
+gh workflow list --all      # los cuatro tienen que decir "active"
+```
+
+**Comprobar:** el primer día laborable siguiente, en la ventana de 06:00 a 12:00
+UTC, que la Agenda sale **una sola vez** —su claim por día tiene que absorber los
+tres crons y la recuperación desde `brief.yml`— y que el Resumen sale una sola
+vez. Un segundo intento que salga `blocked` **no es un fallo**. Vigilar también
+el número de jobs cortos de `brief.yml` disparados por `workflow_run`: son hasta
+192/día y hay que ver el coste real, no el estimado.
+
+**Reversión del paso 4:** `gh workflow disable agenda.yml` y
+`gh workflow disable brief.yml`. Vuelven exactamente al estado de hoy.
+
+### Paso 5 · `mixed`, el último
+
+Solo con los pasos 1 a 4 observados durante al menos un día completo:
+`STRATEGY: "mixed"` en el Worker y desplegar. Pasa a `full` en `:03` y `:33`, y
+`fast` en el resto. Comprobar el consumo de modelos contra el límite de 120/día y
+la carga en Neon antes de darlo por bueno.
+
+**Reversión del paso 5:** `STRATEGY:fast-only` y desplegar.
+
+### Reversión completa, en orden, si algo sale mal a mitad
+
+1. `ENABLED=false` en el Worker —o revocar el token en GitHub si hay que parar
+   ya— para cortar disparos nuevos. Los cambios de cron tardan en propagarse; el
+   token no.
+2. `gh variable set MONITOR_MODE --body capture-only` **y** desplegar el Worker
+   con `capture-only`. Las dos llaves.
+3. `gh workflow disable agenda.yml` y `gh workflow disable brief.yml`.
+4. Comprobar con la consulta de coherencia del paso 3 que no queda ninguna
+   ejecución nueva en modo `full`.
+5. Retirar `news-monitor-clock-2` cuando el original esté probado; hoy es inerte
+   porque no tiene token, pero un token cargado ahí por error dispararía doble.
+
+Lo que **no** se hace nunca en una reversión: borrar pendientes de
+`capture_queue`, liberar filas `sending`/`uncertain` de `alert_deliveries`, usar
+`--force`, tocar fechas o restaurar una base antigua encima. Un job ya arrancado
+conserva su token efímero de Actions: revocar el PAT no lo cancela, y no se
+cancela a ciegas un job que puede estar enviando.
+
+### Lo que sigue sin estar demostrado
+
+- Que el reloj entregue dispatch aceptados. Hoy **no lo hace**, y la causa está
+  identificada pero no corregida.
+- La puntualidad publicación→captura (<10 min) y publicación→acuse (<15 min)
+  sobre publicaciones reales futuras. Las medidas actuales salen del arranque de
+  la cola y no valen para eso.
+- La primera ventana de procesamiento con el backlog decidido.
+- Que el sistema avise de su propia parada. Hoy no puede.

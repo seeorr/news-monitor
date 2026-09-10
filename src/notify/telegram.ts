@@ -8,7 +8,7 @@ import type { Analysis, Scoring } from "../ai/cascade.ts";
 // El desenlace de un envío se declara donde vive la máquina de estados de la
 // entrega, y no otra vez aquí: dos uniones idénticas con dos nombres son dos
 // uniones que un día dicen cosas distintas.
-import type { EstadoEntrega } from "../pipeline/seen.ts";
+import type { EstadoEntrega, ResultadoEnvio } from "../pipeline/seen.ts";
 import type { NormalizedEvent, Surprise, SurpriseBasis } from "../schema/event.ts";
 
 const IMPACT: Record<Scoring["sentiment"], string> = {
@@ -189,12 +189,21 @@ function arrows(direction: "up" | "down" | "unclear", confidence: number): strin
  *
  * `ok` se mantiene para quien solo necesita saber si salió —la agenda y la copia
  * al grupo— y ahora significa exactamente `state === "sent"`.
+ *
+ * Y el rechazo se abre en dos, porque `rejected` a secas costaba noticias. Un
+ * 429 y un 400 llegan por el mismo sitio y no son lo mismo: los dos demuestran
+ * que Telegram no aceptó nada —así que reintentar no puede duplicar—, pero el
+ * 429 dice "ahora no" y hasta cuándo, mientras que el 400 dice "este mensaje no
+ * vale nunca". Tratarlos igual cerraba la entrega para siempre en el primer
+ * caso, y como `claimAlert` no reclama una fila cerrada sin `force`, la noticia
+ * no volvía jamás. La clasificación va aquí y no en quien llama porque es una
+ * lectura de ESTA respuesta, y dos lecturas distintas acabarían separándose.
  */
 export async function sendTelegram(
   token: string,
   chatId: string,
   text: string,
-): Promise<{ ok: boolean; state: EstadoEntrega; description?: string }> {
+): Promise<ResultadoEnvio & { ok: boolean; description?: string }> {
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -202,11 +211,30 @@ export async function sendTelegram(
     signal: AbortSignal.timeout(15_000),
   });
   const body = (await res.json().catch(() => ({}))) as {
-    ok?: unknown; error_code?: unknown; description?: string; result?: { message_id?: unknown };
+    ok?: unknown; error_code?: unknown; description?: string;
+    parameters?: { retry_after?: unknown }; result?: { message_id?: unknown };
   };
   const entregado = res.ok && body.ok === true && Number.isInteger(body.result?.message_id);
   const rechazado = res.status >= 400 && res.status < 500 && res.status !== 408 &&
     body.ok === false && body.error_code === res.status;
   const state: EstadoEntrega = entregado ? "sent" : rechazado ? "rejected" : "uncertain";
-  return { ok: state === "sent", state, description: body.description };
+  // El código viaja aparte de `description`: ese texto es de Telegram y en un
+  // 401 llega a repetir el token del bot. Lo que se persiste y se registra es
+  // este, que se compone aquí con el estado HTTP y nada más.
+  const code = entregado ? undefined : `telegram_${res.status}`;
+  if (state !== "rejected") return { ok: entregado, state, code, description: body.description };
+  const rejection = res.status === 429 ? "recoverable" as const : "permanent" as const;
+  return { ok: false, state, rejection, code, description: body.description,
+    ...(rejection === "recoverable" ? { retryAfterMs: retryAfterMs(body.parameters?.retry_after) } : {}) };
+}
+
+/** Plazo mínimo cuando Telegram limita el ritmo y no dice cuánto esperar. */
+export const RETRY_AFTER_POR_DEFECTO_MS = 60_000;
+/** Y máximo, porque un `retry_after` absurdo no puede aparcar una noticia. */
+export const RETRY_AFTER_MAXIMO_MS = 6 * 60 * 60_000;
+
+function retryAfterMs(retryAfter: unknown): number {
+  const segundos = typeof retryAfter === "number" ? retryAfter : Number.NaN;
+  if (!Number.isFinite(segundos) || segundos <= 0) return RETRY_AFTER_POR_DEFECTO_MS;
+  return Math.min(RETRY_AFTER_MAXIMO_MS, Math.ceil(segundos) * 1000);
 }

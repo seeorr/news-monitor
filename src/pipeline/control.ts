@@ -1,4 +1,34 @@
-/** Decisiones y reservas durables: se cuenta el intento antes de hacer red. */
+/**
+ * Decisiones y reservas durables: se cuenta el INTENTO antes de hacer red.
+ *
+ * Tres cosas distintas que es facil confundir aqui:
+ *
+ * - **Intento**: cada vez que este ciclo se dispone a mandar algo.
+ * - **Reserva**: la fila que `reserve()` escribe en `news_usage`, con su `id`
+ *   unico. Es lo que cuenta contra la cuota, y se escribe ANTES de la red.
+ * - **Entrega efectiva**: lo que Telegram acepto, y eso vive en `alerts` y en
+ *   `alert_deliveries`, no aqui.
+ *
+ * La cuota cuenta reservas, o sea intentos, y **no se devuelve** cuando el envio
+ * falla despues. Suena a defecto y es deliberado: la cuota existe para proteger
+ * el telefono de Alberto de una tormenta, y el escenario que la pone a prueba es
+ * justo el de los fallos —un 429 o un 5xx sostenido con reintentos en cada
+ * ciclo—. Devolver la cuota al fallar deja la unica proteccion que hay atada al
+ * exito del sistema, que es cuando menos falta hace. El precio, dicho: una tarde
+ * de errores de Telegram puede consumir la cuota del dia sin que haya salido una
+ * sola noticia.
+ *
+ * **Decision pendiente, no cerrada** (Agente 2, oleada 1): si algun dia se
+ * quiere separar, la forma correcta no es devolver la reserva, sino contar en
+ * dos cubos —intentos y entregas— y poner el limite editorial sobre el segundo,
+ * dejando el primero como cortacircuitos con un tope mas alto. Eso cambia la
+ * politica editorial y por eso no se toca aqui sin pedirlo.
+ *
+ * `reason` es el vocabulario de la reserva y se queda como esta; quien lo
+ * persiste en una decision le antepone `deferred_quota_` (C3), para que un tope
+ * de mensajes no se confunda con un presupuesto de IA agotado ni con un texto
+ * irredactable.
+ */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, existsSync, openSync, writeFileSync, closeSync, fsyncSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";

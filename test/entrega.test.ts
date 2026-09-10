@@ -400,7 +400,8 @@ describe("contrato SQL de la entrega, sin ejecutar DB", () => {
     expect(sql).toContain("attempts = alert_deliveries.attempts + 1");
     // Nada de liberar por tiempo: es justo lo que produce el doble envío.
     expect(sql).not.toMatch(/interval|claimed_at\s*</i);
-    expect(valores).toEqual([evento, "tok", "tok", false]);
+    // El reloj viaja como parámetro: solo sirve para vencer un `deferred`.
+    expect(valores).toEqual([evento, "tok", "tok", false, null]);
   });
 
   it("solo --force cambia de dueño una entrega que ya lo tiene", async () => {
@@ -409,9 +410,35 @@ describe("contrato SQL de la entrega, sin ejecutar DB", () => {
 
     expect(reclamada).toBe(true);
     expect(consultas[0]!.sql).toContain("where ?::boolean");
-    expect(consultas[0]!.valores.at(-1)).toBe(true);
+    expect(consultas[0]!.valores.at(-2)).toBe(true);
     // La entrega que se reclama todavía no ha ocurrido.
     expect(consultas[0]!.sql).toContain("settled_at = null");
+  });
+
+  it("`deferred` es el único estado reclamable sin --force, y solo pasado su plazo", async () => {
+    const { consultas, ejecutor } = espia([[{ event_id: evento }]]);
+    expect(await (await almacen(ejecutor)).claimAlert(evento, { token: "tok" })).toBe(true);
+    const { sql } = consultas[0]!;
+    // La condición sigue siendo falsa sin force salvo para `deferred` vencido.
+    expect(sql).toContain("alert_deliveries.state = 'deferred'");
+    expect(sql).toContain("alert_deliveries.next_attempt_at");
+    expect(sql).toContain("next_attempt_at = null");
+    for (const bloqueado of ["'sending'", "'sent'", "'rejected'", "'uncertain'", "'undeliverable'"]) {
+      expect(sql).not.toContain(`state = ${bloqueado} or`);
+    }
+    // Nada de liberar por tiempo lo que no está aplazado a propósito.
+    expect(sql).not.toMatch(/claimed_at\s*<|interval/i);
+  });
+
+  it("aplazar guarda el plazo y cerrar como no entregable no reclama nada", async () => {
+    const { consultas, ejecutor } = espia([[{ event_id: evento }], [{ event_id: evento }]]);
+    const store = await almacen(ejecutor);
+    await store.finishAlert(evento, "tok", "deferred", "2026-09-10T10:02:00.000Z");
+    expect(consultas[0]!.sql).toContain("next_attempt_at");
+    expect(consultas[0]!.valores).toContain("2026-09-10T10:02:00.000Z");
+    expect(await store.markUndeliverable?.(evento)).toBe(true);
+    expect(consultas[1]!.sql).toContain("'undeliverable'");
+    expect(consultas[1]!.sql).toContain("on conflict (event_id) do nothing");
   });
 
   it("cerrar exige ser el dueño y seguir en vuelo", async () => {
@@ -421,7 +448,8 @@ describe("contrato SQL de la entrega, sin ejecutar DB", () => {
     const { sql, valores } = consultas[0]!;
     expect(sql).toContain("update alert_deliveries");
     expect(sql).toContain("claim_token = ? and state = 'sending'");
-    expect(valores).toEqual(["uncertain", evento, "tok"]);
+    // Sin plazo: solo `deferred` lo lleva, y esto no lo es.
+    expect(valores).toEqual(["uncertain", null, evento, "tok"]);
   });
 
   it("perder el reclamo se lanza, no se traga", async () => {
@@ -464,6 +492,38 @@ describe("migración de la entrega", () => {
     expect(texto).toContain("on conflict (event_id) do nothing");
   });
 
+  /**
+   * La ampliación aditiva del CHECK vive en su propia migración, detrás de la
+   * que crea la tabla. Añade `deferred` —el único estado reclamable sin una
+   * persona— y `undeliverable`, que cierra sin fingir que algo salió.
+   */
+  describe("ampliación aplazable", () => {
+    const ampliacion = readFileSync(
+      new URL("../neon/migrations/20260911_entrega_aplazable.sql", import.meta.url), "utf8");
+
+    it("es idempotente, aditiva y no reescribe filas existentes", () => {
+      expect(ampliacion).toContain("add column if not exists next_attempt_at");
+      expect(ampliacion).toContain("drop constraint if exists");
+      expect(ampliacion).toMatch(/if not exists\s*\(\s*select 1 from pg_constraint/i);
+      for (const estado of ["sending", "sent", "rejected", "uncertain", "deferred", "undeliverable"]) {
+        expect(ampliacion).toContain(`'${estado}'`);
+      }
+      expect(ampliacion).not.toMatch(/\bdrop\s+table\b|\bupdate\s+alert_deliveries\b|\bdelete\s+from\b/i);
+    });
+
+    it("no introduce ninguna caducidad por tiempo", () => {
+      // `sending` y `uncertain` no se liberan solos. Jamás. Es el punto entero.
+      expect(ampliacion).not.toMatch(/claimed_at\s*<|settled_at\s*<|now\(\)\s*-/i);
+    });
+
+    it("se aplica después de la migración que crea la tabla", () => {
+      const dir = new URL("../neon/migrations/", import.meta.url);
+      const archivos = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+      expect(archivos.indexOf("20260911_entrega_aplazable.sql"))
+        .toBeGreaterThan(archivos.indexOf("20260910_entrega_de_alertas.sql"));
+    });
+  });
+
   // El migrador aplica los archivos en orden alfabético: una migración que lee
   // una tabla tiene que ordenarse detrás de la que la crea.
   it("se ordena detrás de la migración que crea `alerts`", () => {
@@ -495,5 +555,57 @@ describe("qué se puede afirmar de una respuesta de Telegram", () => {
     const salida = await real.sendTelegram("bot", "chat", "texto");
     expect(salida.state).toBe(esperado);
     expect(salida.ok).toBe(esperado === "sent");
+  });
+
+  /**
+   * `rejected` no es una sola cosa. Un 429 dice que Telegram **no** aceptó nada
+   * —así que reintentar no puede duplicar— y encima dice cuándo volver. Un 400
+   * dice que este mensaje no vale nunca. Tratarlos igual es lo que perdía la
+   * noticia: `finishAlert(...,'rejected')` la cerraba para siempre.
+   */
+  const respuesta = (status: number, cuerpo: unknown) => vi.fn(async () => ({
+    ok: status >= 200 && status < 300, status,
+    json: async () => { if (cuerpo === null) throw new Error("no es JSON"); return cuerpo; },
+  }));
+  const real = () => vi.importActual<typeof import("../src/notify/telegram.ts")>("../src/notify/telegram.ts");
+
+  it("un 429 coherente es un rechazo recuperable con su plazo en milisegundos", async () => {
+    vi.stubGlobal("fetch", respuesta(429, { ok: false, error_code: 429, parameters: { retry_after: 37 } }));
+    expect(await (await real()).sendTelegram("bot", "chat", "texto")).toMatchObject({
+      state: "rejected", rejection: "recoverable", retryAfterMs: 37_000, code: "telegram_429", ok: false,
+    });
+  });
+
+  it("un 429 sin retry_after conserva la clasificación y usa un plazo prudente", async () => {
+    vi.stubGlobal("fetch", respuesta(429, { ok: false, error_code: 429 }));
+    const salida = await (await real()).sendTelegram("bot", "chat", "texto");
+    expect(salida).toMatchObject({ state: "rejected", rejection: "recoverable" });
+    expect(salida.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it("el resto de 4xx coherentes son rechazos permanentes; 408 no es rechazo", async () => {
+    vi.stubGlobal("fetch", respuesta(400, { ok: false, error_code: 400, description: "chat not found" }));
+    const permanente = await (await real()).sendTelegram("bot", "chat", "texto");
+    expect(permanente).toMatchObject({ state: "rejected", rejection: "permanent", code: "telegram_400" });
+    expect(permanente.retryAfterMs).toBeUndefined();
+    vi.stubGlobal("fetch", respuesta(408, { ok: false, error_code: 408 }));
+    expect(await (await real()).sendTelegram("bot", "chat", "texto")).toMatchObject({ state: "uncertain" });
+  });
+
+  it("un resultado incierto nunca lleva clasificación de rechazo ni plazo", async () => {
+    for (const [status, cuerpo] of [[502, { ok: false, error_code: 502 }], [200, { ok: true }], [200, null]] as const) {
+      vi.stubGlobal("fetch", respuesta(status, cuerpo));
+      const salida = await (await real()).sendTelegram("bot", "chat", "texto");
+      expect(salida.state).toBe("uncertain");
+      expect(salida.rejection).toBeUndefined();
+      expect(salida.retryAfterMs).toBeUndefined();
+    }
+  });
+
+  it("el código que sale es seguro: nunca el cuerpo que devuelve Telegram", async () => {
+    vi.stubGlobal("fetch", respuesta(403, { ok: false, error_code: 403, description: "bot token 123:secreto revoked" }));
+    const salida = await (await real()).sendTelegram("bot", "chat", "texto");
+    expect(salida.code).toBe("telegram_403");
+    expect(JSON.stringify({ state: salida.state, rejection: salida.rejection, code: salida.code })).not.toContain("secreto");
   });
 });

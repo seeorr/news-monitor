@@ -10,9 +10,30 @@ export interface Env {
   MONITOR_MODE: "full" | "capture-only";
 }
 export type DispatchProfile = "fast" | "full";
-export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config";
+// `invalid_request` es aditivo y separa un fallo DETERMINISTA de la petición
+// —el runtime la rechaza al construirla— de `uncertain`, que sigue significando
+// «no se sabe si GitHub la recibió». Mezclarlos costó cinco horas de diagnóstico
+// el 10-09: un TypeError permanente parecía una red inestable e invitaba a esperar.
+export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config" | "invalid_request";
 export type SafeRecord = { state: DispatchState; profile?: DispatchProfile; http?: number };
 export const CRON = "3,13,23,33,43,53 * * * *";
+/**
+ * workerd —el runtime real de Cloudflare, no Node— NO implementa `redirect: "error"`.
+ * Lanza un TypeError SÍNCRONO al construir la petición, antes de que salga un byte:
+ *
+ *   TypeError: Invalid redirect value, must be one of "follow" or "manual"
+ *   ("error" won't be implemented since it does not make sense at the edge;
+ *    use "manual" and check the response status code).
+ *
+ * (Literal del binario de wrangler 4.130.0.) Con `"error"` el reloj falló en TODAS
+ * sus invocaciones —`wallTime: 1 ms`, `cpuTime: 0`— y GitHub no recibió ni un
+ * dispatch en cinco horas. `"manual"` conserva la garantía: la redirección NO se
+ * sigue, llega como respuesta 3xx y cae en la clasificación del final de
+ * `dispatch` (302 → `uncertain` con su `http`, ya probado). El tipo de abajo
+ * existe para que nadie pueda revertirlo: `"error"` no compila.
+ */
+type RedirectSoportadoPorWorkerd = "follow" | "manual";
+const REDIRECT: RedirectSoportadoPorWorkerd = "manual";
 export function selectProfile(scheduledTime: number, strategy: Env["STRATEGY"]): DispatchProfile {
   const minute = new Date(scheduledTime).getUTCMinutes();
   if (![3, 13, 23, 33, 43, 53].includes(minute) || !["mixed", "fast-only"].includes(strategy)) throw new Error("invalid_config");
@@ -45,14 +66,21 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
     // La carrera acota también un transporte que no atienda AbortSignal.
     response = await Promise.race([
       (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, {
-        method: "POST", redirect: "error", signal: controller.signal,
+        method: "POST", redirect: REDIRECT, signal: controller.signal,
         headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${env.GITHUB_TOKEN}`,
           "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json", "User-Agent": "news-monitor-clock" },
         body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: env.MONITOR_MODE } }),
       }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error()); }, timeoutMs); }),
     ]);
-  } catch { return fail(controller.signal.aborted ? "timeout" : "uncertain"); }
+  } catch (error) {
+    if (controller.signal.aborted) return fail("timeout");
+    // Un TypeError aquí no es la red: es la petición mal construida, y el runtime
+    // la rechaza igual en cada intento. Devolver `uncertain` invitaba a esperar a
+    // que escampara algo que no iba a escampar nunca. El error NO se registra: su
+    // mensaje puede llevar la URL, y la URL lleva el destino configurado.
+    return fail(error instanceof TypeError ? "invalid_request" : "uncertain");
+  }
   finally { clearTimeout(timer); }
   // 204: contrato anterior; 200: contrato oficial API 2026-03-10. El cuerpo no se lee.
   if (response.status === 204 || response.status === 200) {

@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { loadDotEnv, loadConfig } from "../src/config.ts";
 import { neonRunStore } from "../src/db/cadence.ts";
-import { evaluateHealth, healthLimits, sendOperationalNotice } from "../src/pipeline/cadence.ts";
+import { HEALTH_STATE_MEANING, evaluateHealth, healthLimits, sendOperationalNotice } from "../src/pipeline/cadence.ts";
 import { neonSeenStore } from "../src/db/neon.ts";
 import { sendTelegram } from "../src/notify/telegram.ts";
 import type { Ejecutor } from "../src/db/cliente.ts";
@@ -12,6 +12,13 @@ export async function readHealthMetrics(sql: Ejecutor, now: string, since: strin
   const rows = await sql`select
     (select min(first_captured_at) from capture_queue where state in ('pending','processing','retryable_failed')) as oldest,
     (select count(*)::int from alert_deliveries where state <> 'sent') as blocked,
+    -- Bloqueada e incierta no son lo mismo: la incierta pudo salir y solo la
+    -- libera una reconciliación humana. Contarlas juntas escondía cuál es cuál.
+    (select count(*)::int from alert_deliveries where state in ('uncertain','sending')) as uncertain,
+    (select max(settled_at) from alert_deliveries where state = 'sent') as delivered,
+    -- Volumen, no solo antigüedad: 3 pendientes viejas y 3.000 no son la misma avería.
+    (select count(*)::int from capture_queue where state in ('pending','processing','retryable_failed')) as pending,
+    (select count(*)::int from capture_queue where state = 'retryable_failed' and reason = 'budget_exhausted') as budget,
     (select count(*)::int from monitor_event_timing t join capture_queue q on q.id=t.event_id
       where t.critical and t.first_captured_at >= ${since}::timestamptz and q.state <> 'discarded'
       and t.capture_minutes >= ${limits.rateCaptureMinutes}) as capture_breaches,
@@ -31,10 +38,19 @@ export async function auditHealth() {
   const since = new Date(Date.parse(now) - 7 * 86_400_000).toISOString();
   const runs = await neonRunStore(config.databaseUrl).recent(since);
   const row = await readHealthMetrics(sql, now, since, limits);
-  const health = evaluateHealth(runs, { now, limits, oldestPendingAt: row.oldest == null ? null : new Date(String(row.oldest)).toISOString(),
-    blockedDeliveries: Number(row.blocked), rateCaptureBreaches: Number(row.capture_breaches), rateAlertBreaches: Number(row.alert_breaches) });
+  const instante = (value: unknown) => value == null ? null : new Date(String(value)).toISOString();
+  const health = evaluateHealth(runs, { now, limits, oldestPendingAt: instante(row.oldest),
+    blockedDeliveries: Number(row.blocked), rateCaptureBreaches: Number(row.capture_breaches), rateAlertBreaches: Number(row.alert_breaches),
+    pendingItems: Number(row.pending), uncertainDeliveries: Number(row.uncertain), budgetExhaustedItems: Number(row.budget),
+    deliveryConfirmedAt: instante(row.delivered),
+    // Se comprueba que las credenciales existen; no se prueba el transporte ni
+    // se envía nada: una auditoría de solo lectura no llama a Telegram.
+    telegramConfigured: Boolean(config.telegramBotToken && config.telegramChatId) });
   // Agregados y vocabulario cerrado. Nada de ids, titulares, URLs ni SQL.
+  // `meaning` explica cada estado publicado: quien lee la auditoría no tiene que
+  // ir al código a averiguar qué significa `processing_paused`.
   return { code: "HEALTH_AUDIT", readOnly: true, noticesEnabled: false, at: now, limits, ...health,
+    meaning: Object.fromEntries(health.states.map((state) => [state, HEALTH_STATE_MEANING[state]])),
     blocked: Number(row.blocked), captureBreaches: Number(row.capture_breaches), alertBreaches: Number(row.alert_breaches) };
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

@@ -35,13 +35,39 @@ describe("reclamos locales duraderos de Telegram", () => {
     expect(readdirSync(directory)).toEqual(["alert-deliveries.json"]);
   });
 
-  it.each<EstadoEntrega>(["sent", "rejected", "uncertain"])("un estado %s sigue bloqueado después del reinicio", async (state) => {
+  it.each<EstadoEntrega | "undeliverable">(["sent", "rejected", "uncertain", "undeliverable"])("un estado %s sigue bloqueado después del reinicio", async (state) => {
     const first = fileSeenStore(directory);
     expect(await first.claimAlert(eventId, { token: "owner" })).toBe(true);
     await first.finishAlert(eventId, "owner", state);
     const restarted = fileSeenStore(directory);
     expect(await restarted.alertState?.(eventId)).toBe(state);
     expect(await restarted.claimAlert(eventId, { token: "next" })).toBe(false);
+    // Ni un mes después: `uncertain` y `sending` no se liberan por tiempo, y un
+    // cierre permanente tampoco vuelve solo. El único camino es --force.
+    expect(await restarted.claimAlert(eventId, { token: "next", now: "2027-01-01T00:00:00.000Z" })).toBe(false);
+  });
+
+  it("solo `deferred` se vuelve a reclamar sin --force, y no antes de su plazo", async () => {
+    const first = fileSeenStore(directory);
+    expect(await first.claimAlert(eventId, { token: "owner", now: "2026-09-10T10:00:00.000Z" })).toBe(true);
+    await first.finishAlert(eventId, "owner", "deferred", "2026-09-10T10:02:00.000Z");
+    const restarted = fileSeenStore(directory);
+    expect(await restarted.alertDelivery?.(eventId)).toEqual({ estado: "deferred", nextAttemptAt: "2026-09-10T10:02:00.000Z" });
+    expect(await restarted.claimAlert(eventId, { token: "next", now: "2026-09-10T10:01:00.000Z" })).toBe(false);
+    expect(await restarted.claimAlert(eventId, { token: "next", now: "2026-09-10T10:02:00.000Z" })).toBe(true);
+    // Reclamada de nuevo, el plazo desaparece: ya no está aplazada.
+    expect(await restarted.alertDelivery?.(eventId)).toEqual({ estado: "sending", nextAttemptAt: null });
+  });
+
+  it("un cierre sin reclamo previo no pisa una entrega que ya tiene dueño", async () => {
+    const store = fileSeenStore(directory);
+    expect(await store.markUndeliverable?.(eventId)).toBe(true);
+    expect(await store.alertState?.(eventId)).toBe("undeliverable");
+    expect(await store.markUndeliverable?.(eventId)).toBe(false);
+    const otro = `${eventId}-2`;
+    await store.claimAlert(otro, { token: "owner" });
+    expect(await store.markUndeliverable?.(otro)).toBe(false);
+    expect(await store.alertState?.(otro)).toBe("sending");
   });
 
   it("doce instancias que compiten por la misma entrega conceden un solo reclamo", async () => {

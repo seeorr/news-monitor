@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { createLogger, type LogFields } from "../src/lib/log.ts";
 import { registrarEmbudoFeeds } from "../src/pipeline/diagnostico.ts";
 import { FEEDS, fetchFeed } from "../src/sources/rss.ts";
@@ -27,6 +28,65 @@ describe("diagnóstico del embudo por feed", () => {
     ]);
     expect(getter).not.toHaveBeenCalled();
   });
+  it("el fallo de red envuelto por fetch deja de leerse como UNKNOWN", () => {
+    const lines: string[] = [];
+    const log = createLogger((l) => lines.push(l));
+    // undici no propaga el código: envuelve el fallo en TypeError("fetch failed")
+    // y deja ECONNRESET/ENOTFOUND en `cause`. Sin recorrer la cadena, "no hay
+    // DNS" y "el modelo devolvió basura" se leían igual en el log.
+    log("SOURCE_FAILED", { stage: "collect", source: "rss", feed: "ecb-press",
+      error: new TypeError("fetch failed", { cause: Object.assign(new Error("x"), { code: "ENOTFOUND" }) }) });
+    log("SOURCE_FAILED", { stage: "collect", source: "sec-edgar",
+      error: new TypeError("fetch failed", { cause: Object.assign(new Error("x"), { status: 503 }) }) });
+    log("SOURCE_FAILED", { stage: "collect", source: "rss", error: new DOMException("HTTP timeout", "TimeoutError") });
+    log("UNHANDLED", { stage: "startup", error: new Error("invalid_monitor_profile") });
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { code: "SOURCE_FAILED", source: "rss", stage: "collect", feed: "ecb-press", error: "ENOTFOUND" },
+      { code: "SOURCE_FAILED", source: "sec-edgar", stage: "collect", error: "HTTP", status: 503 },
+      { code: "SOURCE_FAILED", source: "rss", stage: "collect", error: "REQUEST_TIMEOUT" },
+      { code: "UNHANDLED", stage: "startup", error: "INVALID_MONITOR_PROFILE" },
+    ]);
+  });
+
+  it("los códigos nuevos no publican cuerpos, URLs con credenciales ni getters", () => {
+    const lines: string[] = [];
+    const log = createLogger((l) => lines.push(l));
+    const getter = vi.fn(() => "postgres://user:clave@host/db");
+    const envuelto = new Error("boom");
+    Object.defineProperty(envuelto, "cause", { get: getter, enumerable: true, configurable: true });
+    log("UNHANDLED", { error: envuelto });
+    // Un mensaje libre no entra aunque contenga algo que parezca un código.
+    log("UNHANDLED", { error: new Error("connect ECONNREFUSED 10.0.0.1:5432 postgres://user:clave@host") });
+    log("UNHANDLED", { error: new Error("boom", { cause: new Error("https://api.telegram.org/bot123:SECRETO/sendMessage") }) });
+    // Cadena cíclica: se acota, no cuelga el logger.
+    const ciclo: { cause?: unknown } = {};
+    ciclo.cause = ciclo;
+    log("UNHANDLED", { error: ciclo });
+    expect(getter).not.toHaveBeenCalled();
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { code: "UNHANDLED", error: "UNKNOWN" }, { code: "UNHANDLED", error: "UNKNOWN" },
+      { code: "UNHANDLED", error: "UNKNOWN" }, { code: "UNHANDLED", error: "UNKNOWN" },
+    ]);
+    expect(lines.join("\n")).not.toContain("clave");
+    expect(lines.join("\n")).not.toContain("SECRETO");
+    expect(lines.join("\n")).not.toContain("10.0.0.1");
+  });
+
+  it("un snapshot con forma inválida y un cuerpo ilegible se distinguen entre sí", () => {
+    const lines: string[] = [];
+    const log = createLogger((l) => lines.push(l));
+    const zod = z.object({ id: z.string() }).safeParse({});
+    log("EVENT_FAILED", { stage: "persist", error: zod.error });
+    let sintaxis: unknown;
+    try { JSON.parse("<html>Access denied</html>"); } catch (error) { sintaxis = error; }
+    log("EVENT_FAILED", { stage: "collect", error: sintaxis });
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { code: "EVENT_FAILED", stage: "persist", error: "SCHEMA_INVALID" },
+      { code: "EVENT_FAILED", stage: "collect", error: "PAYLOAD_INVALID_JSON" },
+    ]);
+    expect(lines.join("\n")).not.toContain("Access denied");
+  });
+
   it("separa antigüedad, rechazo de reglas y deduplicación sin publicar titulares", () => {
     const vieja = noticia("vieja");
     const rechazada = noticia("rechazada", "cnbc-markets", "My favourite holiday photos");

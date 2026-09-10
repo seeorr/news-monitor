@@ -34,28 +34,125 @@ export function healthLimits(env: Record<string, string | undefined> = {}): Heal
     noExecutionMinutes: number("HEALTH_NO_EXECUTION_MINUTES", 90), queueMinutes: number("HEALTH_QUEUE_MINUTES", 120),
     rateCaptureMinutes: number("HEALTH_RATE_CAPTURE_MINUTES", 10), rateAlertMinutes: number("HEALTH_RATE_ALERT_MINUTES", 15) };
 }
-export type HealthState = "healthy" | "delayed" | "no_recent_execution" | "critical_source_failed" | "aged_queue" | "delivery_blocked";
-export function evaluateHealth(runs: RunRecord[], options: { now: string; limits?: HealthLimits; oldestPendingAt?: string | null;
-  blockedDeliveries?: number; rateCaptureBreaches?: number; rateAlertBreaches?: number }) {
+export type HealthState = "healthy" | "delayed" | "no_recent_execution" | "critical_source_failed" | "aged_queue" | "delivery_blocked"
+  | "processing_paused" | "trigger_inactive" | "budget_exhausted" | "telegram_unconfigured" | "delivery_uncertain";
+/** Vocabulario cerrado: se publica tal cual en la auditoría, sin prosa libre. */
+export const HEALTH_STATE_MEANING: Record<HealthState, string> = {
+  healthy: "captura, procesamiento, entrega y disparador automático acreditados en la ventana.",
+  delayed: "la captura existe pero llega tarde respecto al SLO medido.",
+  no_recent_execution: "no consta ninguna ejecución en la ventana de vigilancia.",
+  critical_source_failed: "una fuente crítica falló y su último intento sigue fallando.",
+  aged_queue: "hay trabajo pendiente más viejo que el límite de cola.",
+  delivery_blocked: "hay entregas que no llegaron a 'sent' y siguen ocupando el ledger.",
+  processing_paused: "captura viva y procesamiento parado a propósito (capture-only): no es un fallo.",
+  trigger_inactive: "en la ventana solo hay ejecuciones manuales; el disparo automático no está demostrado.",
+  budget_exhausted: "hay trabajo aplazado por presupuesto de IA agotado.",
+  telegram_unconfigured: "faltan credenciales de Telegram y el modo vigente exige entregar.",
+  delivery_uncertain: "hay entregas en 'uncertain'/'sending' pendientes de reconciliación humana.",
+};
+export interface HealthSignals {
+  now: string; limits?: HealthLimits; oldestPendingAt?: string | null;
+  blockedDeliveries?: number; rateCaptureBreaches?: number; rateAlertBreaches?: number;
+  /** Volumen de la cola: `aged_queue` decía cuán viejo, no cuánto. */
+  pendingItems?: number;
+  /** Entregas en `uncertain`/`sending` (Agente 2). Por defecto 0: no se afirma. */
+  uncertainDeliveries?: number;
+  /** Último acuse `sent` verificado en el ledger; si falta, se deduce de `sent` de las ejecuciones. */
+  deliveryConfirmedAt?: string | null;
+  /** Filas aplazadas por presupuesto de IA agotado. Por defecto 0. */
+  budgetExhaustedItems?: number;
+  /** `undefined` = no comprobado. Solo `false` declara `telegram_unconfigured`. */
+  telegramConfigured?: boolean;
+}
+export function evaluateHealth(runs: RunRecord[], options: HealthSignals) {
   const limits = options.limits ?? healthLimits();
   const age = (at: string | null | undefined) => at ? Math.max(0, (Date.parse(options.now) - Date.parse(at)) / 60_000) : Infinity;
+  const finite = (minutes: number) => Number.isFinite(minutes) ? minutes : null;
+  // Ventana de vigencia: pasada la cual una ejecución ya no prueba nada del
+  // presente. Es el mismo umbral con el que se declara "no_recent_execution",
+  // para no introducir una política nueva por la puerta de atrás.
+  const live = (at: string | null | undefined) => age(at) <= limits.noExecutionMinutes;
   const records = [...runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   const captured = records.filter((run) => run.captureCompletedAt);
   const fast = captured.find((run) => run.criticalOk.includes("ecb-press") && !run.criticalFailed.length);
   const full = captured.find((run) => run.profile === "full" && run.sourcesFailed === 0);
   const states: HealthState[] = [];
-  if (age(records[0]?.startedAt) > limits.noExecutionMinutes) states.push("no_recent_execution");
-  else if (age(fast?.captureCompletedAt) > limits.fastMinutes || age(full?.captureCompletedAt) > limits.fullMinutes ||
-      (options.rateCaptureBreaches ?? 0) > 0 || (options.rateAlertBreaches ?? 0) > 0) states.push("delayed");
+  const noExecution = age(records[0]?.startedAt) > limits.noExecutionMinutes;
+  const late = age(fast?.captureCompletedAt) > limits.fastMinutes || age(full?.captureCompletedAt) > limits.fullMinutes ||
+    (options.rateCaptureBreaches ?? 0) > 0 || (options.rateAlertBreaches ?? 0) > 0;
+  if (noExecution) states.push("no_recent_execution");
+  else if (late) states.push("delayed");
   // Una caída persiste hasta una respuesta posterior de ESA fuente, no hasta
-  // un process-only verde ni hasta una respuesta de otro feed.
-  const failed = CRITICAL_FEEDS.filter((feed) => records.find((run) => run.criticalFailed.includes(feed) || run.criticalOk.includes(feed))?.criticalFailed.includes(feed));
+  // un process-only verde ni hasta una respuesta de otro feed. Pero solo
+  // mientras siga siendo comprobable: si el último intento de esa fuente es más
+  // viejo que la ventana de vigencia —porque el perfil vigente ya no la
+  // incluye—, nadie está demostrando una caída en curso, y dejarla en rojo
+  // eterniza una incidencia que pudo resolverse sola. Se sigue publicando en
+  // `criticalStale`, así que no se oculta: se deja de afirmar lo que no consta.
+  const lastSeen = (feed: typeof CRITICAL_FEEDS[number]) =>
+    records.find((run) => run.criticalFailed.includes(feed) || run.criticalOk.includes(feed));
+  const down = CRITICAL_FEEDS.filter((feed) => lastSeen(feed)?.criticalFailed.includes(feed));
+  const failed = down.filter((feed) => live(lastSeen(feed)!.startedAt));
+  const criticalStale = down.filter((feed) => !live(lastSeen(feed)!.startedAt));
   if (failed.length) states.push("critical_source_failed");
-  if (options.oldestPendingAt && age(options.oldestPendingAt) > limits.queueMinutes) states.push("aged_queue");
-  if ((options.blockedDeliveries ?? 0) > 0) states.push("delivery_blocked");
-  return { states: states.length ? states : ["healthy" as const], criticalFailed: failed,
-    fastAgeMinutes: Number.isFinite(age(fast?.captureCompletedAt)) ? age(fast?.captureCompletedAt) : null,
-    fullAgeMinutes: Number.isFinite(age(full?.captureCompletedAt)) ? age(full?.captureCompletedAt) : null };
+  const queueAge = age(options.oldestPendingAt);
+  const aged = Boolean(options.oldestPendingAt) && queueAge > limits.queueMinutes;
+  if (aged) states.push("aged_queue");
+  const blocked = options.blockedDeliveries ?? 0, uncertain = options.uncertainDeliveries ?? 0;
+  if (blocked > 0) states.push("delivery_blocked");
+
+  // Disparador: quién pidió las ejecuciones, no cuántas hubo. Una batería de
+  // pruebas manuales no demuestra que el cron esté vivo.
+  const vivas = records.filter((run) => live(run.startedAt));
+  const runsByTrigger = { external: 0, schedule: 0, manual: 0 };
+  for (const run of vivas) runsByTrigger[run.trigger]++;
+  const lastAutomatic = vivas.find((run) => run.trigger !== "manual");
+  const triggerState = !vivas.length ? "absent" : lastAutomatic ? "automatic" : "manual_only";
+  if (triggerState === "manual_only") states.push("trigger_inactive");
+
+  // Procesamiento: solo lo acreditan los modos que procesan. Un capture-only
+  // verde no dice absolutamente nada del paso siguiente.
+  const processingRuns = records.filter((run) => run.mode !== "capture-only");
+  const lastProcessing = processingRuns[0];
+  const pausedByMode = vivas.some((run) => run.mode === "capture-only");
+  const captureState = noExecution ? "absent" : late ? "delayed" : "current";
+  const processingState = live(lastProcessing?.startedAt) ? "current"
+    : pausedByMode && captureState === "current" ? "paused"
+      : vivas.length ? "delayed" : "absent";
+  if (processingState === "paused") states.push("processing_paused");
+  const budgetItems = options.budgetExhaustedItems ?? 0;
+  if (budgetItems > 0) states.push("budget_exhausted");
+
+  // Entrega: solo el acuse la acredita. Un modo que no entrega no puede
+  // declarar que falte la configuración de un transporte que no va a usar.
+  const deliveryRequired = processingRuns.some((run) => live(run.startedAt));
+  const confirmedAt = options.deliveryConfirmedAt !== undefined ? options.deliveryConfirmedAt
+    : vivas.find((run) => run.sent > 0)?.endedAt ?? vivas.find((run) => run.sent > 0)?.startedAt ?? null;
+  const unconfigured = options.telegramConfigured === false && deliveryRequired;
+  if (unconfigured) states.push("telegram_unconfigured");
+  if (uncertain > 0) states.push("delivery_uncertain");
+  const deliveryState = unconfigured ? "unconfigured" : uncertain > 0 ? "uncertain" : blocked > 0 ? "blocked"
+    : live(confirmedAt) ? "confirmed" : "unproven";
+
+  const fullCircuit = !states.length && triggerState === "automatic" && captureState === "current" &&
+    processingState === "current" && deliveryState === "confirmed";
+  return { states: states.length ? states : ["healthy" as const], criticalFailed: failed, criticalStale,
+    fastAgeMinutes: finite(age(fast?.captureCompletedAt)), fullAgeMinutes: finite(age(full?.captureCompletedAt)),
+    capture: { state: captureState, lastAt: captured[0]?.captureCompletedAt ?? null, ageMinutes: finite(age(captured[0]?.captureCompletedAt)),
+      lastProfile: records[0]?.profile ?? null, lastMode: records[0]?.mode ?? null, lastTrigger: records[0]?.trigger ?? null },
+    processing: { state: processingState, lastAt: lastProcessing?.startedAt ?? null, ageMinutes: finite(age(lastProcessing?.startedAt)),
+      lastMode: lastProcessing?.mode ?? null, scored: vivas.reduce((n, run) => n + run.scored, 0) },
+    delivery: { state: deliveryState, blocked, uncertain, confirmedAt, ageMinutes: finite(age(confirmedAt)),
+      sent: vivas.reduce((n, run) => n + run.sent, 0), required: deliveryRequired },
+    trigger: { state: triggerState, lastAutomaticAt: lastAutomatic?.startedAt ?? null,
+      ageMinutes: finite(age(lastAutomatic?.startedAt)), runs: runsByTrigger },
+    // Sin medida directa se usa el último checkpoint de la ejecución: es un dato
+    // observado, no una estimación, y evita que el volumen dependa de que el
+    // llamante se acuerde de pasarlo.
+    queue: { pending: options.pendingItems ?? records[0]?.pendingAfter ?? null, oldestPendingAt: options.oldestPendingAt ?? null,
+      ageMinutes: finite(queueAge), aged },
+    budget: { exhausted: budgetItems > 0, items: budgetItems },
+    fullCircuit };
 }
 /** Preparado, sin transporte real ni habilitación por entorno implícita. */
 export async function privateHealthNotice(health: ReturnType<typeof evaluateHealth>, options: {

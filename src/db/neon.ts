@@ -11,7 +11,7 @@
 import { neon } from "@neondatabase/serverless";
 import type { Ejecutor } from "./cliente.ts";
 import type {
-  AlertRecord, EstadoEntrega, Puntuacion, Reclamo, SeenStore,
+  AlertRecord, EntregaReclamada, EstadoCierre, EstadoReclamo, Puntuacion, Reclamo, SeenStore,
 } from "../pipeline/seen.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
 
@@ -52,8 +52,16 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
 
   return {
     async alertState(id) {
-      const rows = await sql`select state from alert_deliveries where event_id = ${id} limit 1` as Array<{ state: import("../pipeline/seen.ts").EstadoReclamo }>;
+      const rows = await sql`select state from alert_deliveries where event_id = ${id} limit 1` as Array<{ state: EstadoReclamo }>;
       return rows[0]?.state ?? null;
+    },
+    async alertDelivery(id): Promise<EntregaReclamada | null> {
+      const rows = (await sql`select state, next_attempt_at from alert_deliveries where event_id = ${id} limit 1`) as Array<{ state: EstadoReclamo; next_attempt_at: string | Date | null }>;
+      const fila = rows[0];
+      if (!fila) return null;
+      const hasta = fila.next_attempt_at;
+      return { estado: fila.state,
+        nextAttemptAt: hasta == null ? null : (hasta instanceof Date ? hasta.toISOString() : String(hasta)) };
     },
     async has(id) {
       const filas = (await sql`select 1 from events where id = ${id} limit 1`) as unknown[];
@@ -106,14 +114,18 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
      * mirar; se encuentra el reclamo puesto y no envía, que es exactamente la
      * propiedad que se compra con todo esto.
      */
-    async claimAlert(eventId: string, { token, force = false }: Reclamo) {
+    async claimAlert(eventId: string, { token, force = false, now }: Reclamo) {
       const filas = (await sql`
-        insert into alert_deliveries (event_id, state, claim_token, claimed_at, attempts)
-        values (${eventId}, 'sending', ${token}, now(), 1)
+        insert into alert_deliveries (event_id, state, claim_token, claimed_at, attempts, next_attempt_at)
+        values (${eventId}, 'sending', ${token}, now(), 1, null)
         on conflict (event_id) do update set
           state = 'sending', claim_token = ${token}, claimed_at = now(),
-          settled_at = null, attempts = alert_deliveries.attempts + 1, updated_at = now()
+          settled_at = null, next_attempt_at = null,
+          attempts = alert_deliveries.attempts + 1, updated_at = now()
         where ${force}::boolean
+          or (alert_deliveries.state = 'deferred'
+            and (alert_deliveries.next_attempt_at is null
+              or alert_deliveries.next_attempt_at <= ${now ?? null}::timestamptz))
         returning event_id
       `) as unknown[];
       return filas.length === 1;
@@ -127,14 +139,35 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
      * cerrado, y quien llama tiene que enterarse: lo que queda es una entrega en
      * `sending` que nadie va a liberar.
      */
-    async finishAlert(eventId: string, token: string, estado: EstadoEntrega) {
+    async finishAlert(eventId: string, token: string, estado: EstadoCierre, nextAttemptAt?: string | null) {
+      // El plazo solo lo lleva `deferred`. Los demás cierres no se reintentan
+      // solos, y dejarles fecha invitaría a que alguien la usara para liberarlos.
+      const hasta = estado === "deferred" ? nextAttemptAt ?? null : null;
       const filas = (await sql`
         update alert_deliveries
-        set state = ${estado}, settled_at = now(), updated_at = now()
+        set state = ${estado}, settled_at = now(), updated_at = now(),
+          next_attempt_at = ${hasta}::timestamptz
         where event_id = ${eventId} and claim_token = ${token} and state = 'sending'
         returning event_id
       `) as unknown[];
       if (filas.length !== 1) throw new Error("alert_claim_lost");
+    },
+
+    /**
+     * El cierre de lo que nunca se pudo redactar, sin reclamo previo.
+     *
+     * `do nothing` en vez de `do update`: si ya hay fila, la entrega tiene dueño
+     * o desenlace y no se pisa. Sin token, igual que el relleno histórico de la
+     * migración: aquí no hubo reclamo, y fingir uno sería mentir en el rastro.
+     */
+    async markUndeliverable(eventId: string) {
+      const filas = (await sql`
+        insert into alert_deliveries (event_id, state, claim_token, claimed_at, settled_at, attempts)
+        values (${eventId}, 'undeliverable', null, now(), now(), 1)
+        on conflict (event_id) do nothing
+        returning event_id
+      `) as unknown[];
+      return filas.length === 1;
     },
 
     /**

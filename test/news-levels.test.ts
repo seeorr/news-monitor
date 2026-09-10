@@ -31,10 +31,12 @@ function options(extra: Partial<NewsDeliveryOptions> = {}) {
     maxPendingHours: 48, maxDeep: 3, briefThreshold: 5, importantThreshold: 7, watchlistImportantThreshold: 6,
     canSend: true, maxItems: 500, ...extra, send: vi.fn(extra.send ?? (async (_body: string) => "sent" as const)) };
 }
-async function prepare(o: NewsDeliveryOptions, e: NormalizedEvent, s = score()) {
-  await o.queue.capture([{ event: e, publisher: e.series_id! }], NOW);
-  await o.queue.claim([e.id], { token: e.id, now: NOW });
-  await o.queue.finishBatch([{ id: e.id, outcome: { state: "scored", score: s, needs_delivery: true } }], e.id, NOW);
+// `at` fecha la captura: la cola de entrega ordena por antigüedad, así que sin
+// controlarla no se puede colocar nada "delante" de otra cosa en la ventana.
+async function prepare(o: NewsDeliveryOptions, e: NormalizedEvent, s = score(), at = NOW) {
+  await o.queue.capture([{ event: e, publisher: e.series_id! }], at);
+  await o.queue.claim([e.id], { token: e.id, now: at });
+  await o.queue.finishBatch([{ id: e.id, outcome: { state: "scored", score: s, needs_delivery: true } }], e.id, at);
 }
 function deps(parse: ReturnType<typeof vi.fn>): CascadeDeps {
   return { client: { messages: { parse } }, modelScoring: "existing-cheap-test", modelAnalysis: "existing-deep-test" } as unknown as CascadeDeps;
@@ -114,7 +116,7 @@ describe("dos niveles, con transportes simulados", () => {
     await prepare(o, event("a")); await prepare(o, event("b", "Gold production falls"));
     await deliverNews(o); await deliverNews(o);
     expect(o.send).toHaveBeenCalledTimes(1); expect(await o.queue.listDeliveryPending()).toHaveLength(1);
-    expect((await o.control.getDecision("b"))?.reasons).toContain("deferred_hour_limit");
+    expect((await o.control.getDecision("b"))?.reasons).toContain("deferred_quota_hour_limit");
     await deliverNews({ ...o, now: "2026-09-10T11:01:00.000Z" });
     expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
   });
@@ -137,8 +139,10 @@ describe("dos niveles, con transportes simulados", () => {
     const cuerpo = o.send.mock.calls[0]![0] as string;
     expect(cuerpo).not.toContain("9 %");
     expect(cuerpo.match(/producción de cobre/g)).toHaveLength(2);
-    expect((await o.control.getDecision("veneno"))?.reasons).toContain("deferred_unsupported_fact");
-    expect((await o.queue.listDeliveryPending()).map((r) => r.id)).toEqual(["veneno"]);
+    expect((await o.control.getDecision("veneno"))?.reasons).toContain("deferred_content_unsupported_fact");
+    // Y deja de competir por la ventana: cerrada sin entregar, no pendiente.
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+    expect(await o.seen.alertState?.("veneno")).toBe("undeliverable");
   });
   it("fallo profundo degrada al hecho breve sin inventar números", async () => {
     const o = options({ deps: deps(vi.fn().mockRejectedValue(new Error("network"))) });
@@ -174,6 +178,145 @@ describe("dos niveles, con transportes simulados", () => {
       expect.objectContaining({ attempt: 1, stage: "analysis" }), expect.objectContaining({ attempt: 2, stage: "analysis" }),
     ]);
     expect(after).toHaveBeenNthCalledWith(2, "receipt", { inputTokens: 110, outputTokens: 40, result: "success" });
+  });
+});
+
+/**
+ * La cabeza de la cola de entrega.
+ *
+ * `listDeliveryPending` ordena por crítico, antigüedad e id, y devuelve como
+ * mucho `maxItems`. Lo que entra en el lote sale de ahí y de `batchSize`. Un
+ * candidato que falla siempre por la misma razón —una cifra que la fuente no
+ * respalda— vuelve a encabezar esa lista en cada ciclo, y como el lote se corta
+ * por delante, las noticias sanas que van detrás no llegan a entrar nunca.
+ *
+ * El arreglo de `f7e6b00` salva el lote —el irredactable no arrastra a los
+ * demás— pero no la ventana: el irredactable sigue `delivery_pending` y sigue
+ * siendo el primero mañana. Estos casos fijan que un fallo determinista deje de
+ * competir por la ventana **sin** darse por entregado.
+ */
+describe("la cabeza de la cola no la ocupa un fallo determinista", () => {
+  const veneno = (i: number) => `El cobre cae un ${i + 1} % tras el cierre de la planta.`;
+  async function cola(o: NewsDeliveryOptions) {
+    // Tres irredactables capturadas antes que tres sanas: van delante.
+    for (let i = 0; i < 3; i++) await prepare(o, event(`v${i}`, `Plant ${i} halted`), score(5, veneno(i)), `2026-09-10T09:0${i}:00.000Z`);
+    for (let i = 0; i < 3; i++) await prepare(o, event(`s${i}`, `Copper output falls in plant ${i}`), score(), `2026-09-10T09:1${i}:00.000Z`);
+  }
+  it("tres irredactables delante no impiden que salgan las sanas", async () => {
+    const o = options({ briefIntervalMinutes: 0 });
+    await cola(o);
+    expect(await deliverNews(o)).toMatchObject({ sent: 1, failed: 3 });
+    const cuerpo = o.send.mock.calls[0]![0] as string;
+    expect(cuerpo).not.toContain("%");
+    expect(cuerpo.match(/producción de cobre/g)).toHaveLength(3);
+  });
+  it("y siguen saliendo en ciclos sucesivos: el irredactable no vuelve a competir", async () => {
+    const o = options({ briefIntervalMinutes: 0 });
+    await cola(o);
+    await deliverNews(o);
+    // Décimo ciclo: la cola de entrega ya no tiene nada que ofrecer.
+    for (let ciclo = 2; ciclo <= 10; ciclo++) await deliverNews({ ...o, now: `2026-09-10T${10 + ciclo}:00:00.000Z` });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("el irredactable queda cerrado como no entregable, nunca como entregado", async () => {
+    const o = options({ briefIntervalMinutes: 0 });
+    await cola(o);
+    await deliverNews(o);
+    for (const id of ["v0", "v1", "v2"]) {
+      expect(await o.seen.alertState?.(id)).toBe("undeliverable");
+      expect((await o.control.getDecision(id))?.reasons).toContain("deferred_content_unsupported_fact");
+    }
+  });
+  it("un lote irreducible por longitud tampoco se queda a vivir en la cabeza", async () => {
+    // Un solo breve que no cabe: el enlace de la fuente se lo come entero.
+    const o = options({ batchSize: 1, briefIntervalMinutes: 0 });
+    await prepare(o, event("gigante", "Copper production falls during maintenance",
+      { source_url: `https://example.test/x?q=${"a".repeat(4200)}` }), score(), "2026-09-10T09:00:00.000Z");
+    await prepare(o, event("sana"), score(), "2026-09-10T09:30:00.000Z");
+    await deliverNews(o);
+    expect((await o.control.getDecision("gigante"))?.reasons).toContain("deferred_content_too_long");
+    expect(await o.seen.alertState?.("gigante")).toBe("undeliverable");
+    await deliverNews({ ...o, now: "2026-09-10T11:00:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(o.send.mock.calls[0]![0]).toContain("producción de cobre");
+  });
+});
+
+describe("qué se hace con cada desenlace del transporte", () => {
+  it("un 429 aplaza la noticia, respeta retry_after y la reintenta sin perderla", async () => {
+    const o = options({ briefIntervalMinutes: 0, send: vi.fn()
+      .mockResolvedValueOnce({ state: "rejected", rejection: "recoverable", retryAfterMs: 120_000, code: "telegram_429" })
+      .mockResolvedValueOnce({ state: "sent" }) });
+    await prepare(o, event("limitada"));
+    await deliverNews(o);
+    expect(await o.seen.alertState?.("limitada")).toBe("deferred");
+    expect((await o.queue.listDeliveryPending()).map((r) => r.id)).toEqual(["limitada"]);
+    expect((await o.control.getDecision("limitada"))?.reasons).toContain("deferred_transport_rate_limited");
+    // Antes del plazo que pidió Telegram no se vuelve a llamar.
+    await deliverNews({ ...o, now: "2026-09-10T10:01:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    await deliverNews({ ...o, now: "2026-09-10T10:03:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(2);
+    expect(await o.seen.alertState?.("limitada")).toBe("sent");
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("un rechazo permanente no se reintenta jamás y deja de ocupar la cola", async () => {
+    const o = options({ briefIntervalMinutes: 0, send: vi.fn(async () => ({ state: "rejected" as const, rejection: "permanent" as const, code: "telegram_400" })) });
+    await prepare(o, event("prohibida"));
+    await deliverNews(o); await deliverNews({ ...o, now: "2026-09-11T09:00:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(await o.seen.alertState?.("prohibida")).toBe("rejected");
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("un timeout no provoca reenvío automático ni se libera por tiempo", async () => {
+    const o = options({ briefIntervalMinutes: 0, send: vi.fn(async () => ({ state: "uncertain" as const, code: "telegram_408" })) });
+    await prepare(o, event("dudosa"));
+    await deliverNews(o);
+    // Un mes después sigue bloqueada: `uncertain` no caduca. Solo una persona.
+    await deliverNews({ ...o, now: "2026-10-10T10:00:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(await o.seen.alertState?.("dudosa")).toBe("uncertain");
+    expect(await o.seen.claimAlert("dudosa", { token: "otro", now: "2026-10-10T10:00:00.000Z" })).toBe(false);
+  });
+  it("sin credenciales el modo entregable falla de forma visible y no pierde la noticia", async () => {
+    const o = options({ canSend: false });
+    await prepare(o, event("sin-credenciales"));
+    expect(await deliverNews(o)).toMatchObject({ telegramUnconfigured: true, sent: 0 });
+    expect((await o.control.getDecision("sin-credenciales"))?.reasons).toContain("telegram_unconfigured");
+    expect((await o.queue.listDeliveryPending()).map((r) => r.id)).toEqual(["sin-credenciales"]);
+    expect(await o.seen.alertState?.("sin-credenciales")).toBeNull();
+  });
+  it("el fallo de la copia al grupo queda identificado aparte del privado", async () => {
+    const o = options({ afterSent: vi.fn(async () => { throw new Error("grupo caído"); }) });
+    await prepare(o, event("copia"));
+    expect(await deliverNews(o)).toMatchObject({ sent: 1, failed: 0, groupFailed: 1 });
+    expect(await o.seen.alertState?.("copia")).toBe("sent");
+    const razones = (await o.control.getDecision("copia"))?.reasons ?? [];
+    expect(razones).toContain("group_copy_failed");
+    expect(razones).not.toContain("group_copy_sent");
+  });
+  it("una caída después de que Telegram acepte no produce un segundo mensaje", async () => {
+    // El peor instante: el mensaje ya está en el teléfono y el proceso muere
+    // antes de escribir nada de vuelta. Lo único que importa es la vuelta 2.
+    const seen = memorySeenStore();
+    vi.spyOn(seen, "saveAlert").mockRejectedValueOnce(new Error("el proceso se murió aquí"));
+    const o = options({ seen, briefIntervalMinutes: 0 });
+    await prepare(o, event("caida"));
+    expect(await deliverNews(o)).toMatchObject({ sent: 0, failed: 1 });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    // Queda en vuelo, y en vuelo se queda: ni el ciclo ni el reloj lo liberan.
+    expect(await seen.alertState?.("caida")).toBe("sending");
+    await deliverNews({ ...o, now: "2026-10-10T10:00:00.000Z" });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(seen.alerts).toHaveLength(0);
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("un rechazo del grupo no se confunde con un fallo del grupo ni con el privado", async () => {
+    const o = options({ afterSent: vi.fn(async () => "rejected" as const) });
+    await prepare(o, event("copia-rechazada"));
+    expect(await deliverNews(o)).toMatchObject({ sent: 1, groupFailed: 1, groupSent: 0 });
+    expect((await o.control.getDecision("copia-rechazada"))?.reasons).toContain("group_copy_rejected");
   });
 });
 
