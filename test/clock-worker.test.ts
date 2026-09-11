@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import worker, { dispatch, selectProfile, type Env, type SafeRecord } from "../cloudflare-dispatcher/src/worker.ts";
 const env: Env = { ENABLED: "true", GITHUB_OWNER: "example", GITHUB_REPO: "monitor", GITHUB_WORKFLOW: "monitor.yml",
-  GITHUB_REF: "main", GITHUB_TOKEN: "synthetic-sensitive-marker", STRATEGY: "mixed", MONITOR_MODE: "capture-only" };
+  GITHUB_REF: "main", GITHUB_TOKEN: "synthetic-sensitive-marker", STRATEGY: "mixed" };
 const at = (minute: number) => Date.UTC(2026, 8, 10, 12, minute);
 describe("reloj externo, todas las peticiones simuladas", () => {
   it.each([3,33])("full en %i UTC", (minute) => expect(selectProfile(at(minute), "mixed")).toBe("full"));
@@ -19,7 +19,10 @@ describe("reloj externo, todas las peticiones simuladas", () => {
     expect(url).toBe("https://api.github.com/repos/example/monitor/actions/workflows/monitor.yml/dispatches");
     expect(request).toMatchObject({ method: "POST", redirect: "manual", headers: { Accept: "application/vnd.github+json",
       Authorization: `Bearer ${env.GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2026-03-10" } });
-    expect(JSON.parse(request.body)).toEqual({ ref: "release/clock", inputs: { profile: "fast", origin: "external", mode: "capture-only" } });
+    // `auto`, no un modo concreto: el reloj dice cuándo, y el modo lo decide la
+    // variable del repositorio. Mandar aquí un modo propio era la doble llave
+    // que podía apagar los envíos automáticos sin apagar los manuales.
+    expect(JSON.parse(request.body)).toEqual({ ref: "release/clock", inputs: { profile: "fast", origin: "external", mode: "auto" } });
     expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
   });
   it.each([401,403,404,422,429,302,500,202])("clasifica HTTP %i sin publicar cuerpos ni repetir dispatch", async (status) => {

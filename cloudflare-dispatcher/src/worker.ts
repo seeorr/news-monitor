@@ -7,8 +7,24 @@ export interface Env {
   GITHUB_REF: string;
   GITHUB_TOKEN?: string;
   STRATEGY: "mixed" | "fast-only";
-  MONITOR_MODE: "full" | "capture-only";
 }
+/**
+ * El reloj dice CUÁNDO, no EN QUÉ MODO. Y esto no es una simplificación: era una
+ * trampa con fecha de caducidad.
+ *
+ * El worker mandaba su propio `MONITOR_MODE` como input del dispatch, y en
+ * `monitor.yml` el input **gana** sobre `vars.MONITOR_MODE`. Con la variable del
+ * repositorio en `full` y la del worker en `capture-only`, cada ejecución
+ * automática habría capturado sin enviar mientras las manuales sí enviaban: el
+ * sistema "funcionando" y sin mandar nada, que es exactamente el fallo del que
+ * viene todo esto. Y se habría notado tarde, porque cada mitad, por separado,
+ * parece bien configurada.
+ *
+ * `auto` deja que mande la variable del repositorio y nadie más. Un solo sitio
+ * donde cambiar el modo, y ninguna forma de que dos configuraciones se
+ * contradigan sin que nadie lo vea.
+ */
+const MODE = "auto";
 export type DispatchProfile = "fast" | "full";
 // `invalid_request` es aditivo y separa un fallo DETERMINISTA de la petición
 // —el runtime la rechaza al construirla— de `uncertain`, que sigue significando
@@ -70,7 +86,7 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
     if (env.ENABLED !== "true" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(env.GITHUB_OWNER) ||
         !/^[A-Za-z0-9_.-]{1,100}$/.test(env.GITHUB_REPO) || [".", ".."].includes(env.GITHUB_REPO) || !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(env.GITHUB_WORKFLOW) ||
         !env.GITHUB_REF || env.GITHUB_REF.length > 200 || /[\x00-\x20\x7f]/.test(env.GITHUB_REF) ||
-        !env.GITHUB_TOKEN || !["full", "capture-only"].includes(env.MONITOR_MODE)) throw new Error();
+        !env.GITHUB_TOKEN) throw new Error();
   } catch { return fail("invalid_config"); }
   const controller = new AbortController();
   const timeoutMs = dependencies.timeoutMs ?? 8_000;
@@ -82,7 +98,7 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
     method: "POST", redirect: REDIRECT, signal: controller.signal,
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${env.GITHUB_TOKEN}`,
       "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json", "User-Agent": "news-monitor-clock" },
-    body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: env.MONITOR_MODE } }),
+    body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: MODE } }),
   };
   try {
     // La carrera acota también un transporte que no atienda AbortSignal.

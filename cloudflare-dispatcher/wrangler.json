@@ -21,7 +21,6 @@
     "GITHUB_REPO": "news-monitor",
     "GITHUB_WORKFLOW": "monitor.yml",
     "GITHUB_REF": "main",
-    "STRATEGY": "fast-only",
-    "MONITOR_MODE": "capture-only"
+    "STRATEGY": "fast-only"
   }
 }
