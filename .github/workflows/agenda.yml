@@ -31,17 +31,45 @@ jobs:
   agenda:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      MONITOR_MODE: ${{ vars.MONITOR_MODE }}
     steps:
+      # Se evalua antes del checkout, de instalar paquetes y de leer secretos,
+      # por el mismo motivo que la de brief.yml: una puerta que se abre despues
+      # de descargar el codigo ya ha hecho la mitad de lo que queria evitar.
+      #
+      # Esta faltaba, y era el hueco: la agenda manda Telegram directamente, sin
+      # pasar por la cola ni por el ledger de entregas, asi que lo unico que la
+      # contenia durante la observacion era estar pausada a mano. El primer cron
+      # despues de reactivarla habria enviado en plena fase de captura.
+      - name: Comprobar el modo antes de tocar nada
+        id: modo
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const trigger = process.env.GITHUB_EVENT_NAME;
+          const trusted = ['schedule', 'workflow_dispatch'].includes(trigger);
+          // `capture-only` significa observar sin enviar. No admite excepciones
+          // por ser la agenda "barata": lo que se esta protegiendo no es el coste.
+          const captureOnly = process.env.MONITOR_MODE === 'capture-only';
+          const enabled = trusted && !captureOnly;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `enabled=${enabled}\n`);
+          NODE
+
       - uses: actions/checkout@v5
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
 
       - uses: actions/setup-node@v5
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
 
       - name: Enviar la agenda
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
         run: npm run agenda
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
@@ -53,7 +81,7 @@ jobs:
       # Si la agenda no sale, hay que enterarse. Es el mismo motivo que en el
       # monitor: un aviso que falla en silencio se confunde con un dia tranquilo.
       - name: Avisar del fallo por Telegram
-        if: failure()
+        if: ${{ failure() && steps.modo.outputs.enabled == 'true' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

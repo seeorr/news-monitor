@@ -1,0 +1,218 @@
+{
+  "frozenAt": "2026-09-11T09:00:00Z",
+  "method": "Muestra fija y etiquetada para medir la deduplicación de titulares (src/pipeline/agrupar.ts). Los pares se escribieron a mano imitando titulares reales de banca central, macro y resultados; las etiquetas son la decisión editorial correcta —¿es la misma noticia o son dos?— y NO lo que el código hace hoy. Nada aquí es aleatorio: la muestra es fija para que la matriz de falsos positivos y negativos sea comparable entre ejecuciones. Ningún par se eligió después de ver el resultado.",
+  "etiquetas": {
+    "agrupar": "true = las dos entradas son la misma noticia y deben fundirse en un grupo. false = son dos noticias y deben salir por separado.",
+    "clase": "misma-noticia | negacion | cifras | sujeto | actualizacion",
+    "coste": "que se pierde si el agrupador se equivoca en este par"
+  },
+  "casos": [
+    {
+      "id": "mn1",
+      "clase": "misma-noticia",
+      "agrupar": true,
+      "motivo": "Dos medios cuentan el mismo recorte con la misma cifra; solo cambia la redacción y la entradilla.",
+      "coste": "Dos avisos seguidos de lo mismo: el monitor se vuelve ruido.",
+      "a": { "id": "mn1a", "title": "Fed cuts interest rates by 25 basis points at its September meeting", "summary": "The decision was widely expected by economists surveyed before the meeting.", "series_id": "cnbc-markets" },
+      "b": { "id": "mn1b", "title": "Fed cuts interest rates 25 basis points at September meeting", "summary": "Policymakers lowered the target range for the first time this year.", "series_id": "yahoo-finance" }
+    },
+    {
+      "id": "mn2",
+      "clase": "misma-noticia",
+      "agrupar": true,
+      "motivo": "Misma noticia, misma cifra en el titular; la entradilla oficial añade el nivel del tipo y la de prensa no.",
+      "coste": "Duplicado visible: el comunicado oficial y la crónica salen como dos avisos.",
+      "a": { "id": "mn2a", "title": "ECB cuts interest rates by 25 basis points", "summary": "The Governing Council decided to lower the three key interest rates.", "series_id": "ecb-press", "official": true },
+      "b": { "id": "mn2b", "title": "ECB cuts interest rates by 25 basis points", "summary": "Lagarde said inflation is converging to target; the deposit facility now stands at 2.00 percent.", "series_id": "reuters-markets" }
+    },
+    {
+      "id": "mn3",
+      "clase": "misma-noticia",
+      "agrupar": true,
+      "motivo": "Mismo titular en español con verbo distinto; ninguna de las dos entradillas aporta un hecho nuevo.",
+      "coste": "Duplicado visible.",
+      "a": { "id": "mn3a", "title": "El BCE mantiene los tipos de interés sin cambios en septiembre", "summary": "El Consejo de Gobierno no ve motivos para moverse.", "series_id": "expansion-mercados" },
+      "b": { "id": "mn3b", "title": "El BCE deja los tipos de interés sin cambios en septiembre", "summary": "La institución repite la decisión de julio.", "series_id": "cincodias-mercados" }
+    },
+    {
+      "id": "mn4",
+      "clase": "misma-noticia",
+      "agrupar": true,
+      "motivo": "Resultados: misma compañía, misma cifra, verbo distinto ('reports' frente a 'posts').",
+      "coste": "Duplicado visible en earnings.",
+      "a": { "id": "mn4a", "title": "Apple reports record quarterly revenue of 94.9 billion dollars", "summary": "Services revenue set an all-time high.", "series_id": "reuters-markets" },
+      "b": { "id": "mn4b", "title": "Apple posts record quarterly revenue of 94.9 billion dollars", "summary": "The company beat Wall Street expectations on both lines.", "series_id": "cnbc-markets" }
+    },
+    {
+      "id": "mn5",
+      "clase": "misma-noticia",
+      "agrupar": true,
+      "motivo": "Misma noticia y mismo titular; la entradilla de una fuente cita un porcentaje que la otra no menciona. La entradilla no cambia el hecho.",
+      "coste": "Falso negativo caro: el mismo hecho se puntúa, se analiza y se anuncia dos veces.",
+      "a": { "id": "mn5a", "title": "ECB holds rates steady as inflation nears target", "summary": "The Governing Council kept its policy stance unchanged.", "series_id": "reuters-markets" },
+      "b": { "id": "mn5b", "title": "ECB holds rates steady as inflation nears target", "summary": "The deposit facility stays at 2.00 percent, unchanged since July.", "series_id": "bloomberg-markets" }
+    },
+    {
+      "id": "neg1",
+      "clase": "negacion",
+      "agrupar": false,
+      "motivo": "Afirmación y desmentido del mismo movimiento de tipos, ambos con importe y nivel: 'sube 25 pb' frente a 'no sube 25 pb'.",
+      "coste": "CRÍTICO: el desmentido se cuenta como duplicado de la subida y puede no llegar nunca.",
+      "a": { "id": "neg1a", "title": "El BCE sube los tipos 25 puntos básicos y sitúa la facilidad de depósito en el 2,00%", "summary": "Decisión del Consejo de Gobierno de septiembre.", "series_id": "ecb-press", "official": true },
+      "b": { "id": "neg1b", "title": "El BCE no sube los tipos 25 puntos básicos: la facilidad de depósito se queda en el 2,00%", "summary": "El Consejo de Gobierno aparca el movimiento que el mercado daba por hecho.", "series_id": "expansion-mercados" }
+    },
+    {
+      "id": "neg2",
+      "clase": "negacion",
+      "agrupar": false,
+      "motivo": "Negación explícita en inglés ('does not raise') contra la subida.",
+      "coste": "CRÍTICO: el desmentido no llega.",
+      "a": { "id": "neg2a", "title": "Fed raises interest rates by 25 basis points at its September meeting", "summary": "The target range moves higher.", "series_id": "cnbc-markets" },
+      "b": { "id": "neg2b", "title": "Fed does not raise interest rates at its September meeting", "summary": "The committee left the target range untouched.", "series_id": "yahoo-finance" }
+    },
+    {
+      "id": "neg3",
+      "clase": "negacion",
+      "agrupar": false,
+      "motivo": "Par mínimo en español: el titular es idéntico salvo el 'no'.",
+      "coste": "CRÍTICO: es el caso de libro; si este falla, falla todo.",
+      "a": { "id": "neg3a", "title": "El BCE sube los tipos de interés", "summary": "Movimiento confirmado por el banco central.", "series_id": "expansion-mercados" },
+      "b": { "id": "neg3b", "title": "El BCE no sube los tipos de interés", "summary": "El banco central deja la política monetaria como estaba.", "series_id": "cincodias-mercados" }
+    },
+    {
+      "id": "neg4",
+      "clase": "negacion",
+      "agrupar": false,
+      "motivo": "Desmentido corporativo: confirma la compra frente a niega la compra, con el mismo importe.",
+      "coste": "CRÍTICO: el desmentido de una operación es noticia por sí mismo.",
+      "a": { "id": "neg4a", "title": "Acme confirma la compra de Beta por 2.000 millones", "summary": "La operación se cerrará en el cuarto trimestre.", "series_id": "expansion-mercados" },
+      "b": { "id": "neg4b", "title": "Acme niega la compra de Beta por 2.000 millones", "summary": "La compañía desmiente la información publicada esta mañana.", "series_id": "cincodias-mercados" }
+    },
+    {
+      "id": "neg5",
+      "clase": "negacion",
+      "agrupar": false,
+      "motivo": "Negación sin partícula negativa: 'descarta subir' es lo contrario de 'sube'.",
+      "coste": "CRÍTICO: misma consecuencia que neg1, con otra forma de decirlo.",
+      "a": { "id": "neg5a", "title": "El Banco de Inglaterra sube los tipos de interés en su reunión de septiembre", "summary": "Decisión adoptada por mayoría del comité.", "series_id": "boe-news", "official": true },
+      "b": { "id": "neg5b", "title": "El Banco de Inglaterra descarta subir los tipos de interés en su reunión de septiembre", "summary": "El comité aparca la subida que esperaba el mercado.", "series_id": "expansion-mercados" }
+    },
+    {
+      "id": "cif1",
+      "clase": "cifras",
+      "agrupar": false,
+      "motivo": "25 puntos básicos frente a 50 con la misma prosa: son dos hechos distintos.",
+      "coste": "Se anuncia el recorte equivocado y el otro no llega.",
+      "a": { "id": "cif1a", "title": "Central bank cuts interest rates by 25 basis points amid slowing growth", "summary": "The move was flagged at the previous meeting.", "series_id": "reuters-markets" },
+      "b": { "id": "cif1b", "title": "Central bank cuts interest rates by 50 basis points amid slowing growth", "summary": "The move was flagged at the previous meeting.", "series_id": "bloomberg-markets" }
+    },
+    {
+      "id": "cif2",
+      "clase": "cifras",
+      "agrupar": false,
+      "motivo": "IPC del 2,1 % frente al 2,7 %: la cifra es la noticia.",
+      "coste": "Se entrega una inflación que no es la publicada.",
+      "a": { "id": "cif2a", "title": "El IPC de la zona euro sube al 2,1 % en agosto", "summary": "Dato provisional de Eurostat.", "series_id": "eurostat-hicp" },
+      "b": { "id": "cif2b", "title": "El IPC de la zona euro sube al 2,7 % en agosto", "summary": "Dato provisional de Eurostat.", "series_id": "eurostat-hicp" }
+    },
+    {
+      "id": "cif3",
+      "clase": "cifras",
+      "agrupar": false,
+      "motivo": "Misma cifra, unidad distinta: un 50 % de recorte no es un recorte de 50 millones.",
+      "coste": "Se confunde la magnitud del daño en un valor de la watchlist.",
+      "a": { "id": "cif3a", "title": "Acme recorta previsiones un 50 por ciento", "summary": "La compañía revisa a la baja su guía anual.", "series_id": "expansion-mercados" },
+      "b": { "id": "cif3b", "title": "Acme recorta previsiones en 50 millones", "summary": "La compañía revisa a la baja su guía anual.", "series_id": "expansion-mercados" }
+    },
+    {
+      "id": "cif4",
+      "clase": "cifras",
+      "agrupar": false,
+      "motivo": "La cifra va escrita con palabras: 'quarter point' (25 pb) frente a 'half point' (50 pb). Es el par cif1 dicho como lo titulan CNBC y Reuters.",
+      "coste": "Igual que cif1: se anuncia el recorte equivocado.",
+      "a": { "id": "cif4a", "title": "Fed cuts rates by a quarter point at its September meeting", "summary": "Officials signalled a gradual path from here.", "series_id": "cnbc-markets" },
+      "b": { "id": "cif4b", "title": "Fed cuts rates by a half point at its September meeting", "summary": "Officials signalled a gradual path from here.", "series_id": "reuters-markets" }
+    },
+    {
+      "id": "cif5",
+      "clase": "cifras",
+      "agrupar": false,
+      "motivo": "Mismo número, magnitud distinta: 2.000 millones frente a 2 millones.",
+      "coste": "Se entrega una operación con tres ceros de más o de menos.",
+      "a": { "id": "cif5a", "title": "Aster acquires Boreal for 2 billion dollars", "summary": "The deal is subject to regulatory approval.", "series_id": "reuters-markets" },
+      "b": { "id": "cif5b", "title": "Aster acquires Boreal for 2 million dollars", "summary": "The deal is subject to regulatory approval.", "series_id": "reuters-markets" }
+    },
+    {
+      "id": "suj1",
+      "clase": "sujeto",
+      "agrupar": false,
+      "motivo": "Fed y BCE con el mismo titular: dos bancos centrales distintos en el mismo día.",
+      "coste": "CRÍTICO: una de las dos decisiones de política monetaria no se entrega nunca.",
+      "a": { "id": "suj1a", "title": "Fed keeps interest rates unchanged at its September policy meeting", "summary": "No change to the target range.", "series_id": "fed-press", "official": true },
+      "b": { "id": "suj1b", "title": "ECB keeps interest rates unchanged at its September policy meeting", "summary": "No change to the three key rates.", "series_id": "ecb-press", "official": true }
+    },
+    {
+      "id": "suj2",
+      "clase": "sujeto",
+      "agrupar": false,
+      "motivo": "Fed y BCE con un verbo que el extractor de sujeto sí conoce ('cuts').",
+      "coste": "CRÍTICO: igual que suj1.",
+      "a": { "id": "suj2a", "title": "Fed cuts interest rates by 25 basis points", "summary": "The target range moves lower.", "series_id": "fed-press", "official": true },
+      "b": { "id": "suj2b", "title": "ECB cuts interest rates by 25 basis points", "summary": "The three key rates move lower.", "series_id": "ecb-press", "official": true }
+    },
+    {
+      "id": "suj3",
+      "clase": "sujeto",
+      "agrupar": false,
+      "motivo": "Apple y Amazon publican resultados el mismo día con la misma plantilla de titular.",
+      "coste": "Una de las dos compañías desaparece del boletín de resultados.",
+      "a": { "id": "suj3a", "title": "Apple reports record quarterly revenue and raises its dividend", "summary": "Shares rose in after-hours trading.", "series_id": "cnbc-markets" },
+      "b": { "id": "suj3b", "title": "Amazon reports record quarterly revenue and raises its dividend", "summary": "Shares rose in after-hours trading.", "series_id": "cnbc-markets" }
+    },
+    {
+      "id": "suj4",
+      "clase": "sujeto",
+      "agrupar": false,
+      "motivo": "Apple y Amazon con un verbo que el extractor de sujeto no conoce ('beats').",
+      "coste": "Una de las dos compañías desaparece del boletín de resultados.",
+      "a": { "id": "suj4a", "title": "Apple beats quarterly earnings estimates in the September quarter", "summary": "Margins held up better than expected.", "series_id": "yahoo-finance" },
+      "b": { "id": "suj4b", "title": "Amazon beats quarterly earnings estimates in the September quarter", "summary": "Margins held up better than expected.", "series_id": "yahoo-finance" }
+    },
+    {
+      "id": "suj5",
+      "clase": "sujeto",
+      "agrupar": false,
+      "motivo": "Banco de Inglaterra y Banco de Japón, mismo titular salvo el país.",
+      "coste": "CRÍTICO: una decisión de banco central no se entrega.",
+      "a": { "id": "suj5a", "title": "Bank of England holds interest rates unchanged in September", "summary": "The vote was split.", "series_id": "boe-news", "official": true },
+      "b": { "id": "suj5b", "title": "Bank of Japan holds interest rates unchanged in September", "summary": "The vote was split.", "series_id": "boj-news", "official": true }
+    },
+    {
+      "id": "act1",
+      "clase": "actualizacion",
+      "agrupar": false,
+      "motivo": "DECISIÓN DE PRODUCTO. La segunda entrada añade un hecho nuevo y material —la suspensión del dividendo— sobre una historia ya entregada. Se etiqueta como noticia nueva: un hecho material que no estaba en la primera entrega no puede morir como duplicado.",
+      "coste": "Si se agrupa, la suspensión del dividendo no llega. Si no se agrupa, el usuario recibe dos avisos de la misma compañía en una hora.",
+      "a": { "id": "act1a", "title": "Acme recorta previsiones", "summary": "La compañía revisa su guía anual a la baja.", "series_id": "expansion-mercados", "publication_at": "2026-09-10T10:00:00.000Z" },
+      "b": { "id": "act1b", "title": "Acme recorta previsiones y suspende el dividendo", "summary": "La compañía revisa su guía anual a la baja y deja de pagar dividendo.", "series_id": "expansion-mercados", "publication_at": "2026-09-10T11:30:00.000Z" }
+    },
+    {
+      "id": "act2",
+      "clase": "actualizacion",
+      "agrupar": false,
+      "motivo": "DECISIÓN DE PRODUCTO. Corrección de una cifra ya publicada: el 3,2 % sustituye al 3,1 %. El dato corregido es el que vale, así que tiene que llegar.",
+      "coste": "Si se agrupa, el usuario se queda con la cifra equivocada.",
+      "a": { "id": "act2a", "title": "CPI rises to 3.1 percent in August", "summary": "First estimate from the statistics office.", "series_id": "bls-cpi", "publication_at": "2026-09-10T12:30:00.000Z" },
+      "b": { "id": "act2b", "title": "Corrected: CPI rises to 3.2 percent in August", "summary": "The statistics office corrected the first estimate.", "series_id": "bls-cpi", "publication_at": "2026-09-10T14:00:00.000Z" }
+    },
+    {
+      "id": "act3",
+      "clase": "actualizacion",
+      "agrupar": true,
+      "motivo": "DECISIÓN DE PRODUCTO. Aquí la actualización NO trae un hecho nuevo: la misma decisión contada después con la reacción del mercado y una declaración. Es la misma noticia y agruparla es lo correcto.",
+      "coste": "Si no se agrupa, el usuario recibe dos veces el mismo recorte de tipos.",
+      "a": { "id": "act3a", "title": "Fed cuts rates by 25 basis points", "summary": "The target range moves lower.", "series_id": "cnbc-markets", "publication_at": "2026-09-10T18:00:00.000Z" },
+      "b": { "id": "act3b", "title": "Fed cuts rates by 25 basis points as Powell signals further easing", "summary": "The target range moves lower; stocks rallied after the press conference.", "series_id": "cnbc-markets", "publication_at": "2026-09-10T19:30:00.000Z" }
+    }
+  ]
+}

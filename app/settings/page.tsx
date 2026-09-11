@@ -16,8 +16,9 @@ import { Bloque, Cabecera } from "../_componentes/cabecera.tsx";
 import { SinDatos } from "../_componentes/sin-datos.tsx";
 import { cargar } from "../_lib/cargar.ts";
 import { SOURCE_LABEL, es, fechaYHora, haceCuanto } from "../_lib/formato.ts";
-import { actividadPorFuente, recuento } from "../../src/db/lectura.ts";
+import { actividadPorFuente, ejecucionesRecientes, recuento } from "../../src/db/lectura.ts";
 import { describeMissing, loadConfig, missingVars } from "../../src/config.ts";
+import { HEALTH_STATE_MEANING, evaluateHealth, healthLimits } from "../../src/pipeline/cadence.ts";
 import { FEEDS } from "../../src/sources/rss.ts";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,18 @@ export default async function Ajustes() {
   const sistema = await cargar(async (sql) => ({
     total: await recuento(sql),
     fuentes: await actividadPorFuente(sql, 24),
+    // Las ejecuciones de verdad, no las filas de `events`. Contar eventos para
+    // decir «el sistema funciona» es lo que dejaba el panel respirando mientras
+    // el reloj externo llevaba horas muerto: en capture-only seguían entrando
+    // noticias y no se procesaba, ni se entregaba, ni se disparaba solo.
+    salud: evaluateHealth(
+      await ejecucionesRecientes(sql, new Date(ahora.getTime() - 24 * 3_600_000).toISOString()),
+      {
+        now: ahora.toISOString(),
+        limits: healthLimits(),
+        telegramConfigured: Boolean(config.telegramBotToken && config.telegramChatId),
+      },
+    ),
   }));
 
   return (
@@ -41,11 +54,34 @@ export default async function Ajustes() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
-          <Bloque titulo="El sistema" nota="indicio de vida, no registro de ejecuciones">
+          <Bloque titulo="El sistema" nota="últimas 24 horas">
             {!sistema.ok ? (
               <SinDatos motivo={sistema.motivo} />
             ) : (
               <div className="rounded-tarjeta border border-linea bg-card px-4 py-3.5">
+                {/* Cuatro circuitos, y cada uno responde por sí mismo. Una sola
+                    luz verde escondía que se capturaba sin procesar ni entregar. */}
+                <dl className="grid grid-cols-2 gap-y-1.5 text-secundario">
+                  <dt className="text-txt-3">Captura</dt>
+                  <dd className="cifra">{sistema.datos.salud.capture.state}</dd>
+                  <dt className="text-txt-3">Procesamiento</dt>
+                  <dd className="cifra">{sistema.datos.salud.processing.state}</dd>
+                  <dt className="text-txt-3">Entrega</dt>
+                  <dd className="cifra">{sistema.datos.salud.delivery.state}</dd>
+                  <dt className="text-txt-3">Disparador</dt>
+                  <dd className="cifra">{sistema.datos.salud.trigger.state}</dd>
+                </dl>
+                <ul className="mt-2 mb-3 text-meta text-txt-3">
+                  {sistema.datos.salud.states.map((estado) => (
+                    <li key={estado}>
+                      <span className="cifra">{estado}</span>: {HEALTH_STATE_MEANING[estado]}
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="mb-1.5 text-meta text-txt-3">
+                  Volumen ingerido. Es lo que ha entrado, no prueba de que el circuito funcione.
+                </p>
                 <dl className="grid grid-cols-2 gap-y-1.5 text-secundario">
                   <dt className="text-txt-3">Eventos registrados</dt>
                   <dd className="cifra">{sistema.datos.total.eventos}</dd>
@@ -64,7 +100,7 @@ export default async function Ajustes() {
                 <p className="mt-3 mb-1.5 text-meta text-txt-3">Últimas 24 horas, por fuente</p>
                 {sistema.datos.fuentes.length === 0 ? (
                   <p className="text-secundario text-txt-3">
-                    Nada en 24 horas. O el cron no está corriendo, o ninguna fuente ha publicado.
+                    Nada en 24 horas. El estado del disparador, arriba, dice cuál de las dos cosas es.
                   </p>
                 ) : (
                   <ul className="text-secundario">
@@ -80,8 +116,10 @@ export default async function Ajustes() {
                 )}
 
                 <p className="mt-3 text-meta text-txt-3">
-                  No hay registro de ejecuciones del cron: solo existe en los logs de GitHub
-                  Actions. Esto es una prueba de que el ciclo respira, no un historial.
+                  {sistema.datos.salud.trigger.runs.external} automáticas,{" "}
+                  {sistema.datos.salud.trigger.runs.schedule} por cron de GitHub y{" "}
+                  {sistema.datos.salud.trigger.runs.manual} a mano en la ventana. Una ejecución
+                  manual no demuestra que el disparo automático funcione.
                 </p>
               </div>
             )}

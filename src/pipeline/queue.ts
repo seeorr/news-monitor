@@ -3,7 +3,7 @@
  * el de entregas: capturar no marca SeenStore y una lease solo protege scoring.
  * Las entregas siguen protegidas exclusivamente por alert_deliveries.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync,
   renameSync, unlinkSync, writeFileSync,
@@ -13,11 +13,69 @@ import { z } from "zod";
 import { NormalizedEvent } from "../schema/event.ts";
 import { criticalMacro, rateFact } from "./critical-macro.ts";
 
+/**
+ * Cuatro cosas que se estaban confundiendo en una sola fila.
+ *
+ * **Identidad** es el `id`: lo que la fuente dice que es la misma cosa.
+ * **Observación** son `capture_count` y las dos fechas de captura: cuántas veces
+ * la hemos visto. **Revisión** es que la fuente cambie el contenido sin cambiar
+ * el identificador. Y **entrega** vive aparte, en `alert_deliveries`.
+ *
+ * La revisión no tenía dónde vivir. El `on conflict` de la captura actualizaba
+ * la última fecha y el contador y **no tocaba `snapshot`**, así que cuando una
+ * fuente corregía un comunicado conservando su URL, la corrección se descartaba
+ * sin dejar rastro: ni se guardaba, ni se contaba, ni había forma de saber que
+ * había ocurrido. El histórico no se sobrescribía —eso estaba bien— pero la
+ * corrección era sencillamente invisible.
+ *
+ * Ahora `snapshot` sigue siendo **lo que se vio la primera vez**, intocable, y
+ * la revisión se guarda a su lado. Lo que decide si algo es una revisión es la
+ * huella de abajo y no una comparación literal: si no, cada retoque de la
+ * entradilla y cada parámetro de seguimiento en la URL contarían como noticia
+ * corregida, y el aviso dejaría de significar nada.
+ */
+export function contentFingerprint(event: NormalizedEvent): string {
+  // Deliberadamente NO entran: `summary` —se reescribe sin que cambie el hecho—,
+  // `source_url` —los parámetros de seguimiento cambian solos— ni las fechas de
+  // captura. Entran el titular y las cifras, que es lo que convierte una
+  // corrección en otra noticia distinta.
+  const material = JSON.stringify([
+    event.kind, tituloComparable(event.title),
+    event.actual, event.previous, event.consensus, event.unit,
+  ]);
+  return createHash("sha256").update(material).digest("hex").slice(0, 32);
+}
+
+/**
+ * El titular, reducido a lo que de verdad lo distingue de otro.
+ *
+ * Mayúsculas y espacios de más no significan nada, así que caen, y la puntuación
+ * suelta tampoco. Pero **la puntuación entre dígitos se queda**: `2,5` no es
+ * `25`, y borrarla convertiría la corrección de una cifra en un cambio
+ * irrelevante, que es exactamente lo contrario de lo que hay que detectar.
+ */
+function tituloComparable(titulo: string): string {
+  return titulo
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/(?<!\d)[.,;:!?¡¿"'«»()[\]]+|[.,;:!?¡¿"'«»()[\]]+(?!\d)/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export const QUEUE_STATES = ["pending", "processing", "scored", "discarded", "retryable_failed"] as const;
 export type QueueState = (typeof QUEUE_STATES)[number];
 export const QUEUE_REASONS = [
   "stale_at_capture", "rules_no_match", "rules_low_signal", "duplicate_story",
   "legacy_processed", "scoring_failed", "processing_expired", "analysis_failed", "delivery_failed", "budget_exhausted", "pending_expired",
+  // Capturado durante la fase de observación y excluido a mano al activar los
+  // envíos, por decisión de Alberto el 11-09-2026: empezar a entregar desde la
+  // activación en vez de soltar de golpe el acumulado del día anterior. Es un
+  // motivo propio y no uno prestado: `pending_expired` habría sido falso —no
+  // caducó— y `legacy_processed` también —nadie lo procesó—. La fila se conserva
+  // entera, con su snapshot y sus fechas; lo único que se afirma es que no se
+  // entregó, y por qué.
+  "excluded_at_activation",
 ] as const;
 export type QueueReason = (typeof QUEUE_REASONS)[number];
 export const DEFAULT_PROCESSING_LEASE_MS = 15 * 60_000;
@@ -59,6 +117,12 @@ const EntrySchema = z.object({
   processed_at: Instant.nullable(),
   /** Finalización pendiente: proyectar en events y decidir/registrar entrega. */
   delivery_pending: z.boolean(),
+  /** Huella del contenido **vigente**, no del original: lo que la fuente dice hoy. */
+  fingerprint: z.string().default(""),
+  /** El contenido corregido, cuando lo hay. `snapshot` conserva el original. */
+  revision: NormalizedEvent.nullable().default(null),
+  revised_at: Instant.nullable().default(null),
+  revision_count: z.number().int().nonnegative().default(0),
 });
 export type QueueEntry = z.infer<typeof EntrySchema>;
 
@@ -67,6 +131,14 @@ export function parseQueueEntry(raw: unknown): QueueEntry {
   const row = EntrySchema.parse(raw);
   // JSON local anterior al campo aditivo: recuperar contexto sin perder cola.
   if (row.story_at === null) row.story_at = queueStoryAt({ ...row.event, publication_at: row.publication_at });
+  // Fila escrita antes de que existiera la huella: se calcula sobre el original,
+  // que es lo único que se ha observado de ella. No se inventa una revisión.
+  if (row.fingerprint === "") row.fingerprint = contentFingerprint(row.event);
+  if ((row.revision === null) !== (row.revised_at === null) ||
+      (row.revision === null && row.revision_count > 0) ||
+      (row.revision !== null && row.revision.id !== row.id)) {
+    throw new Error("invalid_queue_revision");
+  }
   if (row.id !== row.event.id || row.first_captured_at > row.last_captured_at ||
       (row.state === "processing" ? !row.lease_token || !row.lease_until : row.lease_token !== null || row.lease_until !== null) ||
       (row.state === "retryable_failed") !== (row.next_attempt_at !== null) ||
@@ -140,6 +212,8 @@ export interface QueueSourceStats {
   /** Puntuadas + descartadas. */
   processed: number;
   delivery_pending: number;
+  /** Filas cuyo contenido ha cambiado en origen conservando el identificador. */
+  revised: number;
   oldest_pending_at: string | null;
   oldest_pending_age_hours: number;
   discarded_by_reason: Partial<Record<QueueReason, number>>;
@@ -228,6 +302,8 @@ export function prepareQueueCaptures(inputs: readonly QueueCapture[], now?: stri
       attempts: 0, next_attempt_at: null, lease_token: null, lease_until: null,
       reason: input.decision?.reason ?? null, score: null,
       processed_at: input.decision ? at : null, delivery_pending: false,
+      fingerprint: contentFingerprint(event),
+      revision: null, revised_at: null, revision_count: 0,
     }));
   }
   return [...rows.values()];
@@ -263,7 +339,7 @@ export function queueIsAvailable(row: QueueEntry, now: string): boolean {
 export function emptySourceStats(source_key: string, publisher: string): QueueSourceStats {
   return { source_key, publisher, captured: 0, unique: 0, pending: 0, processing: 0,
     retryable_failed: 0, scored: 0, discarded: 0, processed: 0, delivery_pending: 0,
-    oldest_pending_at: null, oldest_pending_age_hours: 0, discarded_by_reason: {} };
+    revised: 0, oldest_pending_at: null, oldest_pending_age_hours: 0, discarded_by_reason: {} };
 }
 
 type Rows = Map<string, QueueEntry>;
@@ -319,6 +395,14 @@ function storeWithAccess(access: Access): QueueStore {
           if (existing) {
             existing.capture_count += input.capture_count;
             existing.last_captured_at = [existing.last_captured_at, input.last_captured_at].sort().at(-1)!;
+            // El original no se toca nunca. Lo que cambia es lo que la fuente
+            // dice AHORA, y eso vive en `revision`.
+            if (existing.fingerprint !== input.fingerprint) {
+              existing.revision = clone(input.event);
+              existing.revised_at = input.last_captured_at;
+              existing.revision_count++;
+              existing.fingerprint = input.fingerprint;
+            }
             return existing;
           }
           rows.set(input.id, clone(input));
@@ -396,6 +480,7 @@ function storeWithAccess(access: Access): QueueStore {
             if (!count.oldest_pending_at || row.first_captured_at < count.oldest_pending_at) count.oldest_pending_at = row.first_captured_at;
           }
           if (row.delivery_pending) count.delivery_pending++;
+          if (row.revision_count > 0) count.revised++;
           if (row.state === "discarded" && row.reason) count.discarded_by_reason[row.reason] = (count.discarded_by_reason[row.reason] ?? 0) + 1;
         }
         return [...groups.values()].sort((a, b) => a.source_key.localeCompare(b.source_key)).map((count) => ({

@@ -15,8 +15,11 @@ function entries(result: unknown): QueueEntry[] {
     if (!raw || typeof raw !== "object") throw new Error("invalid_queue_response");
     const row = { ...raw } as Record<string, unknown>;
     row["event"] = row["snapshot"];
+    // Fila anterior a la migración de revisiones: sin huella en la base. Se deja
+    // que el esquema la calcule sobre el original, que es lo único observado.
+    if (row["fingerprint"] == null) row["fingerprint"] = "";
     for (const key of ["publication_at", "data_period_at", "story_at", "first_captured_at", "last_captured_at",
-      "next_attempt_at", "lease_until", "processed_at"]) {
+      "next_attempt_at", "lease_until", "processed_at", "revised_at"]) {
       const value = row[key];
       if (value != null) row[key] = queueInstant(value instanceof Date ? value.toISOString() : String(value));
     }
@@ -69,19 +72,36 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
       const result = await sql`
         insert into capture_queue (
           id, snapshot, source_key, publisher, state, publication_at, data_period_at, story_at,
-          first_captured_at, last_captured_at, capture_count, reason, processed_at
+          first_captured_at, last_captured_at, capture_count, reason, processed_at, fingerprint
         )
         select id, event, source_key, publisher, state, publication_at, data_period_at, story_at,
-          first_captured_at, last_captured_at, capture_count, reason, processed_at
+          first_captured_at, last_captured_at, capture_count, reason, processed_at, fingerprint
         from jsonb_to_recordset(${JSON.stringify(batch)}::jsonb) as incoming(
           id text, event jsonb, source_key text, publisher text, state text,
           publication_at timestamptz, data_period_at timestamptz, story_at timestamptz,
           first_captured_at timestamptz, last_captured_at timestamptz,
-          capture_count integer, reason text, processed_at timestamptz
+          capture_count integer, reason text, processed_at timestamptz, fingerprint text
         )
         on conflict (id) do update set
           last_captured_at = greatest(capture_queue.last_captured_at, excluded.last_captured_at),
-          capture_count = capture_queue.capture_count + excluded.capture_count
+          capture_count = capture_queue.capture_count + excluded.capture_count,
+          -- snapshot NO aparece aqui, y es deliberado: es lo que se vio la
+          -- primera vez y sigue siendo el historico. Lo que faltaba era el otro
+          -- lado, el de ahora. Sin estas cuatro columnas, una correccion de la
+          -- fuente conservando el id se descartaba sin que nadie se enterara.
+          -- La huella previa nula es una fila anterior a la migracion: no se ha
+          -- mirado su contenido bajo este criterio todavia, asi que la primera
+          -- captura posterior la ADOPTA sin declarar una correccion que nadie vio.
+          revision = case when capture_queue.fingerprint is not null
+            and excluded.fingerprint is distinct from capture_queue.fingerprint
+            then excluded.snapshot else capture_queue.revision end,
+          revised_at = case when capture_queue.fingerprint is not null
+            and excluded.fingerprint is distinct from capture_queue.fingerprint
+            then excluded.last_captured_at else capture_queue.revised_at end,
+          revision_count = capture_queue.revision_count +
+            case when capture_queue.fingerprint is not null
+              and excluded.fingerprint is distinct from capture_queue.fingerprint then 1 else 0 end,
+          fingerprint = excluded.fingerprint
         returning id, source_key, capture_count
       `;
       const rows = z.array(z.object({ id: z.string(), source_key: z.string(), capture_count: z.number().int().positive() })).parse(result);
@@ -185,6 +205,7 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
           count(*) filter (where q.state = 'discarded')::int as discarded,
           count(*) filter (where q.state in ('scored', 'discarded'))::int as processed,
           count(*) filter (where q.delivery_pending)::int as delivery_pending,
+          count(*) filter (where q.revision_count > 0)::int as revised,
           min(q.first_captured_at) filter (where q.state in ('pending', 'processing', 'retryable_failed')) as oldest_pending_at,
           coalesce((select jsonb_object_agg(r.reason, r.n) from reasons r where r.source_key = q.source_key), '{}'::jsonb) as discarded_by_reason
         from capture_queue q
@@ -195,7 +216,7 @@ export function neonQueueStore(databaseUrl: string, sql: Ejecutor = neon(databas
       return result.map((raw): QueueSourceStats => {
         const row = raw as Record<string, unknown>;
         const count = emptySourceStats(String(row["source_key"]), String(row["publisher"]));
-        for (const key of ["captured", "unique", "pending", "processing", "retryable_failed", "scored", "discarded", "processed", "delivery_pending"] as const) {
+        for (const key of ["captured", "unique", "pending", "processing", "retryable_failed", "scored", "discarded", "processed", "delivery_pending", "revised"] as const) {
           const value = Number(row[key]);
           if (!Number.isSafeInteger(value) || value < 0) throw new Error("invalid_queue_stats");
           count[key] = value;

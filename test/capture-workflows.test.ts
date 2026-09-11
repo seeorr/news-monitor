@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const monitor = readFileSync(new URL("../.github/workflows/monitor.yml", import.meta.url), "utf8");
 const brief = readFileSync(new URL("../.github/workflows/brief.yml", import.meta.url), "utf8");
+const agenda = readFileSync(new URL("../.github/workflows/agenda.yml", import.meta.url), "utf8");
 const gate = brief.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/);
 
 /** Ejecuta el JavaScript exacto del workflow; FS y reloj son las únicas fronteras. */
@@ -75,6 +76,56 @@ describe("capture-only no dispara mensajes por la cadena de workflows", () => {
     const effects = steps.filter((step) => /uses: actions\/(?:checkout|setup-node)|run: npm (?:ci|run)/.test(step));
     expect(effects.length).toBeGreaterThanOrEqual(6);
     for (const step of effects) expect(step).toContain("if: steps.ventana.outputs.enabled == 'true'");
+  });
+
+  /**
+   * La agenda no tenía puerta ninguna. Manda Telegram **directamente**, sin
+   * pasar por la cola ni por el ledger de entregas, así que durante la
+   * observación lo único que la contenía era estar pausada a mano: el primer
+   * cron después de reactivarla habría enviado en plena fase de captura.
+   */
+  describe("la puerta de la agenda", () => {
+    const agendaGate = agenda.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n\s+NODE/);
+
+    const agendaAllows = (options: { trigger?: string; repoMode?: string } = {}): boolean => {
+      if (!agendaGate) throw new Error("agenda_gate_missing");
+      let output = "";
+      runInNewContext(agendaGate[1]!, {
+        require: (name: string) => {
+          if (name !== "node:fs") throw new Error("unexpected_workflow_dependency");
+          return { appendFileSync: (_path: string, text: string) => { output += text; } };
+        },
+        process: { env: { GITHUB_EVENT_NAME: options.trigger ?? "schedule",
+          MONITOR_MODE: options.repoMode ?? "full" } },
+      });
+      return output === "enabled=true\n";
+    };
+
+    it("capture-only impide que la agenda envíe, venga del cron o de la mano", () => {
+      expect(agendaAllows({ repoMode: "capture-only" })).toBe(false);
+      expect(agendaAllows({ trigger: "workflow_dispatch", repoMode: "capture-only" })).toBe(false);
+    });
+
+    it("en modo normal sigue funcionando como siempre", () => {
+      expect(agendaAllows({ repoMode: "full" })).toBe(true);
+      expect(agendaAllows({ trigger: "workflow_dispatch", repoMode: "full" })).toBe(true);
+    });
+
+    it("solo la disparan sus propios eventos", () => {
+      expect(agendaAllows({ trigger: "workflow_run" })).toBe(false);
+      expect(agendaAllows({ trigger: "push" })).toBe(false);
+    });
+
+    it("se evalúa antes del checkout y condiciona todo lo que tiene efectos", () => {
+      expect(agendaGate).not.toBeNull();
+      const position = agenda.indexOf(agendaGate![0]);
+      expect(position).toBeLessThan(agenda.indexOf("uses: actions/checkout"));
+      expect(agenda.slice(0, position + agendaGate![0].length)).not.toContain("secrets.");
+      const steps = agenda.split(/\r?\n(?= {6}- )/);
+      const effects = steps.filter((step) => /uses: actions\/(?:checkout|setup-node)|run: npm (?:ci|run)/.test(step));
+      expect(effects.length).toBeGreaterThanOrEqual(4);
+      for (const step of effects) expect(step).toContain("steps.modo.outputs.enabled == 'true'");
+    });
   });
 
   it("el aviso de fallo del propio Monitor también queda desactivado en capture-only", () => {

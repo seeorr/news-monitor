@@ -137,17 +137,43 @@ export function loadConfig(): Config {
     aiAnalysisInputUsd: optionalPrice("AI_ANALYSIS_INPUT_USD_PER_MILLION"),
     aiAnalysisOutputUsd: optionalPrice("AI_ANALYSIS_OUTPUT_USD_PER_MILLION"),
     edgarForms: lista("EDGAR_FORMS"),
-    maxItemAgeHours: Number(env("MAX_ITEM_AGE_HOURS") ?? 72),
+    maxItemAgeHours: entero("MAX_ITEM_AGE_HOURS", 72, 1, 720),
     maxScoringPerCycle: entero("MAX_SCORING_PER_CYCLE", 12, 1, 100),
     maxDeepPerCycle: entero("MAX_DEEP_PER_CYCLE", 3, 0, 20),
-    agendaDias: Number(env("AGENDA_DIAS") ?? 7),
-    umbralAgrupacion: Number(env("GROUP_THRESHOLD") ?? 0.6),
+    agendaDias: entero("AGENDA_DIAS", 7, 1, 90),
+    umbralAgrupacion: decimal("GROUP_THRESHOLD", 0.6, 0, 1),
     modelScoring: env("MODEL_SCORING") ?? "claude-haiku-4-5",
     modelAnalysis: env("MODEL_ANALYSIS") ?? "claude-opus-5",
-    deepAnalysisThreshold: Number(env("DEEP_ANALYSIS_THRESHOLD") ?? 7),
-    alertThreshold: Number(env("ALERT_THRESHOLD") ?? 7),
+    deepAnalysisThreshold: decimal("DEEP_ANALYSIS_THRESHOLD", 7, 0, 10),
+    alertThreshold: decimal("ALERT_THRESHOLD", 7, 0, 10),
     stateDir: env("STATE_DIR") ?? ".cache",
   };
+}
+
+/**
+ * Relaciones que ninguna variable puede comprobar sola.
+ *
+ * Un techo por hora **mayor** que el del día no es un ajuste agresivo: es un
+ * techo que no se alcanza nunca, y quien lo escribió creía estar subiendo un
+ * límite que en realidad manda el otro. Falla, y dice cuál de los dos pares.
+ *
+ * Lo que **no** se comprueba aquí, a propósito: la relación entre
+ * `deepAnalysisThreshold` y `alertThreshold`, y entre `briefNewsThreshold` y
+ * `watchlistImportantThreshold`. Las cuatro combinaciones son configuraciones
+ * editoriales defendibles —analizar a fondo por debajo del umbral de alerta es
+ * una decisión, no un error— y convertirlas en un fallo de arranque sería que
+ * este archivo decidiera la política editorial.
+ */
+export function validateConfig(c: Config): void {
+  const pares: Array<[string, number | undefined, string, number | undefined]> = [
+    ["BRIEF_NEWS_PER_HOUR", c.briefNewsHour, "BRIEF_NEWS_PER_DAY", c.briefNewsDay],
+    ["IMPORTANT_NEWS_PER_HOUR", c.importantNewsHour, "IMPORTANT_NEWS_PER_DAY", c.importantNewsDay],
+  ];
+  for (const [nombreHora, hora, nombreDia, dia] of pares) {
+    if (hora !== undefined && dia !== undefined && hora > dia) {
+      throw new Error(`invalid_quota_relation:${nombreHora}>${nombreDia}`);
+    }
+  }
 }
 
 function deliveryMode(): "legacy" | "two-level" {
@@ -166,7 +192,26 @@ function optionalPrice(name: string): number | null {
 function entero(name: string, fallback: number, min: number, max: number): number {
   const value = Number(env(name) ?? fallback);
   if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error("invalid_bounded_configuration");
+    throw new Error(`invalid_bounded_configuration:${name}`);
+  }
+  return value;
+}
+
+/**
+ * Como `entero()`, pero admitiendo fracciones, para los umbrales y el parecido.
+ *
+ * Existe porque estas cinco variables —`MAX_ITEM_AGE_HOURS`, `AGENDA_DIAS`,
+ * `GROUP_THRESHOLD`, `DEEP_ANALYSIS_THRESHOLD` y `ALERT_THRESHOLD`— se leían con
+ * un `Number()` pelado y **sin comprobar nada**. Un `ALERT_THRESHOLD=abc` daba
+ * `NaN`, y `NaN` hace falsa **toda** comparación: `score >= NaN` no se cumple
+ * jamás, así que el sistema dejaba de anunciar y no había ni un error que mirar.
+ * Un fallo de configuración que se manifiesta como silencio es el peor de todos,
+ * porque se parece a que no hay noticias.
+ */
+function decimal(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(env(name) ?? fallback);
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`invalid_bounded_configuration:${name}`);
   }
   return value;
 }

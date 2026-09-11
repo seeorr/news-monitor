@@ -148,11 +148,12 @@ describe("cola Neon: contratos de consultas parametrizadas", () => {
   it("métricas agrupan fuente, edad y motivos; bigint no se confunde con cero", async () => {
     const p = probe([{ source_key: "rss:feed", publisher: "Example Publisher", captured: "42000", unique: 300,
       pending: 21, processing: 1, retryable_failed: 3, scored: 200, discarded: 79, processed: 279,
-      delivery_pending: 2, oldest_pending_at: t0, discarded_by_reason: { rules_no_match: 79 } }]);
+      delivery_pending: 2, revised: 4, oldest_pending_at: t0, discarded_by_reason: { rules_no_match: 79 } }]);
     expect(await neonQueueStore("unused", p.sql).stats(t1)).toEqual([{
       source_key: "rss:feed", publisher: "Example Publisher", captured: 42000, unique: 300,
       pending: 21, processing: 1, retryable_failed: 3, scored: 200, discarded: 79, processed: 279,
-      delivery_pending: 2, oldest_pending_at: t0, oldest_pending_age_hours: 1, discarded_by_reason: { rules_no_match: 79 },
+      // `revised` cuenta las filas cuyo contenido cambió en origen conservando el id.
+      delivery_pending: 2, revised: 4, oldest_pending_at: t0, oldest_pending_age_hours: 1, discarded_by_reason: { rules_no_match: 79 },
     }]);
     expect(p.calls[0]!.text).toContain("group by q.source_key");
   });

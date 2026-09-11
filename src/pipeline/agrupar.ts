@@ -74,6 +74,13 @@ export function similitud(a: Set<string>, b: Set<string>): number {
 
 /** Mismo criterio para grupos visibles y copias que llegan en otra captura. */
 export function sameStory(a: NormalizedEvent, b: NormalizedEvent, threshold = UMBRAL_DEFECTO): boolean {
+  // La equivalencia de hecho macro NO exime del control de negación, y esta
+  // línea va antes que ella a propósito. "El BCE sube los tipos 25 pb" y "El
+  // BCE no sube los tipos 25 pb" producen el mismo `RateFact` —el importe y el
+  // nivel se leen del mismo texto y el "no" no cambia ninguno de los dos—, así
+  // que el desmentido entraba como duplicado de la subida: dejaba de contar
+  // como noticia nueva y podía no llegar nunca. Medido en `dedup-pares.json`.
+  if (traits(a).negation !== traits(b).negation) return false;
   if (sameMacroFact(a, b)) return true;
   return a.kind === "news" && b.kind === "news" && compatibles(a, b) &&
     similitud(firma(a.title), firma(b.title)) >= threshold;
@@ -154,13 +161,23 @@ function traits(e: NormalizedEvent) {
   const cached = traitCache.get(e);
   if (cached && cached.title === e.title && cached.summary === e.summary && cached.date === date) return cached;
   const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
-  const negation = /\b(?:not|no|never|denies|denied|niega|sin|cancelled|cancela|rejected|rechaza)\b/u;
+  // No todas las negaciones llevan partícula negativa: "descarta subir los
+  // tipos" es justo lo contrario de "sube los tipos" y, sin estas palabras, los
+  // dos titulares se parecían lo bastante como para fundirse. Se añaden solo
+  // verbos que invierten el hecho o lo dejan sin ocurrir; ninguno de matiz.
+  const negation = /\b(?:not|no|never|denies|denied|niega|niegan|desmiente|desmienten|sin|cancelled|cancela|rejected|rechaza|rechazan|rules? out|ruled out|descarta|descartan|fails? to|failed to|aplaza|aplazan|posponen?|postpones?|postponed|delays?|delayed)\b/u;
   const period = (e: NormalizedEvent) => normalize(e.title).match(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|q[1-4])\b/gu)?.sort().join("|") ?? "";
   const numbers = (e: NormalizedEvent) => {
     const text = normalize(`${e.title} ${e.summary ?? ""}`).replace(/%/g, " percent ");
     const values = [...text.matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0]);
     const magnitudes = [...text.matchAll(/\b(?:million|billion|trillion|millones|billones|miles|basis points|puntos basicos|percent|por ciento)\b/g)].map((m) => m[0]);
-    return [...new Set(values)].sort().join("|") + ";" + [...new Set(magnitudes)].sort().join("|");
+    // La cifra no siempre va en dígitos: la prensa anglosajona titula "cuts
+    // rates by a quarter point" donde el comunicado dice "25 basis points". Sin
+    // esto, un cuarto de punto y medio punto eran la misma noticia, que es el
+    // mismo error que 25 contra 50 puntos básicos dicho con otras palabras.
+    const fracciones = [...text.matchAll(/\b(?:quarter|half|full|cuarto|medio)[\s-](?:point|points|punto|puntos)\b/g)].map((m) => m[0].replace(/[\s-]+/g, " "));
+    return [...new Set(values)].sort().join("|") + ";" + [...new Set(magnitudes)].sort().join("|") +
+      ";" + [...new Set(fracciones)].sort().join("|");
   };
   const value = {title:e.title,summary:e.summary,date,negation:negation.test(normalize(e.title)),subject:storySubject(e.title),time:Date.parse(date),period:period(e),numbers:numbers(e)};
   traitCache.set(e,value); return value;

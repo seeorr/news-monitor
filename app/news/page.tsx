@@ -29,6 +29,7 @@ import {
   hastaFecha,
   lista,
   numero,
+  pagina as paginaPedida,
   texto,
   type Parametros,
 } from "../_lib/parametros.ts";
@@ -41,7 +42,10 @@ const POR_PAGINA = 50;
 export default async function Noticias({ searchParams }: { searchParams: Promise<Parametros> }) {
   const p = await searchParams;
   const ahora = new Date();
-  const pagina = Math.max(1, numero(p, "p") ?? 1);
+  // `?p=1e308` pasaba el `Math.max` y salía un offset que no es un número con el
+  // que se pueda consultar. El tope vive ahora en `paginaPedida()`, junto al resto
+  // de lo que llega de la URL.
+  const pagina = paginaPedida(p);
   const conImportancia = numero(p, "min") !== undefined || texto(p, "sentiment") !== "";
 
   const resultado = await cargar((sql) =>

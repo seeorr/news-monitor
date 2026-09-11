@@ -34,6 +34,21 @@ export const CRON = "3,13,23,33,43,53 * * * *";
  */
 type RedirectSoportadoPorWorkerd = "follow" | "manual";
 const REDIRECT: RedirectSoportadoPorWorkerd = "manual";
+/**
+ * La petición entera va tipada, y no solo la constante de arriba.
+ *
+ * Con la constante sola, el literal seguía siendo legal: bastaba con volver a
+ * escribir `redirect: "error"` en el objeto para tener el fallo de vuelta, y el
+ * `tsconfig` de la raíz —que es el que corre en `npm run typecheck`— comprueba
+ * este archivo contra los tipos del DOM, donde `RequestRedirect` **sí** incluye
+ * `"error"` porque la especificación de fetch lo define. Ahí estaba el hueco por
+ * el que entró el fallo: el tipo correcto para el navegador es el tipo
+ * equivocado para el edge.
+ *
+ * Estrechar `redirect` aquí lo cierra sin depender de qué `tsconfig` se ejecute
+ * y sin añadir un paquete de tipos: `"error"` deja de compilar en los dos.
+ */
+type PeticionDeReloj = Omit<RequestInit, "redirect"> & { redirect: RedirectSoportadoPorWorkerd };
 export function selectProfile(scheduledTime: number, strategy: Env["STRATEGY"]): DispatchProfile {
   const minute = new Date(scheduledTime).getUTCMinutes();
   if (![3, 13, 23, 33, 43, 53].includes(minute) || !["mixed", "fast-only"].includes(strategy)) throw new Error("invalid_config");
@@ -62,15 +77,17 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000) return fail("invalid_config");
   let timer: ReturnType<typeof setTimeout> | undefined;
   let response: Response;
+  // Anotada, y no inferida: es la anotación la que hace que `"error"` no compile.
+  const peticion: PeticionDeReloj = {
+    method: "POST", redirect: REDIRECT, signal: controller.signal,
+    headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json", "User-Agent": "news-monitor-clock" },
+    body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: env.MONITOR_MODE } }),
+  };
   try {
     // La carrera acota también un transporte que no atienda AbortSignal.
     response = await Promise.race([
-      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, {
-        method: "POST", redirect: REDIRECT, signal: controller.signal,
-        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-          "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json", "User-Agent": "news-monitor-clock" },
-        body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: env.MONITOR_MODE } }),
-      }),
+      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, peticion),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error()); }, timeoutMs); }),
     ]);
   } catch (error) {

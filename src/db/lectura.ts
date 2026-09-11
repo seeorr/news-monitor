@@ -33,6 +33,8 @@ import { KINDS, SOURCES, Surprise } from "../schema/event.ts";
 // veces —una para guardar y otra para leer— es garantizar que un día digan cosas
 // distintas y que nadie lo note hasta que una sección de la ficha salga vacía.
 import { esAnalisisProfundo, type AnalisisProfundo } from "../pipeline/seen.ts";
+import type { RunRecord } from "../pipeline/cadence.ts";
+import { neonRunStore } from "./cadence.ts";
 
 export type { AnalisisProfundo };
 
@@ -369,12 +371,30 @@ export interface ActividadFuente {
 }
 
 /**
+ * Las ejecuciones del ciclo, que **sí** se registran.
+ *
+ * Se delega a propósito en `neonRunStore`: la consulta y el `RunRecord.parse`
+ * ya viven allí, y dos copias de la misma lectura son dos copias que un día
+ * dicen cosas distintas. La url no llega a usarse —el ejecutor entra por
+ * parámetro y el `neon()` por defecto solo se evalúa si falta—.
+ */
+export function ejecucionesRecientes(sql: Ejecutor, desde: string): Promise<RunRecord[]> {
+  return neonRunStore("", sql).recent(desde);
+}
+
+/**
  * Cuánto ha entrado por cada fuente en una ventana reciente.
  *
- * **No es un registro de ejecuciones**: no existe tal cosa, solo los logs de
- * GitHub Actions (hueco G7). Esto es un indicio de vida —si el cron respira, algo
- * ha entrado— y la pantalla lo etiqueta con esas palabras y no con otras. Usa el
- * índice `events_por_fuente`.
+ * **No es un registro de ejecuciones.** Esta nota decía antes que tal cosa no
+ * existía, y desde `20260910_run_cadence.sql` eso es falso: existe
+ * `monitor_runs`, y se lee justo aquí arriba. La corrección importa porque la
+ * pantalla usaba estas cifras para afirmar que el sistema funciona, y no pueden
+ * afirmarlo: durante la observación en `capture-only`, con el disparo externo
+ * muerto y todo lanzado a mano, seguían entrando eventos y el panel «respiraba»
+ * mientras nada se procesaba, se entregaba ni se disparaba solo.
+ *
+ * Esto sigue siendo lo que siempre fue —**volumen ingerido**— y la pantalla lo
+ * etiqueta ahora con esas palabras. Usa el índice `events_por_fuente`.
  */
 export async function actividadPorFuente(
   sql: Ejecutor,

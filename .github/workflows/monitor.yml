@@ -130,10 +130,17 @@ jobs:
           # -> Actions -> Variables, o con `gh variable set ALERT_THRESHOLD`.
           ALERT_THRESHOLD: ${{ vars.ALERT_THRESHOLD }}
           DEEP_ANALYSIS_THRESHOLD: ${{ vars.DEEP_ANALYSIS_THRESHOLD }}
+          # Estas dos faltaban, y su ausencia no se notaba: `loadConfig()` cae a
+          # los modelos por defecto del codigo, asi que fijar la variable en el
+          # repositorio no hacia absolutamente nada y la ejecucion seguia usando
+          # el modelo de siempre. Un ajuste que no ajusta es peor que no tenerlo.
+          MODEL_SCORING: ${{ vars.MODEL_SCORING }}
+          MODEL_ANALYSIS: ${{ vars.MODEL_ANALYSIS }}
           MAX_SCORING_PER_CYCLE: ${{ vars.MAX_SCORING_PER_CYCLE }}
           MAX_DEEP_PER_CYCLE: ${{ vars.MAX_DEEP_PER_CYCLE }}
           MAX_ITEM_AGE_HOURS: ${{ vars.MAX_ITEM_AGE_HOURS }}
           GROUP_THRESHOLD: ${{ vars.GROUP_THRESHOLD }}
+          EDGAR_FORMS: ${{ vars.EDGAR_FORMS }}
           RSS_FEEDS: ${{ vars.RSS_FEEDS }}
           RSS_FEED_BATCHES: ${{ vars.RSS_FEED_BATCHES }}
           SOURCE_CONCURRENCY: ${{ vars.SOURCE_CONCURRENCY }}

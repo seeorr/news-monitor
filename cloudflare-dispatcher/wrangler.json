@@ -7,8 +7,16 @@
   "preview_urls": false,
   "triggers": { "crons": ["3,13,23,33,43,53 * * * *"] },
   "observability": { "enabled": true },
+  // ENABLED describe el estado QUERIDO del reloj, y en produccion el reloj esta
+  // encendido. Estuvo en "false" como supuesta red de seguridad, y era justo lo
+  // contrario: un "wrangler deploy" sin --var ENABLED:true APAGABA en silencio un
+  // reloj que estaba corriendo. Una parada silenciosa es peor que un arranque
+  // silencioso, porque se parece exactamente a que no hay noticias que contar.
+  //
+  // Si alguna vez hace falta desplegar SIN activar, se pasa --var ENABLED:false
+  // a mano: que la excepcion cueste escribirla y la norma no.
   "vars": {
-    "ENABLED": "false",
+    "ENABLED": "true",
     "GITHUB_OWNER": "seeorr",
     "GITHUB_REPO": "news-monitor",
     "GITHUB_WORKFLOW": "monitor.yml",
