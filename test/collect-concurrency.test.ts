@@ -32,7 +32,7 @@ const cfg = (changes: Partial<Config> = {}): Config => ({
 });
 const company = (ticker: string, cik: string | null): Vigilado => ({
   ticker, nombre: "Synthetic company", cik, quoteSymbol: null,
-  vigilarFilings: true, vigilarPrecio: false, umbralMovimiento: 3,
+  vigilarFilings: true, vigilarPrecio: false, vigilarNoticias: true, umbralMovimiento: 3,
 });
 const item = (id: string): FeedItem => ({
   title: `Synthetic rate decision ${id}`, link: `https://example.invalid/${id}`, guid: id,

@@ -20,6 +20,23 @@ export interface RuleWatchlistEntry {
   ticker: string;
   nombre?: string | null;
   quoteSymbol?: string | null;
+  /**
+   * ¿Sus menciones en prensa abren la puerta del filtro?
+   *
+   * Estar en la lista y querer leer lo que escriben de ella eran, hasta ahora,
+   * la misma cosa: añadir un ticker admitía **todo** titular que dijera su
+   * nombre. Y eso convierte la lista en una decisión de todo o nada — vigilar
+   * Adobe para enterarte de sus resultados costaba tragarte cada «should you buy
+   * the dip», así que lo racional era no vigilarla, y entonces tampoco te
+   * enterabas de los resultados.
+   *
+   * Con esto separadas, una empresa puede estar en la lista **solo** para sus
+   * documentos oficiales y su fecha de resultados, sin una línea de prensa.
+   *
+   * Ausente = `true`: los tickers sueltos del respaldo por entorno y cualquier
+   * fila anterior siguen comportándose exactamente igual que antes.
+   */
+  vigilarNoticias?: boolean;
 }
 export interface RuleOptions {
   /** Se admiten los tickers simples del respaldo por entorno. */
@@ -63,11 +80,17 @@ export function applySignals(event: Enjuiciable, opts: RuleOptions = {}): RuleDe
   const raw = `${event.title}\n${event.summary ?? ""}`;
   const text = fold(raw);
   for (const entry of opts.watchlist ?? []) {
-    const company = typeof entry === "string" ? { ticker: entry } : entry;
+    const company: RuleWatchlistEntry = typeof entry === "string" ? { ticker: entry } : entry;
+    // El movimiento del propio símbolo NO depende de `vigilarNoticias`, y la
+    // diferencia importa: eso no es prensa, es una observación del sistema sobre
+    // un precio que se vigila a propósito. Quien apaga las noticias de una
+    // empresa no está diciendo «no me avises si se desploma».
     if (event.kind === "market_move" && event.series_id &&
         event.series_id.toUpperCase() === company.ticker.trim().toUpperCase()) {
       return decision(true, "watchlist_symbol", "movimiento del simbolo vigilado");
     }
+    // A partir de aquí sí es prensa: alguien ha escrito su nombre en un titular.
+    if (company.vigilarNoticias === false) continue;
     for (const symbol of [company.ticker, company.quoteSymbol]) {
       if (symbol && matchesSymbol(raw, symbol)) {
         return decision(true, "watchlist_symbol", "menciona un simbolo de la watchlist");

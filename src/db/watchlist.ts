@@ -17,6 +17,14 @@ export interface Vigilado {
   quoteSymbol: string | null;
   vigilarFilings: boolean;
   vigilarPrecio: boolean;
+  /**
+   * Si sus menciones en prensa abren la puerta del filtro de noticias.
+   *
+   * Apagarlo deja una empresa en la lista **solo** para lo oficial: sus
+   * documentos de la SEC y su fecha de resultados, sin una linea de prensa.
+   * Es lo que permite vigilar a alguien sin que su ruido llene el canal.
+   */
+  vigilarNoticias: boolean;
   /** Movimiento diario, en %, a partir del cual la sesión merece un aviso. */
   umbralMovimiento: number;
 }
@@ -39,13 +47,15 @@ interface Fila {
   quote_symbol: string | null;
   vigilar_filings: boolean;
   vigilar_precio: boolean;
+  vigilar_noticias: boolean;
   umbral_movimiento: number;
 }
 
 export async function leerWatchlist(databaseUrl: string): Promise<Vigilado[]> {
   const sql = neon(databaseUrl);
   const filas = (await sql`
-    select ticker, nombre, cik, quote_symbol, vigilar_filings, vigilar_precio, umbral_movimiento
+    select ticker, nombre, cik, quote_symbol, vigilar_filings, vigilar_precio,
+      vigilar_noticias, umbral_movimiento
     from watchlist order by ticker
   `) as Fila[];
   return filas.map(deFila);
@@ -53,7 +63,8 @@ export async function leerWatchlist(databaseUrl: string): Promise<Vigilado[]> {
 
 export async function anadir(
   databaseUrl: string,
-  entrada: { ticker: string; nombre?: string | null; cik?: string | null; quoteSymbol?: string | null; umbral?: number },
+  entrada: { ticker: string; nombre?: string | null; cik?: string | null; quoteSymbol?: string | null;
+    umbral?: number; vigilarNoticias?: boolean },
   sql: Ejecutor = neon(databaseUrl),
 ): Promise<void> {
   // `on conflict do update` y no `do nothing`: volver a añadir un ticker con más
@@ -67,17 +78,24 @@ export async function anadir(
   // borraba el umbral que alguien había pensado. Por eso el umbral entra dos
   // veces en la consulta: el valor por defecto solo vale para una fila nueva.
   const umbral = entrada.umbral ?? null;
+  // `vigilar_noticias` entra dos veces por el mismo motivo que el umbral: su
+  // valor por defecto solo debe valer para una fila nueva. Si no, reañadir un
+  // ticker para completarle el CIK volvería a encender las noticias de una
+  // empresa que alguien puso a propósito en modo «solo lo oficial».
+  const noticias = entrada.vigilarNoticias ?? null;
   await sql`
-    insert into watchlist (ticker, nombre, cik, quote_symbol, umbral_movimiento)
+    insert into watchlist (ticker, nombre, cik, quote_symbol, umbral_movimiento, vigilar_noticias)
     values (
       ${entrada.ticker.toUpperCase()}, ${entrada.nombre ?? null}, ${entrada.cik ?? null},
-      ${entrada.quoteSymbol ?? null}, coalesce(${umbral}::double precision, 3)
+      ${entrada.quoteSymbol ?? null}, coalesce(${umbral}::double precision, 3),
+      coalesce(${noticias}::boolean, true)
     )
     on conflict (ticker) do update set
       nombre = coalesce(excluded.nombre, watchlist.nombre),
       cik = coalesce(excluded.cik, watchlist.cik),
       quote_symbol = coalesce(excluded.quote_symbol, watchlist.quote_symbol),
-      umbral_movimiento = coalesce(${umbral}::double precision, watchlist.umbral_movimiento)
+      umbral_movimiento = coalesce(${umbral}::double precision, watchlist.umbral_movimiento),
+      vigilar_noticias = coalesce(${noticias}::boolean, watchlist.vigilar_noticias)
   `;
 }
 
@@ -102,6 +120,8 @@ export function desdeEntorno(tickers: string[], secTickers: string[]): Vigilado[
     quoteSymbol: null,
     vigilarFilings: secTickers.map((t) => t.toUpperCase()).includes(ticker),
     vigilarPrecio: true,
+    // El respaldo por entorno conserva el comportamiento de siempre.
+    vigilarNoticias: true,
     umbralMovimiento: 3,
   }));
 }
@@ -114,6 +134,7 @@ function deFila(f: Fila): Vigilado {
     quoteSymbol: f.quote_symbol,
     vigilarFilings: f.vigilar_filings,
     vigilarPrecio: f.vigilar_precio,
+    vigilarNoticias: f.vigilar_noticias,
     umbralMovimiento: Number(f.umbral_movimiento),
   };
 }
@@ -132,14 +153,16 @@ function deFila(f: Fila): Vigilado {
 export async function actualizar(
   databaseUrl: string,
   ticker: string,
-  cambios: { umbral?: number | null; vigilarFilings?: boolean | null; vigilarPrecio?: boolean | null },
+  cambios: { umbral?: number | null; vigilarFilings?: boolean | null; vigilarPrecio?: boolean | null;
+    vigilarNoticias?: boolean | null },
   sql: Ejecutor = neon(databaseUrl),
 ): Promise<boolean> {
   const filas = (await sql`
     update watchlist set
       umbral_movimiento = coalesce(${cambios.umbral ?? null}::double precision, umbral_movimiento),
       vigilar_filings   = coalesce(${cambios.vigilarFilings ?? null}::boolean, vigilar_filings),
-      vigilar_precio    = coalesce(${cambios.vigilarPrecio ?? null}::boolean, vigilar_precio)
+      vigilar_precio    = coalesce(${cambios.vigilarPrecio ?? null}::boolean, vigilar_precio),
+      vigilar_noticias  = coalesce(${cambios.vigilarNoticias ?? null}::boolean, vigilar_noticias)
     where ticker = ${ticker.toUpperCase()}
     returning ticker
   `) as unknown[];

@@ -57,8 +57,12 @@ describe("alta en la watchlist", () => {
     await anadir(URL_FALSA, { ticker: "GLOBX", umbral: 8 }, ejecutor);
 
     const { valores } = consultas[0]!;
+    // El umbral viaja dos veces —al `values` y al `on conflict`— y entre medias
+    // va ahora `vigilar_noticias`, que se duplica por el mismo motivo: su valor
+    // por defecto solo debe valer para una fila nueva.
+    expect(valores.filter((v) => v === 8), "el umbral viaja a los dos sitios").toHaveLength(2);
     expect(valores[4]).toBe(8);
-    expect(valores[5]).toBe(8);
+    expect(valores[6]).toBe(8);
   });
 
   it("sigue sin pisar nombre, CIK ni simbolo cuando llegan vacios", async () => {
@@ -103,7 +107,9 @@ describe("cambios sobre una fila que ya existe", () => {
     expect(sql).toContain("umbral_movimiento = coalesce(?::double precision, umbral_movimiento)");
     expect(sql).toContain("vigilar_filings   = coalesce(?::boolean, vigilar_filings)");
     expect(sql).toContain("vigilar_precio    = coalesce(?::boolean, vigilar_precio)");
-    expect(valores).toEqual([8, null, null, "ACME"]);
+    expect(sql).toContain("vigilar_noticias  = coalesce(?::boolean, vigilar_noticias)");
+    // Un null por cada interruptor que no se ha pedido cambiar, y el ticker al final.
+    expect(valores).toEqual([8, null, null, null, "ACME"]);
   });
 
   it("normaliza el ticker igual que el alta", async () => {

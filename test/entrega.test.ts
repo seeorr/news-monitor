@@ -62,7 +62,7 @@ vi.mock("../src/pipeline/queue.ts", async (original) => ({
 
 const vigilado: Vigilado = {
   ticker: "ACME", nombre: "Acme Ejemplo", cik: null, quoteSymbol: "ACME",
-  vigilarFilings: false, vigilarPrecio: true, umbralMovimiento: 3,
+  vigilarFilings: false, vigilarPrecio: true, vigilarNoticias: true, umbralMovimiento: 3,
 };
 const config = (): Config => ({
   anthropicApiKey: "clave-inventada", fredApiKey: null, telegramBotToken: "bot-inventado",

@@ -65,7 +65,7 @@ const SECRET = "clave-sintetica-no-publicable";
 const payload = `${PRIVATE} ${URL} ${SECRET}`;
 const vigilado = (ticker = "A.C"): Vigilado => ({
   ticker, nombre: "North Example Holdings", cik: "0000123456", quoteSymbol: "^INDX",
-  vigilarFilings: false, vigilarPrecio: true, umbralMovimiento: 3,
+  vigilarFilings: false, vigilarPrecio: true, vigilarNoticias: true, umbralMovimiento: 3,
 });
 const config = (): Config => ({
   anthropicApiKey: SECRET, fredApiKey: null, telegramBotToken: SECRET,
@@ -405,7 +405,7 @@ describe("copia al grupo compartido", () => {
   it("un titular macro de prensa sí se copia, con el mismo cuerpo", async () => {
     mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
       telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
-    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarNoticias: true, vigilarFilings: false }]);
     mocks.feed.mockResolvedValue([{ title: "El BCE eleva los tipos de interés",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
@@ -424,7 +424,7 @@ describe("copia al grupo compartido", () => {
   it("un rechazo del grupo se registra y no toca el resultado de la alerta privada", async () => {
     mocks.config.mockReturnValue({ ...config(), feeds: ["cnbc-markets"],
       telegramChatId: "chat-privado", telegramGroupChatId: "-100grupo" });
-    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarFilings: false }]);
+    mocks.watchlist.mockResolvedValue([{ ...vigilado(), vigilarPrecio: false, vigilarNoticias: true, vigilarFilings: false }]);
     mocks.feed.mockResolvedValue([{ title: "El BCE eleva los tipos de interés",
       link: "https://example.org/nota", guid: "nota-1", date: new Date().toISOString(),
       summary: null, raw: "<item/>" }]);
