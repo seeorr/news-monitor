@@ -1,0 +1,130 @@
+# El vigilante: mira si el sistema se ha parado y lo dice por Telegram.
+#
+# Va en su propio workflow, con su propio cron, y no dentro del ciclo del
+# monitor a proposito: un vigilante que vive dentro de lo que vigila se cae con
+# ello, y justo entonces es cuando hace falta. Esto es lo unico que hoy avisa de
+# una parada; el codigo no lo hace solo, porque `sendOperationalNotice` tiene un
+# unico invocador y es `scripts/auditar-salud.ts` con `--notify`.
+#
+# Detecta: captura viva con procesamiento parado, entrega bloqueada, presupuesto
+# agotado, Telegram sin configurar y cola envejecida.
+# NO detecta: que GitHub Actions deje de ejecutar nada, porque entonces esto
+# tampoco se ejecuta. Es un detector debil pero independiente, no una garantia.
+# Para cubrir eso haria falta un watchdog en el Worker de Cloudflare.
+#
+# Cada hora y no una vez al dia porque el planificador de GitHub descarta
+# disparos —entrega alrededor del 22,9 % de los programados, y un cron diario de
+# este mismo repositorio no disparo ni una vez el 9 de septiembre de 2026—. El
+# aviso ya esta protegido contra repeticion: un intento por dia UTC, reclamado
+# en el mismo ledger con `operational-health:<fecha>`, asi que 24 oportunidades
+# al dia siguen siendo como mucho un mensaje al dia.
+name: Salud
+
+on:
+  schedule:
+    - cron: "51 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: salud
+  cancel-in-progress: false
+
+jobs:
+  salud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MONITOR_MODE: ${{ vars.MONITOR_MODE }}
+    steps:
+      # Se evalua antes del checkout, de instalar paquetes y de leer secretos,
+      # por el mismo motivo que en agenda.yml y brief.yml.
+      #
+      # `capture-only` es una parada querida: durante ella el procesamiento esta
+      # detenido a proposito y la auditoria lo leeria como sintoma. Avisar ahi
+      # seria ruido, y un vigilante que avisa de lo que ya sabes se acaba
+      # silenciando entero. Si algun dia se quiere el aviso tambien en pausa,
+      # se quita `captureOnly` de esta linea y nada mas.
+      - name: Comprobar el modo antes de tocar nada
+        id: modo
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const trigger = process.env.GITHUB_EVENT_NAME;
+          const trusted = ['schedule', 'workflow_dispatch'].includes(trigger);
+          const captureOnly = process.env.MONITOR_MODE === 'capture-only';
+          const enabled = trusted && !captureOnly;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `enabled=${enabled}\n`);
+          NODE
+
+      - uses: actions/checkout@v5
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
+
+      # `audit:health` sale con codigo 1 en dos situaciones que no son lo mismo:
+      #
+      #   1. La salud no es `healthy`. Eso NO es un fallo del workflow: es el
+      #      sistema informando, y el aviso por Telegram ya ha salido. Si se
+      #      dejara caer el job, todas las ejecuciones saldrian en rojo mientras
+      #      dure el problema y el rojo dejaria de significar nada.
+      #   2. La propia auditoria se rompe —sin `DATABASE_URL`, Neon caido, una
+      #      migracion a medias—. Eso SI hay que verlo, porque entonces no hay
+      #      vigilante y el silencio se parece a que todo va bien.
+      #
+      # Se distinguen por la salida: el camino bueno imprime en stdout un JSON
+      # con `code: "HEALTH_AUDIT"`; el malo escribe `HEALTH_AUDIT_FAILED` en
+      # stderr y deja stdout vacio. Por eso no vale un `continue-on-error` a
+      # secas: taparia el caso 2, que es el unico que pide atencion humana.
+      - name: Auditar la salud y avisar
+        if: ${{ steps.modo.outputs.enabled == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HEALTH_NOTICES_ENABLED: "true"
+        run: |
+          set +e
+          npm run --silent audit:health -- --notify > informe.json
+          set -e
+          cat informe.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          let report;
+          try { report = JSON.parse(fs.readFileSync('informe.json', 'utf8')); } catch { report = null; }
+          if (report?.code !== 'HEALTH_AUDIT') {
+            console.error('La auditoria de salud no llego a emitir informe: nadie esta vigilando.');
+            process.exit(1);
+          }
+          console.log(`Salud: ${report.states.join(', ')} · aviso: ${report.notice}`);
+          NODE
+
+      # Mismo motivo que en agenda.yml: si el aviso falla en silencio se
+      # confunde con un dia tranquilo, que es exactamente lo que este workflow
+      # existe para impedir.
+      - name: Avisar del fallo por Telegram
+        if: ${{ failure() && steps.modo.outputs.enabled == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Sin credenciales de Telegram: no se puede avisar del fallo."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=News Monitor: la auditoria de salud no ha podido ejecutarse. $RUN_URL" \
+            --data "disable_web_page_preview=true" > /dev/null

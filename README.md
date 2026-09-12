@@ -177,6 +177,26 @@ Secretos: `FRED_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`,
 por la SEC. `TELEGRAM_GROUP_CHAT_ID` es **opcional** y activa el grupo
 compartido. La watchlist vive en Neon; las variables de watchlist son respaldo.
 
+### El vigilante de salud
+
+`salud.yml` corre cada hora, con su propio cron, y ejecuta
+`npm run audit:health -- --notify`. Si la salud no es `healthy`, manda un aviso
+privado por Telegram: **un solo intento por día UTC**, reclamado en el mismo
+ledger que todo lo demás (`operational-health:<fecha>`), así que 24 pasadas
+siguen siendo como mucho un mensaje.
+
+Ve una captura viva con el procesamiento parado, la entrega bloqueada, el
+presupuesto agotado, Telegram sin configurar y la cola envejecida. **No ve** que
+GitHub Actions deje de ejecutar nada, porque entonces él tampoco se ejecuta: es
+un detector débil pero independiente, no una garantía. Va aparte del ciclo a
+propósito —un vigilante dentro de lo que vigila se cae con ello— y en
+`capture-only` calla, porque esa parada es querida.
+
+Que la salud no sea `healthy` **no** pone el workflow en rojo: eso es el sistema
+informando y el aviso ya ha salido. El rojo se reserva para que la auditoría no
+llegue a emitir informe, que es cuando no hay vigilante, y entonces avisa por
+Telegram como hace la agenda.
+
 ### Régimen y resumen matinal
 
 `npm run regimen -- --dry --preview` consulta cuatro series de FRED y deja
