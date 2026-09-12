@@ -18,7 +18,18 @@ afterEach(() => {
   vi.useRealTimers();
   const inside = relative(cache, resolve(directory));
   if (!inside || inside.startsWith("..") || isAbsolute(inside)) throw new Error("invalid_test_cleanup_target");
-  rmSync(directory, { recursive: true, force: true });
+  // Con reintentos porque el ultimo test lanza procesos Node de verdad: en
+  // Windows el bloqueo de ficheros es obligatorio y el hijo puede no haber
+  // soltado aun el descriptor del .lock cuando llega este borrado, que entonces
+  // falla con EPERM. Es el mismo motivo por el que `fileControlStore` reintenta
+  // su `unlinkSync` en src/pipeline/control.ts, y `maxRetries` cubre justo
+  // EPERM, EBUSY y ENOTEMPTY: la limpieza espera en lugar de romper.
+  //
+  // Ojo: esto no es la causa del fallo intermitente de la suite completa que se
+  // atribuyo aqui el 11-09-2026. Ese era el pool de vitest sin poder matar sus
+  // propios workers, y esta arreglado en vitest.config.ts. Este reintento se
+  // queda porque la fragilidad es real, no porque se le haya visto fallar.
+  rmSync(directory, { recursive: true, force: true, maxRetries: 40, retryDelay: 25 });
 });
 
 describe("reclamos locales duraderos de Telegram", () => {

@@ -31,7 +31,34 @@ function directory(): string {
   dirs.push(dir);
   return dir;
 }
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  // `maxRetries` cubre EPERM, EBUSY y ENOTEMPTY: en Windows el borrado del
+  // directorio llega a veces antes de que el sistema haya soltado del todo el
+  // `.lock` que acaba de usar el test, y entonces la limpieza rompe una suite
+  // entera por algo que no tiene nada que ver con lo que se estaba probando.
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 25 });
+});
+
+/**
+ * Escribe un `.lock` a mano, con reintentos.
+ *
+ * Windows deja el borrado de un archivo en estado «pendiente» mientras alguien
+ * conserve un descriptor, y abrir ese mismo nombre entretanto devuelve EPERM en
+ * lugar de esperar. Justo lo que le pasa a un test que suelta el bloqueo del
+ * almacen y acto seguido escribe el suyo: fallaba una de cada cinco suites
+ * completas con `EPERM ... open queue.json.lock`, en el `writeFileSync` del
+ * propio test y no en el codigo. Es el mismo motivo por el que `queue.ts`
+ * reintenta al adquirirlo, y no cambia lo que el test afirma.
+ */
+async function escribirBloqueo(path: string, body: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { writeFileSync(path, body, "utf8"); return; }
+    catch (error) {
+      if (attempt >= 40 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
 
 async function finishScored(store: QueueStore, id: string, token = "worker", needsDelivery = false) {
   await store.finish(id, token, { state: "scored", score, needs_delivery: needsDelivery }, t0);
@@ -145,7 +172,7 @@ describe("cola persistente: excedentes, reinicio y captura repetida", () => {
     await store.capture([capture(0)], t0);
     const original = readFileSync(join(dir, "queue.json"), "utf8");
     const orphan = JSON.stringify({ pid: 2147483647 });
-    writeFileSync(join(dir, "queue.json.lock"), orphan, "utf8");
+    await escribirBloqueo(join(dir, "queue.json.lock"), orphan);
     await expect(store.capture([capture(1)], t1)).rejects.toThrow("queue_file_busy");
     expect(readFileSync(join(dir, "queue.json.lock"), "utf8")).toBe(orphan);
     expect(readFileSync(join(dir, "queue.json"), "utf8")).toBe(original);
