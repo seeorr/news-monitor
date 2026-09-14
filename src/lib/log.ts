@@ -95,7 +95,7 @@ const ERROR_CODES = [
  * ciclo no funciona— se lean como UNKNOWN.
  */
 const SAFE_FAILURES = [
-  "invalid_llm_providers", "invalid_groq_model", "invalid_openrouter_free_model",
+  "invalid_llm_providers", "invalid_groq_model", "invalid_openrouter_free_model", "invalid_llm_retry_at",
   "invalid_health_limit", "invalid_health_arguments", "invalid_monitor_profile", "invalid_monitor_origin",
   "invalid_cycle_mode", "incompatible_cycle_modes", "invalid_capture_profile", "invalid_news_delivery_mode",
   "invalid_agenda_days", "invalid_bounded_configuration", "invalid_model_price", "invalid_flags",

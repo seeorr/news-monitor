@@ -44,16 +44,16 @@ describe("diagnóstico: captura, procesamiento, entrega y disparador por separad
     const parcial = record({ startedAt: "2026-09-10T12:26:00.000Z", captureCompletedAt: "2026-09-10T12:26:20.000Z",
       status: "partial", sourcesFailed: 1, criticalOk: ["ecb-press", "fed-press"], criticalFailed: ["boj-news"] });
     const report = evaluateHealth([sana, parcial], { now });
-    expect(report.states).toEqual(["critical_source_failed"]);
+    expect(report.states).toEqual(["critical_source_failed", "execution_partial"]);
     expect(report.criticalFailed).toEqual(["boj-news"]);
     expect(report.criticalStale).toEqual([]);
     expect(report.capture.state).toBe("current");
   });
 
   it("4 · presupuesto agotado se ve y se cuenta", () => {
-    const report = evaluateHealth([record()], { now, budgetExhaustedItems: 3 });
+    const report = evaluateHealth([record()], { now, budgetExhaustedItems: 3, aiReservedToday: 120, aiCallsDay: 120 });
     expect(report.states).toEqual(["budget_exhausted"]);
-    expect(report.budget).toEqual({ exhausted: true, items: 3 });
+    expect(report.budget).toEqual({ exhausted: true, items: 3, historicalItems: 3, reservedToday: 120, dayLimit: 120, remainingToday: 0 });
   });
 
   it("5 · Telegram sin configurar solo se declara cuando consta, no por omisión", () => {
@@ -119,9 +119,9 @@ describe("incidencias antiguas y volumen", () => {
 
   it("cada estado publicado tiene explicación en vocabulario cerrado", () => {
     const report = evaluateHealth([record({ mode: "capture-only", trigger: "manual", scored: 0, sent: 0 })],
-      { now, telegramConfigured: false, uncertainDeliveries: 1, budgetExhaustedItems: 1 });
+      { now, telegramConfigured: false, uncertainDeliveries: 1, budgetExhaustedItems: 1, aiReservedToday: 120, aiCallsDay: 120 });
     expect(report.states).toEqual(["trigger_inactive", "processing_paused", "budget_exhausted", "delivery_uncertain"]);
     for (const state of report.states) expect(HEALTH_STATE_MEANING[state]).toBeTruthy();
-    expect(Object.keys(HEALTH_STATE_MEANING)).toHaveLength(11);
+    expect(Object.keys(HEALTH_STATE_MEANING)).toHaveLength(14);
   });
 });

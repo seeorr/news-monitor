@@ -1,4 +1,4 @@
-/** Transporte gratuito con circuito por ciclo. Nunca registra prompts ni respuestas. */
+/** Transporte gratuito con circuito local y espera durable. Nunca registra prompts ni respuestas. */
 import { z } from "zod";
 
 export type ProviderName = "groq" | "openrouter" | "anthropic";
@@ -15,6 +15,7 @@ export type RequestResult = {
   outputTokens: number | null;
   result: "success" | "failed" | "uncertain";
   resolvedModel?: string;
+  retryAt?: string;
 };
 export interface StructuredRequest<T> {
   stage: "scoring" | "analysis";
@@ -39,6 +40,8 @@ interface RouterOptions {
   beforeRequest?: (info: RequestInfo) => Promise<string>;
   afterRequest?: (id: string, result: RequestResult) => Promise<void>;
   onFailure?: (provider: FreeProviderName, error: unknown) => void;
+  /** Lectura durable antes de reservar: una espera no consume intento. */
+  getRetryAt?: (provider: FreeProviderName, now: string) => Promise<string | null>;
 }
 
 export class FreeLlmError extends Error {
@@ -73,6 +76,17 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 const emptyUsage = (result: RequestResult["result"]): RequestResult => ({
   inputTokens: null, outputTokens: null, result,
 });
+
+/** Retry-After admite segundos o fecha HTTP. Nunca se almacena su texto libre. */
+export function providerRetryAt(status: number | undefined, header: string | null, now = Date.now()): string {
+  const fallback = status && [400, 401, 402, 403, 404].includes(status) ? 6 * 3600_000
+    : status === 429 ? 15 * 60_000 : 60_000;
+  const raw = header?.trim();
+  const requested = raw && /^\d+(?:\.\d+)?$/.test(raw) ? now + Number(raw) * 1000
+    : raw ? Date.parse(raw) : NaN;
+  const delay = Number.isFinite(requested) && requested > now ? requested - now : fallback;
+  return new Date(now + Math.max(1000, Math.min(delay, 7 * 86400_000))).toISOString();
+}
 const Envelope = z.object({
   choices: z.array(z.object({
     finish_reason: z.string().nullable(),
@@ -162,7 +176,8 @@ async function perform<T>(
     if (!response.ok) {
       // No leemos errores externos: pueden incluir el prompt o credenciales reflejadas.
       void response.body?.cancel().catch(() => {});
-      return { error: new ProviderFailure("http", response.status), disable: true, usage: emptyUsage("failed") };
+      return { error: new ProviderFailure("http", response.status), disable: true,
+        usage: { ...emptyUsage("failed"), retryAt: providerRetryAt(response.status, response.headers.get("retry-after")) } };
     }
     const raw = await readBody(response);
     const usage = usageOf(raw);
@@ -184,14 +199,15 @@ async function perform<T>(
     return {
       error: failure,
       disable: failure.reason !== "output",
-      usage: emptyUsage(failure.reason === "output" ? "failed" : "uncertain"),
+      usage: { ...emptyUsage(failure.reason === "output" ? "failed" : "uncertain"),
+        ...(failure.reason !== "output" ? { retryAt: providerRetryAt(undefined, null) } : {}) },
     };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Crear una instancia por ciclo: un proveedor caído se omite hasta el siguiente ciclo. */
+/** Crear por ciclo: consulta la espera durable y aparta fallos durante la ejecución. */
 export function createFreeRouter(options: RouterOptions): StructuredGenerate {
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) throw new Error("LLM: timeout inválido");
   const providers = options.providers.map(provider => ({ ...provider }));
@@ -213,7 +229,17 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
     if (!Number.isSafeInteger(request.maxTokens) || request.maxTokens <= 0) throw new Error("LLM: maxTokens inválido");
     const deadline = Date.now() + options.timeoutMs;
     const schema = strictSchema(request.schema);
-    const available = providers.filter(provider => !disabled.has(provider.name));
+    const available: FreeProvider[] = [];
+    let cooling = 0;
+    for (const provider of providers.filter(provider => !disabled.has(provider.name))) {
+      const now = new Date().toISOString();
+      const retryAt = await options.getRetryAt?.(provider.name, now);
+      if (retryAt) {
+        if (!z.iso.datetime().safeParse(retryAt).success) throw new Error("invalid_llm_retry_at");
+        if (retryAt > now) { cooling++; continue; }
+      }
+      available.push(provider);
+    }
     let deadlineExceeded = false;
     for (const [index, provider] of available.entries()) {
       if (disabled.has(provider.name)) continue;
@@ -248,7 +274,7 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       if ("value" in outcome) return outcome.value;
       options.onFailure?.(provider.name, outcome.error);
     }
-    if (deadlineExceeded || providers.every(provider => disabled.has(provider.name))) {
+    if (deadlineExceeded || cooling > 0 || providers.every(provider => disabled.has(provider.name))) {
       throw new FreeLlmError("LLM_UNAVAILABLE", "No hay proveedores LLM gratuitos disponibles en este ciclo");
     }
     throw new FreeLlmError("LLM_OUTPUT_INVALID", "Los proveedores gratuitos no devolvieron una respuesta válida");

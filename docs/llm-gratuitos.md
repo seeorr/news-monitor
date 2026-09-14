@@ -96,9 +96,15 @@ La implementación:
   razonamiento cuando el proveedor lo cuenta dentro de esa salida.
 - Comparte un plazo de 20 segundos en fast y 60 en full/process entre
   proveedores. No multiplica el plazo por cada respaldo.
-- Ante HTTP, red o timeout, aparta al proveedor durante ese ciclo y prueba
-  el siguiente. El ciclo siguiente vuelve a comprobarlo. No persiste todavía
-  un cooldown entre ejecuciones ni interpreta `Retry-After` del LLM.
+- Ante HTTP, red o timeout, aparta al proveedor y prueba el siguiente. Guarda
+  `retryAt` en la reserva del intento, dentro de `news_usage.ai_record`.
+  El siguiente ciclo lee ese plazo antes de reservar o hacer HTTP. No se
+  consumen intentos contra un proveedor todavía en espera.
+- Respeta `Retry-After` en segundos o fecha HTTP, hasta siete días. Sin un
+  plazo válido espera 15 minutos ante 429, seis horas ante errores de acceso
+  o configuración (400/401/402/403/404), y un minuto ante red/timeout/otros HTTP.
+  Cada ciclo puede probar el respaldo durante esa espera. La pausa termina
+  automáticamente; no se borran reservas ni se reinician cuotas.
 - Ante JSON, esquema, truncamiento o rechazo de contenido, prueba el respaldo.
   Una respuesta no válida nunca se convierte en una puntuación ficticia.
 - Reserva cada intento antes de hacer red, también respaldos y reintentos.
@@ -147,7 +153,13 @@ solo el respaldo si tiene cuota. `MONITOR_MODE=capture-only` conserva capturas
 mientras se resuelve un incidente. Volver a Anthropic requiere elegirlo
 explícitamente y disponer de saldo. Ningún cambio necesita migración SQL.
 
-Pendientes tras activar: medir tokens y tasa de aceptación; persistir cooldowns
-entre ciclos; ajustar capacidad sin superar Free; calibrar importancia con una
-muestra etiquetada; corregir las incoherencias del observador de salud y el
-control antifabricación del formato legacy descritas en la auditoría del proyecto.
+El observador distingue cuota diaria real de motivos históricos de la cola.
+Publica reservas usadas, límite vigente y saldo de intentos. Solo acredita
+procesamiento con una ejecución completada correctamente; un ciclo iniciado
+o fallido no basta. Separa descartes editoriales, entregas aplazadas y bloqueos.
+`healthy` exige que todo el circuito esté acreditado.
+
+Pendientes: medir tokens y tasa de aceptación; ajustar capacidad sin superar
+Free; calibrar importancia con una muestra etiquetada; unificar el control
+antifabricación legacy. La espera del proveedor conserva los fallos visibles:
+el ciclo puede seguir marcándose fallido mientras no haya ningún LLM disponible.

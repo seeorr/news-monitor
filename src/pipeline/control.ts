@@ -36,13 +36,14 @@ import type { NewsDecision } from "./news-policy.ts";
 export type Resource = "brief" | "important" | "ai";
 export type Reservation = { id: string; resource: Resource; units: number; now: string; hourLimit?: number; dayLimit: number; minimumIntervalMs?: number };
 export type ReservationResult = { allowed: boolean; reason: "allowed" | "hour_limit" | "day_limit" | "interval"; nextAt: string | null };
-export type AiRecord = { provider: string; model: string; resolvedModel?: string; promptVersion: string; stage: "scoring" | "analysis";
+export type AiRecord = { provider: string; model: string; resolvedModel?: string; retryAt?: string; promptVersion: string; stage: "scoring" | "analysis";
   inputTokens: number | null; outputTokens: number | null; attempt: number; costUsd: number | null; result: "success" | "failed" | "uncertain" };
 export interface ControlStore {
   putDecision(id: string, decision: NewsDecision): Promise<void>;
   getDecision(id: string): Promise<NewsDecision | null>;
   reserve(request: Reservation): Promise<ReservationResult>;
   recordAi(id: string, record: AiRecord): Promise<void>;
+  providerRetryAt?(provider: "groq" | "openrouter", now: string): Promise<string | null>;
   stats(now: string): Promise<{ resource: Resource; units: number; calls: number; costUsd: number | null }[]>;
 }
 type Usage = { id: string; resource: Resource; units: number; at: string; ai?: AiRecord };
@@ -57,6 +58,9 @@ export function validateReservation(r: Reservation) {
 }
 function makeStore(access: <T>(fn: (state: State) => T, write: boolean) => Promise<T>): ControlStore {
   return {
+    providerRetryAt: (provider, now) => access((s) => s.usage
+      .filter((row) => row.ai?.provider === provider && row.ai.retryAt && row.ai.retryAt > now)
+      .map((row) => row.ai!.retryAt!).sort().at(-1) ?? null, false),
     putDecision: (id, decision) => access((s) => { s.decisions[id] = structuredClone(decision); }, true),
     getDecision: (id) => access((s) => structuredClone(s.decisions[id] ?? null), false),
     reserve: (r) => {

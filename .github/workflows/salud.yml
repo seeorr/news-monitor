@@ -94,6 +94,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           HEALTH_NOTICES_ENABLED: "true"
+          AI_CALLS_PER_DAY: ${{ vars.AI_CALLS_PER_DAY }}
         run: |
           set +e
           npm run --silent audit:health -- --notify > informe.json

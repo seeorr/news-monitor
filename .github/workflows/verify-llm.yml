@@ -2,7 +2,7 @@ name: Verificar LLM gratuitos
 on:
   workflow_dispatch:
   push:
-    branches: [codex/activar-llm-gratuitos]
+    branches: [codex/activar-llm-gratuitos, codex/salud-cuotas-durables]
 permissions:
   contents: read
 jobs:

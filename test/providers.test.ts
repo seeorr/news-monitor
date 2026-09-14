@@ -51,7 +51,7 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
       "https://openrouter.ai/api/v1/chat/completions",
       "https://openrouter.ai/api/v1/chat/completions",
     ]);
-    expect(afterRequest.mock.calls[0]).toEqual(["reserved", { inputTokens: null, outputTokens: null, result: "failed" }]);
+    expect(afterRequest.mock.calls[0]).toEqual(["reserved", { inputTokens: null, outputTokens: null, result: "failed", retryAt: expect.any(String) }]);
     expect(String(onFailure.mock.calls[0]?.[1])).not.toContain("SECRET");
     expect(onFailure.mock.calls[0]?.[1]).toMatchObject({ code: "LLM_REQUEST_FAILED", status });
   });
@@ -66,7 +66,7 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     await generate(request);
     await generate(request);
     expect(transport).toHaveBeenCalledTimes(3);
-    expect(afterRequest.mock.calls[0]).toEqual(["id", { inputTokens: null, outputTokens: null, result: "uncertain" }]);
+    expect(afterRequest.mock.calls[0]).toEqual(["id", { inputTokens: null, outputTokens: null, result: "uncertain", retryAt: expect.any(String) }]);
     expect(String(onFailure.mock.calls[0]?.[1])).toBe("ProviderFailure: LLM gratuito: network");
   });
 
@@ -175,7 +175,7 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     await vi.advanceTimersByTimeAsync(501);
     await expect(result).resolves.toEqual(valid);
     expect(transport.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    expect(afterRequest.mock.calls[0]).toEqual(["id", { inputTokens: null, outputTokens: null, result: "uncertain" }]);
+    expect(afterRequest.mock.calls[0]).toEqual(["id", { inputTokens: null, outputTokens: null, result: "uncertain", retryAt: expect.any(String) }]);
     expect(vi.getTimerCount()).toBe(0);
   });
 

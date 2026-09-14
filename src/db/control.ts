@@ -4,6 +4,13 @@ import { validateReservation, type ControlStore, type ReservationResult, type Re
 import type { NewsDecision } from "../pipeline/news-policy.ts";
 export function neonControlStore(url: string, sql: Ejecutor = neon(url)): ControlStore {
   return {
+    async providerRetryAt(provider, now) {
+      const rows = await sql`select max(ai_record->>'retryAt') as retry_at from news_usage
+        where resource='ai' and ai_record->>'provider'=${provider}
+          and reserved_at >= ${now}::timestamptz - interval '8 days'
+          and ai_record->>'retryAt' > ${now}` as { retry_at: string | null }[];
+      return rows[0]?.retry_at ?? null;
+    },
     async putDecision(id, decision) {
       await sql`insert into news_decisions(event_id,decision,assigned_at,expires_at,level)
         values(${id},${JSON.stringify(decision)}::jsonb,${decision.assignedAt}::timestamptz,${decision.expiresAt}::timestamptz,${decision.level})

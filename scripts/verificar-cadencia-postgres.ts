@@ -18,7 +18,9 @@ const checks: string[] = [];
 try {
   const apply = async (path: string) => { for (const statement of splitStatements(await readFile(path, "utf8"))) await db.query(statement); };
   await apply("neon/migrations/20260910_capture_queue.sql");
-  await db.query("create table alert_deliveries(event_id text primary key,state text,settled_at timestamptz)");
+  await apply("neon/migrations/20260911_revisiones_de_fuente.sql");
+  await db.query("create table alert_deliveries(event_id text primary key,state text,settled_at timestamptz,next_attempt_at timestamptz)");
+  await db.query("create table news_usage(id text primary key,resource text,units integer,reserved_at timestamptz)");
   await apply("neon/migrations/20260910_run_cadence.sql"); await apply("neon/migrations/20260910_run_cadence.sql");
   checks.push("additive_migration_idempotent");
   const queue = neonQueueStore("local-only", sql), runs = neonRunStore("local-only", sql);
@@ -36,7 +38,7 @@ try {
   const saved = (await queue.listDeliveryPending())[0]!;
   assert.ok(saved.event.summary?.includes("2.50%")); assert.equal(saved.first_captured_at, at);
   checks.push("atomic_enrichment_keeps_original_dates");
-  await db.query("insert into alert_deliveries values ($1,'sent',$2)", [event.id,"2026-09-10T12:24:30Z"]);
+  await db.query("insert into alert_deliveries(event_id,state,settled_at) values ($1,'sent',$2)", [event.id,"2026-09-10T12:24:30Z"]);
   const timing = (await db.query("select * from monitor_event_timing where event_id=$1",[event.id])).rows[0];
   assert.equal(Number(timing.capture_minutes), 8); assert.equal(Number(timing.alert_minutes), 9.5);
   assert.equal(timing.data_period_at, null); checks.push("four_timestamps_and_latency_no_invented_period");
@@ -47,10 +49,39 @@ try {
   await runs.put({ ...record, status: "running", endedAt: null }); await runs.put(record);
   assert.deepEqual(await neonRunStore("reopened-local",sql).recent("2026-09-10T00:00:00Z"),[record]);
   checks.push("persistent_run_checkpoint_and_reopen");
-  await db.query("insert into alert_deliveries values ('uncertain-local','uncertain',now())");
+  await db.query("insert into alert_deliveries(event_id,state,settled_at) values ('uncertain-local','uncertain',now())");
   const metrics = await readHealthMetrics(sql,"2026-09-10T12:30:00Z","2026-09-10T00:00:00Z",healthLimits());
-  assert.equal(metrics.blocked,1); assert.equal(metrics.capture_breaches,0); assert.equal(metrics.alert_breaches,0);
+  assert.equal(metrics.blocked,0); assert.equal(metrics.uncertain,1); assert.equal(metrics.ai_reserved_today,0);
+  assert.equal(metrics.capture_breaches,0); assert.equal(metrics.alert_breaches,0);
   checks.push("health_readonly_sql_and_uncertain_delivery");
+  await db.query(`insert into alert_deliveries(event_id,state,next_attempt_at) values
+    ('waiting','deferred','2026-09-10T13:00:00Z'),
+    ('due','deferred','2026-09-10T12:30:00Z'),
+    ('due-no-date','deferred',null),
+    ('terminal','undeliverable',null),
+    ('rejected','rejected',null),
+    ('sending','sending',null)`);
+  await db.query(`insert into news_usage values
+    ('yesterday','ai',100,'2026-09-09T23:59:59Z'),
+    ('today-a','ai',3,'2026-09-10T00:00:00Z'),
+    ('today-b','ai',4,'2026-09-10T11:00:00Z'),
+    ('other-resource','important',80,'2026-09-10T11:00:00Z'),
+    ('tomorrow','ai',44,'2026-09-11T00:00:00Z')`);
+  const classified = await readHealthMetrics(sql,"2026-09-10T12:30:00Z","2026-09-10T00:00:00Z",healthLimits());
+  assert.equal(classified.blocked,3); assert.equal(classified.uncertain,2);
+  assert.equal(classified.deferred,1); assert.equal(classified.deferred_expired,2); assert.equal(classified.terminal,1);
+  assert.equal(classified.ai_reserved_today,7);
+  checks.push("health_distinguishes_due_uncertain_waiting_and_terminal");
+  await db.query(`insert into alert_deliveries(event_id,state,settled_at) values
+    ('operational-health:sent-test','sent','2026-09-10T12:29:59Z'),
+    ('operational-health:rejected-test','rejected','2026-09-10T12:29:59Z'),
+    ('operational-health:uncertain-test','uncertain','2026-09-10T12:29:59Z')`);
+  const operationalIgnored = await readHealthMetrics(sql,"2026-09-10T12:30:00Z","2026-09-10T00:00:00Z",healthLimits());
+  assert.deepEqual(operationalIgnored,classified);
+  checks.push("watchdog_notices_do_not_prove_or_block_financial_delivery");
+  const utc = await readHealthMetrics(sql,"2026-09-10T00:30:00+02:00","2026-09-09T00:00:00Z",healthLimits());
+  assert.equal(utc.ai_reserved_today,100);
+  checks.push("health_daily_budget_sums_reservations_in_utc_not_old_queue_reasons");
   await queue.capture([{ publisher:"ecb", event:{...event,id:"historical",observed_at:"2026-08-01T12:15:00Z",publication_at:"2026-08-01T12:15:00Z"},
     decision:{state:"discarded",reason:"stale_at_capture"} }],at);
   const withoutHistorical = await readHealthMetrics(sql,"2026-09-10T12:30:00Z","2026-09-10T00:00:00Z",healthLimits());
@@ -61,7 +92,7 @@ try {
   // DDL inverso SOLO en esta base efímera. No destruye la cola ni el ledger.
   await db.query("drop view monitor_event_timing"); await db.query("drop index capture_queue_critical_pending"); await db.query("drop table monitor_runs");
   assert.equal((await queue.stats(at)).reduce((n,r)=>n+r.unique,0),522);
-  assert.equal((await db.query("select count(*)::int as n from alert_deliveries")).rows[0].n,2);
+  assert.equal((await db.query("select count(*)::int as n from alert_deliveries")).rows[0].n,11);
   checks.push("rollback_preserves_queue_and_delivery_ledger");
   await writeFile(".cache/cadence-postgres-verification.json",JSON.stringify({ localOnly:true, checks },null,2));
   console.log(JSON.stringify({ code:"LOCAL_POSTGRES_CADENCE_OK",checks:checks.length }));

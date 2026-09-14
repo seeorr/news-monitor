@@ -44,6 +44,12 @@ try {
   await db.query("insert into alert_deliveries values ('sent','sent'),('uncertain','uncertain')");
   assert.deepEqual((await recentBriefEvents(sql,new Date("2026-09-10T11:00:00Z"))).map(e=>e.id).sort(),["kept","legacy"]);
   checks.push("resumen_excluye_destinos_no_elegibles_enviados_e_inciertos");
+  await c.recordAi("ai",{provider:"groq",model:"test",promptVersion:"test-v1",stage:"scoring",inputTokens:null,outputTokens:null,attempt:1,costUsd:null,result:"failed",retryAt:"2026-09-10T11:00:00.000Z"});
+  assert.equal(await neonControlStore("reopened",sql).providerRetryAt!("groq",now),"2026-09-10T11:00:00.000Z");
+  assert.equal(await c.providerRetryAt!("openrouter",now),null);
+  assert.equal(await c.providerRetryAt!("groq","2026-09-10T11:00:00.000Z"),null);
+  assert.equal((await c.stats(now)).find(r=>r.resource==="ai")!.calls,1);
+  checks.push("cooldown_durable_por_proveedor_expira_sin_nuevas_reservas");
   await mkdir(".cache",{recursive:true});
   await writeFile(".cache/control-postgres-verification.json",JSON.stringify({at:new Date().toISOString(),checks,limitations:"PGlite monoconexión; falta competición entre sesiones reales y despliegue en Neon."},null,2));
   console.log(JSON.stringify({passed:checks.length,checks},null,2));
