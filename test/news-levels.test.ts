@@ -43,6 +43,17 @@ function deps(parse: ReturnType<typeof vi.fn>): CascadeDeps {
 }
 
 describe("dos niveles, con transportes simulados", () => {
+  it("proveedores indisponibles paran el lote y conservan las otras candidatas", async () => {
+    const o = options();
+    await captureCandidates(o.queue, [event("a"), event("b", "Gold exports halted after mine closure")], { now: NOW, maxAgeHours: 72 });
+    const unavailable = Object.assign(new Error("providers unavailable"), { code: "LLM_UNAVAILABLE" });
+    const scorer = vi.fn().mockRejectedValue(unavailable);
+    const result = await processQueue(o.queue, { now: () => NOW, maxScoring: 12, hasProcessed: o.seen.has, score: scorer });
+    expect(result).toMatchObject({ attempted: 1, scored: 0, failed: 1 });
+    expect(scorer).toHaveBeenCalledTimes(1);
+    expect((await o.queue.stats()).reduce((n, row) => n + row.retryable_failed, 0)).toBe(1);
+    expect(await o.queue.listPending(NOW)).toHaveLength(1);
+  });
   it("hecho general produce breve sin modelo profundo ni watchlist", async () => {
     const parse = vi.fn(), o = options({ deps: deps(parse) });
     await prepare(o, event("general"));

@@ -18,6 +18,7 @@
     "audit:health": "tsx scripts/auditar-salud.ts",
     "verify:cadence:postgres": "tsx scripts/verificar-cadencia-postgres.ts",
     "verify:feeds": "tsx scripts/verificar-fuentes.ts",
+    "verify:llm": "tsx scripts/verificar-llm.ts",
     "verify:queue:postgres": "tsx scripts/verificar-cola-postgres.ts",
     "verify:control:postgres": "tsx scripts/verificar-control-postgres.ts",
     "evaluate:news": "tsx scripts/evaluar-noticias.ts",

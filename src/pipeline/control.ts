@@ -36,7 +36,7 @@ import type { NewsDecision } from "./news-policy.ts";
 export type Resource = "brief" | "important" | "ai";
 export type Reservation = { id: string; resource: Resource; units: number; now: string; hourLimit?: number; dayLimit: number; minimumIntervalMs?: number };
 export type ReservationResult = { allowed: boolean; reason: "allowed" | "hour_limit" | "day_limit" | "interval"; nextAt: string | null };
-export type AiRecord = { provider: string; model: string; promptVersion: string; stage: "scoring" | "analysis";
+export type AiRecord = { provider: string; model: string; resolvedModel?: string; promptVersion: string; stage: "scoring" | "analysis";
   inputTokens: number | null; outputTokens: number | null; attempt: number; costUsd: number | null; result: "success" | "failed" | "uncertain" };
 export interface ControlStore {
   putDecision(id: string, decision: NewsDecision): Promise<void>;

@@ -9,6 +9,13 @@ import { existsSync } from "node:fs";
 
 export interface Config {
   anthropicApiKey: string | null;
+  /** La carga real siempre fija la ruta; Anthropic exige selección explícita. */
+  llmProviders?: Array<"groq" | "openrouter" | "anthropic">;
+  groqApiKey?: string | null;
+  openrouterApiKey?: string | null;
+  groqModelScoring?: string;
+  groqModelAnalysis?: string;
+  openrouterModel?: string;
   fredApiKey: string | null;
   telegramBotToken: string | null;
   telegramChatId: string | null;
@@ -102,8 +109,14 @@ function lista(name: string): string[] {
 }
 
 export function loadConfig(): Config {
-  return {
+  const config: Config = {
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
+    llmProviders: providers(),
+    groqApiKey: env("GROQ_API_KEY"),
+    openrouterApiKey: env("OPENROUTER_API_KEY"),
+    groqModelScoring: groqModel("GROQ_MODEL_SCORING"),
+    groqModelAnalysis: groqModel("GROQ_MODEL_ANALYSIS"),
+    openrouterModel: freeOpenrouterModel(),
     fredApiKey: env("FRED_API_KEY"),
     telegramBotToken: env("TELEGRAM_BOT_TOKEN"),
     telegramChatId: env("TELEGRAM_CHAT_ID"),
@@ -148,6 +161,40 @@ export function loadConfig(): Config {
     alertThreshold: decimal("ALERT_THRESHOLD", 7, 0, 10),
     stateDir: env("STATE_DIR") ?? ".cache",
   };
+  validateConfig(config);
+  return config;
+}
+
+function providers(): NonNullable<Config["llmProviders"]> {
+  const values = (env("LLM_PROVIDERS") ?? "groq,openrouter").split(",").map((x) => x.trim());
+  if (values.some((x) => !["groq", "openrouter", "anthropic"].includes(x)) ||
+      new Set(values).size !== values.length || (values.includes("anthropic") && values.length !== 1)) {
+    throw new Error("invalid_llm_providers");
+  }
+  return values as NonNullable<Config["llmProviders"]>;
+}
+function groqModel(name: string): string {
+  const value = env(name) ?? "openai/gpt-oss-120b";
+  if (!["openai/gpt-oss-120b", "openai/gpt-oss-20b"].includes(value)) throw new Error("invalid_groq_model");
+  return value;
+}
+function freeOpenrouterModel(): string {
+  const value = env("OPENROUTER_MODEL") ?? "openrouter/free";
+  if (value !== "openrouter/free" && !/^[\w.-]+\/[\w.:-]+:free$/.test(value)) throw new Error("invalid_openrouter_free_model");
+  return value;
+}
+
+export function configuredFreeProviders(c: Config): Array<{
+  name: "groq" | "openrouter"; apiKey: string; modelScoring: string; modelAnalysis: string;
+}> {
+  const result: ReturnType<typeof configuredFreeProviders> = [];
+  for (const name of c.llmProviders ?? []) {
+    if (name === "groq" && c.groqApiKey) result.push({ name, apiKey: c.groqApiKey,
+      modelScoring: c.groqModelScoring ?? "openai/gpt-oss-120b", modelAnalysis: c.groqModelAnalysis ?? "openai/gpt-oss-120b" });
+    if (name === "openrouter" && c.openrouterApiKey) result.push({ name, apiKey: c.openrouterApiKey,
+      modelScoring: c.openrouterModel ?? "openrouter/free", modelAnalysis: c.openrouterModel ?? "openrouter/free" });
+  }
+  return result;
 }
 
 /**
@@ -225,11 +272,13 @@ export function missingVars(c: Config): MissingVar[] {
       needed_for: "leer los datos macro. Sin esto no hay nada que analizar.",
       where: "https://fredaccount.stlouisfed.org/apikeys — gratis, sin tarjeta",
     });
-  if (!c.anthropicApiKey)
+  const selected = c.llmProviders ?? ["anthropic"];
+  const hasLlm = selected.some((p) => p === "groq" ? c.groqApiKey : p === "openrouter" ? c.openrouterApiKey : c.anthropicApiKey);
+  if (!hasLlm)
     missing.push({
-      name: "ANTHROPIC_API_KEY",
+      name: selected[0] === "groq" ? "GROQ_API_KEY" : selected[0] === "openrouter" ? "OPENROUTER_API_KEY" : "ANTHROPIC_API_KEY",
       needed_for: "los pasos 3 y 4 de la cascada. Sin esto se filtra por reglas y no se puntúa.",
-      where: "console.anthropic.com → API keys",
+      where: selected[0] === "groq" ? "https://console.groq.com/keys" : selected[0] === "openrouter" ? "https://openrouter.ai/settings/keys" : "https://console.anthropic.com/",
     });
   if (!c.telegramBotToken)
     missing.push({

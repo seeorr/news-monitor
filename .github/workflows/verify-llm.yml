@@ -1,0 +1,24 @@
+name: Verificar LLM gratuitos
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/activar-llm-gratuitos]
+permissions:
+  contents: read
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Probar noticia pública sin base de datos ni Telegram
+        run: npm run verify:llm -- --live
+        env:
+          LLM_PROVIDERS: groq
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || secrets.GROQ }}

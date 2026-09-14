@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import { createFreeRouter } from "./ai/providers.ts";
 import {
   analyzeEvent,
   FabricationError,
@@ -12,7 +13,7 @@ import {
   type Analysis,
   type CascadeDeps,
 } from "./ai/cascade.ts";
-import { loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
+import { configuredFreeProviders, loadConfig, loadDotEnv, missingVars, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
 import { sameStory, tambienLoCuentan, type Grupo } from "./pipeline/agrupar.ts";
 import { collectEvents, watchlistEfectiva, recientes } from "./pipeline/collect.ts";
@@ -130,8 +131,11 @@ async function main(): Promise<number> {
     run.status = sourceFailure ? "failed" : run.sourcesFailed ? "partial" : "success";
     return sourceFailure ? 1 : 0;
   }
-  const deps: CascadeDeps | null = config.anthropicApiKey ? {
-    client: new Anthropic({ apiKey: config.anthropicApiKey, timeout: profile === "fast" ? 20_000 : 60_000, maxRetries: 0 }),
+  const providers = config.llmProviders ?? ["anthropic"];
+  const freeProviders = configuredFreeProviders(config);
+  const useAnthropic = providers.length === 1 && providers[0] === "anthropic" && config.anthropicApiKey;
+  const deps: CascadeDeps | null = freeProviders.length || useAnthropic ? {
+    ...(useAnthropic ? { client: new Anthropic({ apiKey: config.anthropicApiKey!, timeout: profile === "fast" ? 20_000 : 60_000, maxRetries: 0 }) } : {}),
     modelScoring: config.modelScoring, modelAnalysis: config.modelAnalysis,
     onFabrication: (attempt, violations) => log("FABRICATION_RETRY", { stage: "analysis", attempt, count: violations.length }),
     onScoringSummaryFallback: () => log("SCORING_SUMMARY_FALLBACK", { stage: "scoring" }),
@@ -142,7 +146,7 @@ async function main(): Promise<number> {
       const id = randomUUID();
       const reservation = await control.reserve({ id, resource: "ai", units: 1, now: new Date().toISOString(), dayLimit: config.aiCallsDay ?? 120 });
       if (!reservation.allowed) throw new BudgetExhausted(reservation.nextAt);
-      const record = { ...info, provider: "anthropic" };
+      const record = { ...info };
       requests.set(id, record);
       await control.recordAi(id, { ...record, inputTokens: null, outputTokens: null, costUsd: null, result: "uncertain" });
       return id;
@@ -151,10 +155,18 @@ async function main(): Promise<number> {
       const meta = requests.get(id)!;
       const inputPrice = meta.stage === "scoring" ? config.aiScoringInputUsd : config.aiAnalysisInputUsd;
       const outputPrice = meta.stage === "scoring" ? config.aiScoringOutputUsd : config.aiAnalysisOutputUsd;
-      const costUsd = inputPrice == null || outputPrice == null || result.inputTokens === null || result.outputTokens === null ? null
+      const costUsd = meta.provider === "openrouter" ? 0
+        : meta.provider === "groq" ? null // El plan Free de la cuenta se verifica fuera de la API de inferencia.
+        : inputPrice == null || outputPrice == null || result.inputTokens === null || result.outputTokens === null ? null
         : (result.inputTokens * inputPrice + result.outputTokens * outputPrice) / 1_000_000;
       await control.recordAi(id, { ...meta, ...result, costUsd });
     };
+    if (freeProviders.length) deps.generate = createFreeRouter({ providers: freeProviders,
+      timeoutMs: profile === "fast" ? 20_000 : 60_000,
+      beforeRequest: (info) => deps.beforeRequest!(info),
+      afterRequest: (id, result) => deps.afterRequest!(id, result),
+      onFailure: (provider, error) => log("LLM_PROVIDER_FAILED", { provider, error }),
+    });
   }
   let profundos = 0, deepAttempts = 0;
   const attemptedDelivery = new Set<string>();
@@ -192,12 +204,14 @@ async function main(): Promise<number> {
     maxItems: config.queueScanLimit ?? 500,
     send: async (body) => {
       const result = await sendTelegram(config.telegramBotToken!, config.telegramChatId!, body);
-      return result.state;
+      return result;
     }, afterSent: async (body, event) => {
       log("ALERT_SENT", { stage: "persist", source: event.source });
       await copiarAlGrupo(config, event, body);
     }, onFailure: (error) => log("EVENT_FAILED", { stage: "telegram", error }),
-  }); remainingDeepLevels -= result.deep; return result; };
+  }); remainingDeepLevels -= result.deep;
+    if (result.telegramUnconfigured) result.failed++;
+    return result; };
   const beforeLevels = levels ? await sendTwoLevels(true) : { sent: 0, failed: 0, deep: 0 };
   const immediate = { sent: 0, failed: 0, deep: 0 };
   if (!deps) log("SCORING_UNAVAILABLE", { stage: "scoring" });

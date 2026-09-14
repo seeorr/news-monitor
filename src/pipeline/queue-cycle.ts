@@ -105,7 +105,9 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
         outcome: { state: "retryable_failed", reason: budget ? "budget_exhausted" : "scoring_failed" } })), token, now());
       failed++;
       options.onFailure?.(representative, error);
-      if (budget) break;
+      // Un proveedor indisponible no se arregla probando las demás noticias.
+      // Se conserva el grupo reclamado para reintento y no se toca el resto.
+      if (budget || (error as { code?: string })?.code === "LLM_UNAVAILABLE") break;
       continue;
     }
     // Representante + duplicados cambian juntos. Morir aquí no deja una copia

@@ -16,6 +16,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { checkFabrication, extractNumbers } from "../lib/fabrication.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
+import { factualText } from "../notify/news-formats.ts";
+import type { StructuredGenerate, RequestInfo, RequestResult } from "./providers.ts";
 
 export const Scoring = z.object({
   importance_score: z.number().int().min(0).max(10),
@@ -190,22 +192,23 @@ export function allowedNumbers(event: NormalizedEvent): Array<number | null> {
 }
 
 export interface CascadeDeps {
-  client: Anthropic;
+  client?: Anthropic;
+  generate?: StructuredGenerate;
   modelScoring: string;
   modelAnalysis: string;
   /** Aviso de cada intento descartado, para que quede en el log del cron. */
   onFabrication?: (intento: number, violations: string[]) => void;
   /** Resumen demasiado largo reemplazado sin repetir la llamada al modelo. */
   onScoringSummaryFallback?: () => void;
-  beforeRequest?: (info: { stage: "scoring" | "analysis"; model: string; promptVersion: string; attempt: number }) => Promise<string>;
-  afterRequest?: (id: string, info: { inputTokens: number | null; outputTokens: number | null; result: "success" | "failed" | "uncertain" }) => Promise<void>;
+  beforeRequest?: (info: RequestInfo) => Promise<string>;
+  afterRequest?: (id: string, info: RequestResult) => Promise<void>;
 }
 
 export const PROMPT_VERSION = "news-two-level-20260910-v1";
 async function tracked<T extends { usage?: { input_tokens?: number; output_tokens?: number } }>(
   deps: CascadeDeps, stage: "scoring" | "analysis", attempt: number, call: () => Promise<T>,
 ): Promise<T> {
-  const id = await deps.beforeRequest?.({ stage, model: stage === "scoring" ? deps.modelScoring : deps.modelAnalysis, promptVersion: PROMPT_VERSION, attempt });
+  const id = await deps.beforeRequest?.({ stage, provider: "anthropic", model: stage === "scoring" ? deps.modelScoring : deps.modelAnalysis, promptVersion: PROMPT_VERSION, attempt });
   try {
     const response = await call();
     if (id) await deps.afterRequest?.(id, { inputTokens: response.usage?.input_tokens ?? null,
@@ -219,7 +222,12 @@ async function tracked<T extends { usage?: { input_tokens?: number; output_token
 
 /** Paso 3. Barato, corto, sobre todo lo que pasó el filtro. */
 export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Promise<Scoring> {
-  const res = await tracked(deps, "scoring", 1, () => deps.client.messages.parse({
+  const res = deps.generate ? { stop_reason: "end_turn", parsed_output: await deps.generate({
+    stage: "scoring", attempt: 1, promptVersion: PROMPT_VERSION,
+    system: `${RULES}\n\n${SCORING_RUBRIC}`,
+    user: `Puntua la relevancia de mercado de este evento.\n\nDATOS:\n${eventFacts(event)}`,
+    schema: ScoringResponse, maxTokens: 2048,
+  }) } : await tracked(deps, "scoring", 1, () => deps.client!.messages.parse({
     model: deps.modelScoring,
     max_tokens: 1024,
     system: `${RULES}\n\n${SCORING_RUBRIC}`,
@@ -237,7 +245,9 @@ export async function scoreEvent(event: NormalizedEvent, deps: CascadeDeps): Pro
   }
   const parsed = res.parsed_output;
   if (!parsed) throw new Error(`Scoring sin salida valida para ${event.id}`);
-  if (parsed.one_liner.length <= 200) return Scoring.parse(parsed);
+  // La frase alimenta también dashboard y resumen matinal. Se comprueba antes
+  // de persistir, aunque esta noticia nunca vaya a Telegram.
+  if (parsed.one_liner.length <= 200 && factualText(event, parsed.one_liner)) return Scoring.parse(parsed);
 
   // No se corta una frase: perder una negación al final invertiría el hecho.
   // El titular se conserva entero, o se declara la ausencia de resumen breve.
@@ -261,7 +271,12 @@ export async function analyzeEvent(event: NormalizedEvent, deps: CascadeDeps): P
 
   for (const intento of [1, 2]) {
     const aviso = intento === 1 ? "" : `${RETRY_NOTE}\n\n`;
-    const res = await tracked(deps, "analysis", intento, () => deps.client.messages.parse({
+    const res = deps.generate ? { stop_reason: "end_turn", parsed_output: await deps.generate({
+      stage: "analysis", attempt: intento, promptVersion: PROMPT_VERSION, system: RULES,
+      user: `${aviso}Explica por que importa este evento, que lo puede amplificar o revertir, ` +
+        `que activos se ven afectados y que hay que vigilar ahora.\n\nDATOS:\n${eventFacts(event)}`,
+      schema: Analysis, maxTokens: 4096,
+    }) } : await tracked(deps, "analysis", intento, () => deps.client!.messages.parse({
       model: deps.modelAnalysis,
       max_tokens: 8000,
       system: RULES,

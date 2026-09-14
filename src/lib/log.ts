@@ -28,7 +28,7 @@ const CODES = [
   // salió; UNCERTAIN, pudo salir y pudo no salir; RECORD_FAILED, se perdió el
   // acuse de Neon y la entrega se queda en `sending`, que nadie libera.
   "ALERT_BLOCKED", "ALERT_REJECTED", "ALERT_UNCERTAIN", "ALERT_RECORD_FAILED",
-  "EVENT_FAILED", "CYCLE_END",
+  "EVENT_FAILED", "CYCLE_END", "LLM_PROVIDER_FAILED",
   // Copia al grupo compartido. Dicen si salió o si Telegram la rechazó. No dicen
   // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
   // diagnosticar.
@@ -44,12 +44,13 @@ const COUNTS = ["count", "total", "discarded", "ok", "failed", "deep", "sent", "
   "scored", "retryable", "processing", "oldestHours", "deliveryPending", "points", "agePoints"] as const;
 // Solo ids de fuentes públicas. Nunca series_id libre (puede ser un ticker).
 const FEED_IDS = Object.keys(FEEDS);
-const CONFIG_VARS = ["FRED_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN",
+const CONFIG_VARS = ["FRED_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHAT_ID", "DATABASE_URL", "SEC_USER_AGENT"] as const;
 
 export type LogCode = typeof CODES[number];
 export type LogStage = typeof STAGES[number];
 export interface LogFields extends Partial<Record<typeof COUNTS[number], number>> {
+  provider?: "groq" | "openrouter" | "anthropic";
   profile?: Profile;
   trigger?: Trigger;
   source?: typeof SOURCES[number];
@@ -85,7 +86,7 @@ const ERROR_CODES = [
   // igual en el log, y es justo la diferencia que hay que ver.
   "EUROSTAT_EMPTY", "EUROSTAT_DIMENSION", "EUROSTAT_NO_AGGREGATE",
   "EUROSTAT_SHAPE", "FEED_INVALID", "SOURCE_TIMEOUT", "COLLECTION_TIMEOUT", "SEC_SHAPE",
-  "SEC_COVERAGE_LIMIT", "SEC_ARCHIVE_FAILED", "AI_BUDGET_EXHAUSTED",
+  "SEC_COVERAGE_LIMIT", "SEC_ARCHIVE_FAILED", "AI_BUDGET_EXHAUSTED", "LLM_UNAVAILABLE", "LLM_OUTPUT_INVALID", "LLM_REQUEST_FAILED", "REQUEST_TIMEOUT",
 ] as const;
 /**
  * Fallos propios con código estable (C5). Son literales de este repositorio, no
@@ -94,6 +95,7 @@ const ERROR_CODES = [
  * ciclo no funciona— se lean como UNKNOWN.
  */
 const SAFE_FAILURES = [
+  "invalid_llm_providers", "invalid_groq_model", "invalid_openrouter_free_model",
   "invalid_health_limit", "invalid_health_arguments", "invalid_monitor_profile", "invalid_monitor_origin",
   "invalid_cycle_mode", "incompatible_cycle_modes", "invalid_capture_profile", "invalid_news_delivery_mode",
   "invalid_agenda_days", "invalid_bounded_configuration", "invalid_model_price", "invalid_flags",
@@ -162,6 +164,8 @@ export function createLogger(sink: (line: string) => void = (line) => console.lo
     // También se valida en ejecución: TypeScript no protege frente a un cast,
     // un Error u objetos procedentes de un SDK.
     if (record.code !== "LOG_SUPPRESSED") {
+      const provider = dato(fields, "provider");
+      if (typeof provider === "string" && ["groq", "openrouter", "anthropic"].includes(provider)) record.provider = provider;
       const source = dato(fields, "source");
       const stage = dato(fields, "stage");
       const variable = dato(fields, "variable");

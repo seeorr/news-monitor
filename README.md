@@ -13,6 +13,13 @@ contextualiza y explica**, y manda una alerta a Telegram. No es un agregador.
 
 ## Estado
 
+**Actualización 14-09-2026:** integración gratuita Groq → OpenRouter preparada
+en local, pendiente de claves, prueba real y publicación. Producción sigue con
+Anthropic y el cupo interno de IA está agotado. [Configuración y activación](docs/llm-gratuitos.md).
+
+Los apartados siguientes conservan el historial de implementación y deben
+contrastarse con la ficha de seguimiento para conocer la activación vigente.
+
 La ampliación de captura está implementada y comprobada en local. Requiere
 aplicar la migración de cola antes de ejecutar esta versión contra Neon.
 **No está activada en producción.** Los ocho feeds anteriores siguen siendo la

@@ -19,11 +19,13 @@ import type { Ejecutor } from "../src/db/cliente.ts";
 import type { Vigilado } from "../src/db/watchlist.ts";
 import { memorySeenStore } from "../src/pipeline/seen.ts";
 import { memoryQueueStore } from "../src/pipeline/queue.ts";
+import { memoryControlStore } from "../src/pipeline/control.ts";
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn(), dotenv: vi.fn(), watchlist: vi.fn(), quote: vi.fn(),
   filings: vi.fn(), resolve: vi.fn(), feed: vi.fn(), eurostat: vi.fn(),
   score: vi.fn(), analyze: vi.fn(), send: vi.fn(), store: vi.fn(), queue: vi.fn(),
+  control: vi.fn(),
 }));
 vi.mock("../src/config.ts", async (original) => ({
   ...await original<typeof import("../src/config.ts")>(),
@@ -56,6 +58,7 @@ vi.mock("../src/db/neon.ts", async (original) => ({
   ...await original<typeof import("../src/db/neon.ts")>(), neonSeenStore: mocks.store,
 }));
 vi.mock("../src/db/queue.ts", () => ({ neonQueueStore: mocks.queue }));
+vi.mock("../src/db/control.ts", () => ({ neonControlStore: mocks.control }));
 vi.mock("../src/pipeline/queue.ts", async (original) => ({
   ...await original<typeof import("../src/pipeline/queue.ts")>(), fileQueueStore: mocks.queue,
 }));
@@ -100,6 +103,7 @@ beforeEach(() => {
   vi.stubEnv("MONITOR_MODE", "full");
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Red no autorizada en entrega.test"); }));
   mocks.config.mockReturnValue(config());
+  mocks.control.mockReturnValue(memoryControlStore());
   mocks.watchlist.mockResolvedValue([vigilado]);
   mocks.quote.mockResolvedValue({ symbol: "ACME", currency: "USD", price: 110,
     previousClose: 100, sessionDate: new Date().toISOString() });
@@ -135,6 +139,46 @@ async function vuelta(flags: string[] = []) {
   const records = salida.map((line) => JSON.parse(line) as Record<string, unknown>);
   return { codigos: records.map((record) => String(record.code)), codigo, records };
 }
+
+describe("cableado del ciclo con dos niveles y modelos gratuitos", () => {
+  it("con clave gratuita conecta el router sin necesitar Anthropic", async () => {
+    estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level", anthropicApiKey: null,
+      llmProviders: ["groq", "openrouter"], groqApiKey: "test-no-real-key" });
+    const result = await vuelta();
+    expect(result.codigo).toBe(0);
+    expect(mocks.score.mock.calls[0]![1].generate).toBeTypeOf("function");
+    expect(mocks.score.mock.calls[0]![1].client).toBeUndefined();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+  it("ruta gratuita sin claves no utiliza la clave Anthropic antigua", async () => {
+    estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), llmProviders: ["groq", "openrouter"] });
+    const result = await vuelta();
+    expect(result.codigo).toBe(1);
+    expect(result.codigos).toContain("SCORING_UNAVAILABLE");
+    expect(mocks.score).not.toHaveBeenCalled();
+  });
+  it("conserva retryAfter de un 429 de Telegram y deja pendiente la entrega", async () => {
+    const { cola, memoria } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level" });
+    mocks.send.mockResolvedValue({ ok: false, state: "rejected", rejection: "recoverable", retryAfterMs: 120_000 });
+    await vuelta();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect([...memoria.entregas.values()]).toEqual([expect.objectContaining({ estado: "deferred", nextAttemptAt: expect.any(String) })]);
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
+    await vuelta(["--process-only"]);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+  it("sin Telegram no declara éxito cuando hay noticias listas para entregar", async () => {
+    const { cola } = estadoCompartido();
+    mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level", telegramBotToken: null });
+    const result = await vuelta();
+    expect(result.codigo).toBe(1);
+    expect(await cola.listDeliveryPending()).toHaveLength(1);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
 
 describe("el proceso muere y la vuelta siguiente no reenvía", () => {
   it("muere entre el envío y el registro: la segunda vuelta no manda nada", async () => {

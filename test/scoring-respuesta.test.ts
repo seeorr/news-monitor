@@ -38,6 +38,11 @@ function preparar(output: unknown) {
 }
 
 describe("respuesta de scoring atravesando el parser del SDK real", () => {
+  it("una cifra sin respaldo se sustituye antes de llegar a cola, dashboard o resumen", async () => {
+    const { deps, fallback } = preparar({ ...valido, one_liner: "La empresa elimina 1000 empleos y sube un 5 %." });
+    expect((await scoreEvent(evento, deps)).one_liner).toBe(evento.title);
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
   it("conserva todos los campos de una respuesta válida con una única llamada", async () => {
     const { deps, fetch, fallback, requests } = preparar(valido);
     expect(await scoreEvent(evento, deps)).toEqual(valido);

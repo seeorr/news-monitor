@@ -115,6 +115,12 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || secrets.GROQ }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          LLM_PROVIDERS: ${{ vars.LLM_PROVIDERS }}
+          GROQ_MODEL_SCORING: ${{ vars.GROQ_MODEL_SCORING }}
+          GROQ_MODEL_ANALYSIS: ${{ vars.GROQ_MODEL_ANALYSIS }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
