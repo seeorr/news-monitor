@@ -176,7 +176,9 @@ describe("dos niveles, con transportes simulados", () => {
   it("presupuesto IA agotado no realiza la petición ni pierde la candidata", async () => {
     const o = options(), parse = vi.fn(); await captureCandidates(o.queue, [event("budget")], { now: NOW, maxAgeHours: 72 });
     const d = deps(parse); d.beforeRequest = async () => { throw new BudgetExhausted("2026-09-11T00:00:00Z"); };
-    await processQueue(o.queue, { now: () => NOW, maxScoring: 12, hasProcessed: o.seen.has, score: (e) => scoreEvent(e, d) });
+    const result = await processQueue(o.queue, { now: () => NOW, maxScoring: 12, hasProcessed: o.seen.has, score: (e) => scoreEvent(e, d) });
+    // El cupo funcionando no es un fallo: se informa aparte y el ciclo no sale en rojo.
+    expect(result).toMatchObject({ attempted: 1, failed: 0, budgetExhausted: true });
     expect(parse).not.toHaveBeenCalled();
     expect((await o.queue.storyContext(event("budget")))[0]).toMatchObject({ state: "retryable_failed", reason: "budget_exhausted" });
   });

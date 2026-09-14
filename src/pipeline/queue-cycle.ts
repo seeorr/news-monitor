@@ -50,6 +50,9 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
   const plan = planQueue(pending, { now: new Date(now()), limit: pending.length, capacity: options.maxScoring,
     watchlist: options.watchlist, groupThreshold: options.groupThreshold });
   let attempted = 0, scored = 0, failed = 0, discarded = 0;
+  // El cupo agotado no es un fallo: es el límite funcionando. Se informa aparte para
+  // que el ciclo no salga en rojo ni avise en cada vuelta hasta que se renueve.
+  let budgetExhausted = false;
   for (const item of plan) {
     if (attempted >= options.maxScoring) break;
     // El límite de planificación no corta la identidad de una historia. Busca
@@ -103,7 +106,7 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
       const budget = (error as { code?: string })?.code === "AI_BUDGET_EXHAUSTED";
       await queue.finishBatch(owned.map((row) => ({ id: row.id,
         outcome: { state: "retryable_failed", reason: budget ? "budget_exhausted" : "scoring_failed" } })), token, now());
-      failed++;
+      if (budget) budgetExhausted = true; else failed++;
       options.onFailure?.(representative, error);
       // Un proveedor indisponible no se arregla probando las demás noticias.
       // Se conserva el grupo reclamado para reintento y no se toca el resto.
@@ -119,7 +122,7 @@ export async function processQueue(queue: QueueStore, options: QueueProcessingOp
     discarded += owned.length - 1;
     await options.onScored?.(enriched);
   }
-  return { pending: pending.length, attempted, scored, failed, discarded };
+  return { pending: pending.length, attempted, scored, failed, discarded, budgetExhausted };
 }
 
 /**

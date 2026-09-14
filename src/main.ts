@@ -34,7 +34,7 @@ import { decideNews } from "./pipeline/news-policy.ts";
 import { deliverNews } from "./pipeline/news-delivery.ts";
 import { executionProfile } from "./pipeline/profile.ts";
 import { criticalMacro } from "./pipeline/critical-macro.ts";
-import { CRITICAL_FEEDS, queueSnapshot, type RunRecord } from "./pipeline/cadence.ts";
+import { CRITICAL_FEEDS, queueSnapshot, sendBudgetNotice, type RunRecord } from "./pipeline/cadence.ts";
 import { fileRunStore, memoryRunStore, neonRunStore } from "./db/cadence.ts";
 import { enrichEcbDecision } from "./sources/ecb-release.ts";
 
@@ -240,9 +240,18 @@ async function main(): Promise<number> {
       feed: item.group.representante.source === "rss" ? item.group.representante.series_id ?? undefined : undefined,
       priority: item.reason, publisher: item.publisher, points: item.points, agePoints: item.agePoints }),
     onFailure: (entry, error) => log("EVENT_FAILED", { stage: "scoring", source: entry.event.source, error }),
-  }) : { pending: 0, attempted: 0, discarded: 0, scored: 0, failed: 0 };
+  }) : { pending: 0, attempted: 0, discarded: 0, scored: 0, failed: 0, budgetExhausted: false };
   log("DEDUPE", { stage: "dedupe", discarded: processing.discarded, count: processing.scored });
   if (processing.attempted >= config.maxScoringPerCycle) log("SCORING_LIMIT", { stage: "scoring", count: processing.attempted });
+  // Cupo agotado: no es fallo del ciclo (no sale en rojo ni avisa cada diez minutos),
+  // pero se dice una vez al día por el chat privado. Un fallo del aviso no tumba el ciclo.
+  if (processing.budgetExhausted && !dry && config.telegramBotToken && config.telegramChatId) {
+    try {
+      const notice = await sendBudgetNotice({ now: new Date().toISOString(), seen,
+        send: async (body) => (await sendTelegram(config.telegramBotToken!, config.telegramChatId!, body)).state });
+      if (notice !== "blocked") log("AI_BUDGET_NOTICE", { stage: "telegram", sent: notice === "sent" ? 1 : 0 });
+    } catch (error) { log("EVENT_FAILED", { stage: "telegram", error }); }
+  }
   const remaining = config.maxScoringPerCycle - attemptedDelivery.size;
   const after = !levels && remaining > 0 ? await deliver(remaining) : { sent: 0, failed: 0 };
   const afterLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
@@ -253,7 +262,8 @@ async function main(): Promise<number> {
   const failed = processing.failed + delivery.failed;
   log("CYCLE_END", { stage: "cycle", sent: delivery.sent, deep: profundos, failed });
   run.scored = processing.scored; run.sent = delivery.sent;
-  run.status = sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? "failed" : failed || run.sourcesFailed ? "partial" : "success";
+  run.status = sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? "failed"
+    : failed || run.sourcesFailed || processing.budgetExhausted ? "partial" : "success";
   return sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? 1 : 0;
   } finally {
     await checkpoint;

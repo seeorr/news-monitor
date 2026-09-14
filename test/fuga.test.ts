@@ -303,6 +303,25 @@ describe("consola del main real", () => {
     const event = mocks.score.mock.calls[0]![0];
     expect(await mocks.control.mock.results[0]!.value.getDecision(event.id)).toMatchObject({ level: "brief" });
   });
+  it("cupo de IA agotado: el ciclo no falla, conserva la noticia y avisa una vez por el privado", async () => {
+    mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level", feeds: ["cnbc-markets"] });
+    mocks.watchlist.mockResolvedValue([]);
+    mocks.feed.mockResolvedValue([{ title: "Copper production falls during maintenance", link: "https://example.test/copper", guid: "copper", date: new Date().toISOString(), summary: null, raw: "<item/>" }]);
+    mocks.score.mockRejectedValue(Object.assign(new Error("ai_budget_exhausted"), { code: "AI_BUDGET_EXHAUSTED" }));
+    const { BUDGET_NOTICE_TEXT } = await import("../src/pipeline/cadence.ts");
+    const { records, exit } = await ejecutarMain(false);
+    // Código 0: el workflow no entra en «Avisar del fallo», que avisaba en cada ciclo.
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0]![1]).toBe(SECRET); // chat privado, nunca el grupo
+    expect(mocks.send.mock.calls[0]![2]).toBe(BUDGET_NOTICE_TEXT);
+    expect(mocks.seen.claimAlert).toHaveBeenCalledWith(expect.stringMatching(/^operational-budget:\d{4}-\d{2}-\d{2}$/), expect.anything());
+    expect(records).toContainEqual({ code: "AI_BUDGET_NOTICE", stage: "telegram", sent: 1 });
+    expect(records).toContainEqual(expect.objectContaining({ code: "EVENT_FAILED", stage: "scoring", error: "AI_BUDGET_EXHAUSTED" }));
+    expect(records).toContainEqual(expect.objectContaining({ code: "CYCLE_END", failed: 0 }));
+    const queue = mocks.queue.mock.results[0]!.value;
+    expect((await queue.stats()).reduce((n: number, row: { retryable_failed: number }) => n + row.retryable_failed, 0)).toBe(1);
+  });
   it.each(["true", ""])("no imprime título, alerta ni prosa en --dry (Actions=%s)", async (actions) => {
     vi.stubEnv("GITHUB_ACTIONS", actions);
     const { records, exit } = await ejecutarMain();

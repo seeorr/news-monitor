@@ -155,7 +155,18 @@ La implementación:
   verificar externamente el plan; no se reutilizan tarifas de Anthropic.
 
 El cupo local es común a proveedores. Su valor de código por defecto sigue
-siendo 120; producción usa 180 desde la activación. Cambiar de proveedor no
+siendo 120. Producción usó 260 y después 305 el 14-09, solo para vaciar la cola
+atrasada; vuelve a 180 el 15-09. 180 intentos de Groq son ~187.000 tokens, justo
+por debajo de sus 200.000 diarios: subir más cambia el cupo por pausas 429.
+
+**Cupo agotado no es un fallo del ciclo** desde el 14-09. La noticia queda
+`retryable_failed` por `budget_exhausted`, el log sigue diciendo
+`AI_BUDGET_EXHAUSTED` y la ejecución queda `partial`, pero el ciclo sale con
+código 0. Antes salía en rojo y el workflow avisaba por Telegram cada diez
+minutos hasta la renovación. Ahora el propio ciclo avisa **una vez por día UTC**
+por el chat privado (`sendBudgetNotice`, id `operational-budget:<fecha>`,
+registro `AI_BUDGET_NOTICE`). No se delega en `salud.yml`: su cron pierde la
+mayoría de disparos y su único aviso diario puede estar gastado en otro estado. Cambiar de proveedor no
 reinicia reservas. Se renuevan a las 00:00 UTC, el 15-09 a las 02:00 de Madrid.
 El cupo anterior estaba agotado; se amplió después de medir la prueba real.
 No se borró el ledger. Revisar capacidad después de observar consumo real.

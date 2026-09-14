@@ -30,6 +30,8 @@ const CODES = [
   // acuse de Neon y la entrega se queda en `sending`, que nadie libera.
   "ALERT_BLOCKED", "ALERT_REJECTED", "ALERT_UNCERTAIN", "ALERT_RECORD_FAILED",
   "EVENT_FAILED", "CYCLE_END", "LLM_PROVIDER_FAILED",
+  // Cupo diario de IA agotado: el ciclo no falla y avisa una vez al día. `sent` dice si salió.
+  "AI_BUDGET_NOTICE",
   // Copia al grupo compartido. Dicen si salió o si Telegram la rechazó. No dicen
   // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
   // diagnosticar.

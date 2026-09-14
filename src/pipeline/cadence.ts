@@ -212,3 +212,24 @@ export async function sendOperationalNotice(health: ReturnType<typeof evaluateHe
   catch { return "uncertain"; } // sending queda bloqueado si falta el acuse.
   return state;
 }
+
+export const BUDGET_NOTICE_TEXT = "News Monitor: cupo diario de IA agotado. Las noticias esperan en la cola " +
+  "y se puntúan al renovarse el cupo, a las 00:00 UTC. Este aviso sale una vez al día.";
+
+/**
+ * Cupo de IA agotado: un aviso privado por día UTC, enviado desde el propio ciclo.
+ * No se delega en el vigilante horario: su cron pierde la mayoría de disparos y su
+ * único aviso diario puede estar gastado en otro estado. Id propio en el mismo ledger.
+ */
+export async function sendBudgetNotice(options: {
+  now: string; seen: Pick<SeenStore, "claimAlert" | "finishAlert">;
+  send: (message: string) => Promise<"sent" | "rejected" | "uncertain">;
+}): Promise<"blocked" | "sent" | "rejected" | "uncertain"> {
+  const id = `operational-budget:${new Date(options.now).toISOString().slice(0, 10)}`, token = randomUUID();
+  if (!await options.seen.claimAlert(id, { token })) return "blocked";
+  let state: "sent" | "rejected" | "uncertain" = "uncertain";
+  try { state = await options.send(BUDGET_NOTICE_TEXT); } catch { state = "uncertain"; }
+  try { await options.seen.finishAlert(id, token, state); }
+  catch { return "uncertain"; }
+  return state;
+}
