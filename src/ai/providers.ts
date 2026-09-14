@@ -263,7 +263,9 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
         response_format: { type: "json_schema", json_schema: { name: request.stage, strict: true, schema } },
         ...(provider.name === "groq" ? { reasoning_effort: "low", max_completion_tokens: maxTokens } : {
           max_tokens: maxTokens,
-          provider: { require_parameters: true, data_collection: "deny", max_price: { prompt: 0, completion: 0 } },
+          // Sin data_collection=deny: casi ningún endpoint gratuito lo cumple y el respaldo
+          // devolvía 404 dos de cada tres veces. Decisión de Alberto, 14-09-2026.
+          provider: { require_parameters: true, max_price: { prompt: 0, completion: 0 } },
         }),
       });
       // La reserva y su persistencia son controles locales: fallar aquí no habilita fallback.

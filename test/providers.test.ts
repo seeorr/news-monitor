@@ -99,7 +99,7 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     await expect(empty(request)).rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
   });
 
-  it("prohíbe modelos OpenRouter de pago y fija filtros de coste y privacidad", async () => {
+  it("prohíbe modelos OpenRouter de pago y fija el filtro de coste cero", async () => {
     expect(() => createFreeRouter({ providers: [{ ...providers[1]!, modelAnalysis: "anthropic/claude-sonnet-4" }], timeoutMs: 1000 })).toThrow("exige");
     expect(() => createFreeRouter({ providers: [{ ...providers[1]!, modelScoring: "openrouter/free " }], timeoutMs: 1000 })).toThrow("exige");
     expect(() => createFreeRouter({ providers: [{ ...providers[1]!, modelScoring: "vendor/model:v1.2:free" }], timeoutMs: 1000 })).not.toThrow();
@@ -108,10 +108,10 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     await generate({ ...request, maxTokens: 100_000 });
     const init = transport.mock.calls[0]?.[1];
     expect(init?.redirect).toBe("error");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      model: "openrouter/free", max_tokens: 8192,
-      provider: { require_parameters: true, data_collection: "deny", max_price: { prompt: 0, completion: 0 } },
-    });
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({ model: "openrouter/free", max_tokens: 8192 });
+    // Igualdad exacta: sin data_collection (decisión del 14-09) y sin perder el precio cero.
+    expect(body.provider).toEqual({ require_parameters: true, max_price: { prompt: 0, completion: 0 } });
   });
 
   it("esquema anidado cerrado y límite de tokens fijado por el caller", async () => {

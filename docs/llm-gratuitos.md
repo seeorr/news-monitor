@@ -122,8 +122,14 @@ La implementación:
   Un error de cuota interna o persistencia no provoca más peticiones.
 - Si no queda ningún proveedor disponible, conserva la noticia para reintento
   y detiene el resto del lote. Las demás candidatas permanecen pendientes.
-- OpenRouter lleva `require_parameters=true`, `data_collection=deny` y precios
-  máximos de entrada/salida cero. Si no encuentra una ruta elegible, falla.
+- OpenRouter lleva `require_parameters=true` y precios máximos de
+  entrada/salida cero. Si no encuentra una ruta elegible, falla.
+- **No lleva `data_collection=deny`** desde el 14-09. Con esa restricción la
+  prueba real devolvió 404 en dos de tres llamadas: casi ningún endpoint
+  gratuito la cumple. Alberto decide aceptar que el proveedor gratuito pueda
+  guardar o entrenar con los prompts. Contienen noticias públicas; la selección
+  sí revela qué valores se vigilan. Revertir: volver a añadir la restricción en
+  `src/ai/providers.ts` o usar `LLM_PROVIDERS=groq`.
 - Groq no ofrece en esta integración una prueba del plan de facturación de la
   cuenta: mantenerla en Free. Su coste queda desconocido en el ledger hasta
   verificar externamente el plan; no se reutilizan tarifas de Anthropic.
