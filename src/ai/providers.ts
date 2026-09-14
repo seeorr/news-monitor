@@ -51,9 +51,29 @@ export class FreeLlmError extends Error {
   }
 }
 
+/**
+ * Códigos de error de proveedor que se pueden publicar en el log. Cualquier otro sale
+ * como `unlisted`: nunca se copia el texto recibido, solo se compara contra esta lista.
+ */
+export const PROVIDER_ERROR_CODES = [
+  "json_validate_failed", "output_parse_failed", "tool_use_failed", "context_length_exceeded",
+  "request_too_large", "model_not_found", "model_decommissioned", "invalid_api_key",
+  "invalid_request_error", "rate_limit_exceeded", "unlisted",
+] as const;
+export type ProviderErrorCode = typeof PROVIDER_ERROR_CODES[number];
+
+function providerErrorCode(raw: unknown): ProviderErrorCode | undefined {
+  const parsed = z.object({ error: z.object({ code: z.unknown().optional(), type: z.unknown().optional() }) }).safeParse(raw);
+  if (!parsed.success) return undefined;
+  const value = [parsed.data.error.code, parsed.data.error.type].find((item) => typeof item === "string");
+  if (typeof value !== "string") return undefined;
+  return (PROVIDER_ERROR_CODES as readonly string[]).includes(value) ? value as ProviderErrorCode : "unlisted";
+}
+
 class ProviderFailure extends Error {
   readonly code: "LLM_OUTPUT_INVALID" | "LLM_REQUEST_FAILED" | "REQUEST_TIMEOUT";
-  constructor(readonly reason: "http" | "network" | "timeout" | "output", readonly status?: number) {
+  constructor(readonly reason: "http" | "network" | "timeout" | "output", readonly status?: number,
+    readonly providerCode?: ProviderErrorCode) {
     super(`LLM gratuito: ${reason}${status === undefined ? "" : ` (${status})`}`);
     this.name = "ProviderFailure";
     this.code = reason === "output" ? "LLM_OUTPUT_INVALID" : reason === "timeout" ? "REQUEST_TIMEOUT" : "LLM_REQUEST_FAILED";
@@ -189,8 +209,14 @@ async function perform<T>(
         // reconoce este código fijo; jamás se guarda ni imprime failed_generation.
         let raw: unknown;
         try { raw = await readBody(response); } catch { /* Se mantiene HTTP 400. */ }
-        const failure = z.object({ error: z.object({ code: z.literal("json_validate_failed") }) }).safeParse(raw);
-        if (failure.success) return { error: new ProviderFailure("output"), disable: false, retry: true, usage: emptyUsage("failed") };
+        const providerCode = providerErrorCode(raw);
+        if (providerCode === "json_validate_failed") {
+          return { error: new ProviderFailure("output", undefined, providerCode), disable: false, retry: true, usage: emptyUsage("failed") };
+        }
+        // Groq documenta el 400 como fallo de esta petición; clave, permisos y modelo son
+        // 401/403/404. Se aparta la noticia, no el proveedor: el 14-09 un solo titular
+        // pausó Groq seis horas y paró la cola entera. Sin retryAt, sin circuito abierto.
+        return { error: new ProviderFailure("http", 400, providerCode), disable: false, usage: emptyUsage("failed") };
       }
       // No registramos cuerpos externos: pueden incluir prompt o credenciales reflejadas.
       void response.body?.cancel().catch(() => {});

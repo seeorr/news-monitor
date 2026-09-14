@@ -197,11 +197,16 @@ describe.each(["true", ""])("logger real, GITHUB_ACTIONS=%s", (actions) => {
     log("WATCHLIST_FAILED", { error: Object.assign(new Error(payload), { code: "42P01" }) });
     log("SOURCE_FAILED", { error: { code: "ETIMEDOUT", message: payload } });
     log("SOURCE_FAILED", { error: { status: SECRET, code: SECRET, body: payload } });
+    // El código de proveedor solo sale si está en la lista cerrada, aunque llegue en un objeto ajeno.
+    log("LLM_PROVIDER_FAILED", { provider: "groq", error: { status: 400, providerCode: "context_length_exceeded", message: payload } });
+    log("LLM_PROVIDER_FAILED", { provider: "groq", error: { status: 400, providerCode: SECRET } });
     sinFugas(lines);
     expect(JSON.parse(lines[0]!)).toEqual({ code: "SOURCE_FAILED", source: "fred", stage: "collect", error: "HTTP", status: 503 });
     expect(JSON.parse(lines[1]!).error).toBe("42P01");
     expect(JSON.parse(lines[2]!).error).toBe("ETIMEDOUT");
     expect(JSON.parse(lines[3]!).error).toBe("UNKNOWN");
+    expect(JSON.parse(lines[4]!)).toEqual({ code: "LLM_PROVIDER_FAILED", provider: "groq", error: "HTTP", status: 400, providerCode: "context_length_exceeded" });
+    expect(JSON.parse(lines[5]!)).toEqual({ code: "LLM_PROVIDER_FAILED", provider: "groq", error: "HTTP", status: 400 });
   });
 
   it("solo acepta nombres de configuración del enum y conteos enteros", async () => {

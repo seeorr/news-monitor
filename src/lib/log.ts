@@ -8,6 +8,7 @@ import { FEEDS } from "../sources/rss.ts";
 import { RULE_REASON_CODES } from "../pipeline/rules.ts";
 import { QUEUE_REASONS } from "../pipeline/queue.ts";
 import { PROFILES, TRIGGERS, type Profile, type Trigger } from "../pipeline/profile.ts";
+import { PROVIDER_ERROR_CODES } from "../ai/providers.ts";
 
 const PRIORITIES = ["critical_macro", "macro_release", "watchlist", "material_news", "news", "routine_official"] as const;
 const PUBLISHERS = [...new Set(Object.values(FEEDS).map((feed) => feed.publisher)), "fred", "eurostat", "sec", "yahoo", "yahoo-market", "rss-unknown", "coingecko"];
@@ -126,7 +127,10 @@ function dato(value: unknown, key: string): unknown {
 function clasificarError(value: unknown): Record<string, string | number> | null {
   const status = dato(value, "status");
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
-    return { error: "HTTP", status };
+    // El código del proveedor ya viene reducido a la lista cerrada; se vuelve a comprobar aquí.
+    const providerCode = dato(value, "providerCode");
+    return { error: "HTTP", status,
+      ...(typeof providerCode === "string" && (PROVIDER_ERROR_CODES as readonly string[]).includes(providerCode) ? { providerCode } : {}) };
   }
   const code = dato(value, "code");
   if (typeof code === "string" && (ERROR_CODES as readonly string[]).includes(code)) return { error: code };

@@ -41,6 +41,15 @@ describe("espera LLM durable", () => {
     await expect(createFreeRouter({ providers, timeoutMs: 1000, fetch: transport })(request)).rejects.toMatchObject({ code: "LLM_OUTPUT_INVALID" });
     expect(transport).toHaveBeenCalledTimes(2);
   });
+  it("un 400 de Groq no deja espera durable: el ciclo siguiente vuelve a llamar", async () => {
+    const store = memoryControlStore();
+    const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "invalid_request_error" } }), { status: 400 }))
+      .mockImplementation(async () => ok());
+    await expect(router(store, transport)(request)).rejects.toMatchObject({ code: "LLM_OUTPUT_INVALID" });
+    expect(await store.providerRetryAt!("groq", new Date().toISOString())).toBeFalsy();
+    await expect(router(store, transport)(request)).resolves.toEqual({ ok: true });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
   it("el respaldo en espera no roba la mitad del plazo al proveedor disponible", async () => {
     vi.useFakeTimers(); vi.setSystemTime(at);
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => {

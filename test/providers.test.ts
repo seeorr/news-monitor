@@ -36,7 +36,41 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     expect(afterRequest).toHaveBeenCalledWith("req-1", { inputTokens: 121, outputTokens: 34, result: "success" });
   });
 
-  it.each([400, 401, 402, 403, 404, 429, 500, 503])("HTTP %s abre circuito y usa fallback sin volver al proveedor caído", async status => {
+  it("un 400 de Groq aparta la petición y no el proveedor: sin espera, y la siguiente vuelve a Groq", async () => {
+    const transport = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "context_length_exceeded", message: "SECRET-SERVER-BODY" } }), { status: 400 }))
+      .mockImplementation(async () => response());
+    const afterRequest = vi.fn(async () => {});
+    const onFailure = vi.fn();
+    const generate = createFreeRouter({ providers, timeoutMs: 1000, fetch: transport, beforeRequest: async () => "id", afterRequest, onFailure });
+    await expect(generate(request)).resolves.toEqual(valid);
+    await expect(generate(request)).resolves.toEqual(valid);
+    expect(transport.mock.calls.map(call => call[0])).toEqual([
+      "https://api.groq.com/openai/v1/chat/completions",
+      "https://openrouter.ai/api/v1/chat/completions",
+      "https://api.groq.com/openai/v1/chat/completions",
+    ]);
+    expect(afterRequest.mock.calls[0]).toEqual(["id", { inputTokens: null, outputTokens: null, result: "failed" }]);
+    expect(onFailure.mock.calls[0]?.[1]).toMatchObject({ code: "LLM_REQUEST_FAILED", status: 400, providerCode: "context_length_exceeded" });
+    expect(String(onFailure.mock.calls[0]?.[1])).not.toContain("SECRET");
+  });
+
+  it.each([
+    ["código fuera de lista", JSON.stringify({ error: { code: "SECRET free text" } }), "unlisted"],
+    ["solo type", JSON.stringify({ error: { type: "invalid_request_error" } }), "invalid_request_error"],
+    ["cuerpo no JSON", "SECRET-SERVER-BODY", undefined],
+  ] as const)("400 de Groq (%s): el código publicado sale de la lista cerrada o no sale", async (_name, body, expected) => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(body, { status: 400 })).mockImplementation(async () => response());
+    const onFailure = vi.fn();
+    const generate = createFreeRouter({ providers: [providers[0]!], timeoutMs: 1000, fetch: transport, onFailure });
+    // Solo Groq: la noticia falla sola (no LLM_UNAVAILABLE), así el lote sigue con las demás.
+    await expect(generate(request)).rejects.toMatchObject({ code: "LLM_OUTPUT_INVALID" });
+    await expect(generate(request)).resolves.toEqual(valid);
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect((onFailure.mock.calls[0]?.[1] as { providerCode?: string }).providerCode).toBe(expected);
+  });
+
+  it.each([401, 402, 403, 404, 429, 500, 503])("HTTP %s abre circuito y usa fallback sin volver al proveedor caído", async status => {
     const transport = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("SECRET-SERVER-BODY", { status }))
       .mockImplementation(async () => response());

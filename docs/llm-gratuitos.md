@@ -122,8 +122,15 @@ La implementación:
   Una respuesta no válida nunca se convierte en una puntuación ficticia.
 - Si Groq devuelve HTTP 400 con el código exacto `json_validate_failed`,
   permite un único reintento con nueva reserva y dentro del mismo plazo.
-  Este fallo de generación no activa la pausa de seis horas. Otros errores
-  400 mantienen la pausa. No se registra el cuerpo del error.
+  Este fallo de generación no activa la pausa de seis horas.
+- **Cualquier otro 400 de Groq aparta solo esa petición** desde el 14-09: sin
+  pausa, sin `retryAt` y sin abrir el circuito. Groq documenta el 400 como fallo
+  de la petición; clave, permisos y modelo son 401/403/404, que siguen pausando
+  seis horas. Motivo: un único titular devolvió 400 catorce veces y, con la regla
+  anterior, pausó Groq seis horas y paró la cola. La noticia queda
+  `scoring_failed` con su espera creciente; el lote sigue.
+- El log publica `providerCode` solo si coincide con una lista cerrada
+  (`PROVIDER_ERROR_CODES`); si no, `unlisted`. No se registra el cuerpo del error.
 - Reserva cada intento antes de hacer red, también respaldos y reintentos.
   Un error de cuota interna o persistencia no provoca más peticiones.
 - Si no queda ningún proveedor disponible, conserva la noticia para reintento
