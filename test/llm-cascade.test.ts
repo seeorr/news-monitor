@@ -17,22 +17,30 @@ function response(output: unknown) {
     usage: { prompt_tokens: 150, completion_tokens: 80 } }));
 }
 describe("cascada real con transporte gratuito simulado", () => {
-  it("usa los esquemas reales, cambia de proveedor y registra cada intento", async () => {
+  it("usa los esquemas reales, cambia de proveedor al puntuar y registra cada intento", async () => {
+    const providers = [{ name: "groq" as const, apiKey: "test", modelScoring: "openai/gpt-oss-120b", modelAnalysis: "openai/gpt-oss-120b" },
+      { name: "openrouter" as const, apiKey: "test", modelScoring: "openrouter/free", modelAnalysis: "openrouter/free" }];
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(new Response("", { status: 402 }))
-      .mockResolvedValueOnce(response(scoring)).mockResolvedValueOnce(response(analysis));
+      .mockResolvedValueOnce(response(scoring));
     const before = vi.fn(async () => "reservation"), after = vi.fn(async () => {});
     const deps: CascadeDeps = { modelScoring: "unused", modelAnalysis: "unused", generate: createFreeRouter({
-      providers: [{ name: "groq", apiKey: "test", modelScoring: "openai/gpt-oss-120b", modelAnalysis: "openai/gpt-oss-120b" },
-        { name: "openrouter", apiKey: "test", modelScoring: "openrouter/free", modelAnalysis: "openrouter/free" }],
-      timeoutMs: 1000, fetch, beforeRequest: before, afterRequest: after,
+      providers, timeoutMs: 1000, fetch, beforeRequest: before, afterRequest: after,
     }) };
     expect(await scoreEvent(event, deps)).toEqual(scoring);
-    expect(await analyzeEvent(event, deps)).toEqual(analysis);
-    expect(fetch).toHaveBeenCalledTimes(3);
     expect(before).toHaveBeenNthCalledWith(1, expect.objectContaining({ provider: "groq", stage: "scoring" }));
-    expect(before).toHaveBeenNthCalledWith(3, expect.objectContaining({ provider: "openrouter", stage: "analysis" }));
-    expect(after).toHaveBeenNthCalledWith(3, "reservation", expect.objectContaining({ result: "success", inputTokens: 150, outputTokens: 80 }));
-    const request = JSON.parse(String(fetch.mock.calls[2]![1]!.body));
+    expect(before).toHaveBeenNthCalledWith(2, expect.objectContaining({ provider: "openrouter", stage: "scoring" }));
+    expect(after).toHaveBeenNthCalledWith(2, "reservation", expect.objectContaining({ result: "success", inputTokens: 150, outputTokens: 80 }));
+    // Groq quedó apartado y OpenRouter no analiza: el análisis espera, sin reservar ni llamar.
+    await expect(analyzeEvent(event, deps)).rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(before).toHaveBeenCalledTimes(2);
+
+    // Ciclo siguiente con Groq sano: el análisis sale con el esquema real.
+    const nextFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(response(analysis));
+    const next: CascadeDeps = { ...deps, generate: createFreeRouter({ providers, timeoutMs: 1000, fetch: nextFetch }) };
+    expect(await analyzeEvent(event, next)).toEqual(analysis);
+    expect(nextFetch.mock.calls[0]![0]).toBe("https://api.groq.com/openai/v1/chat/completions");
+    const request = JSON.parse(String(nextFetch.mock.calls[0]![1]!.body));
     expect(request.response_format.json_schema.schema.properties).toHaveProperty("affected_assets");
     expect(request.messages[1].content).toContain(event.title);
   });

@@ -1,6 +1,6 @@
 /** Prueba aislada: una noticia pública fija, sin Neon, watchlist ni Telegram. */
 import { configuredFreeProviders, loadConfig, loadDotEnv } from "../src/config.ts";
-import { createFreeRouter } from "../src/ai/providers.ts";
+import { analyzes, createFreeRouter } from "../src/ai/providers.ts";
 import { analyzeEvent, scoreEvent, type CascadeDeps } from "../src/ai/cascade.ts";
 import { createLogger } from "../src/lib/log.ts";
 import { formatImportant, formatInteresting } from "../src/notify/news-formats.ts";
@@ -42,9 +42,10 @@ async function main() {
     }) };
   const score = await scoreEvent(event, deps);
   formatInteresting(event, score);
-  const analysis = await analyzeEvent(event, deps);
-  formatImportant(event, score, analysis);
-  console.log(JSON.stringify({ code: "LLM_CHECK_OK", calls, scoring: true, analysis: true,
-    schemaAndNumericalChecks: true, editorialQualityReviewed: false }));
+  // OpenRouter no analiza (ver analyzes()): probarlo ahí fallaría siempre y no diría nada nuevo.
+  const analysisUsed = providers.some((p) => analyzes(p.name));
+  if (analysisUsed) formatImportant(event, score, await analyzeEvent(event, deps));
+  console.log(JSON.stringify({ code: "LLM_CHECK_OK", calls, scoring: true, analysis: analysisUsed,
+    analysisSkippedByDesign: !analysisUsed, schemaAndNumericalChecks: true, editorialQualityReviewed: false }));
 }
 main().catch((error) => { createLogger()("EVENT_FAILED", { error }); process.exitCode = 1; });

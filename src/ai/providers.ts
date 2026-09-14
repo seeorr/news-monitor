@@ -74,6 +74,15 @@ const ENDPOINTS: Record<FreeProviderName, string> = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
 };
 const MAX_RESPONSE_BYTES = 128 * 1024;
+
+/**
+ * OpenRouter solo puntúa. `openrouter/free` elige modelo al azar y en la prueba real
+ * del 14-09 el análisis agotó los 4.096 tokens razonando y llegó truncado; doblarlo no
+ * cabe en el plazo. Un análisis sin Groq espera a Groq en vez de gastar cuota en balde.
+ */
+export function analyzes(name: ProviderName): boolean {
+  return name !== "openrouter";
+}
 const emptyUsage = (result: RequestResult["result"]): RequestResult => ({
   inputTokens: null, outputTokens: null, result,
 });
@@ -238,9 +247,10 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
     if (!Number.isSafeInteger(request.maxTokens) || request.maxTokens <= 0) throw new Error("LLM: maxTokens inválido");
     const deadline = Date.now() + options.timeoutMs;
     const schema = strictSchema(request.schema);
+    const eligible = providers.filter(provider => request.stage === "scoring" || analyzes(provider.name));
     const available: FreeProvider[] = [];
     let cooling = 0;
-    for (const provider of providers.filter(provider => !disabled.has(provider.name))) {
+    for (const provider of eligible.filter(provider => !disabled.has(provider.name))) {
       const now = new Date().toISOString();
       const retryAt = await options.getRetryAt?.(provider.name, now);
       if (retryAt) {
@@ -288,7 +298,8 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       options.onFailure?.(provider.name, outcome.error);
       if (outcome.retry && attempts.get(provider.name) === 1) available.splice(index + 1, 0, provider);
     }
-    if (deadlineExceeded || cooling > 0 || providers.every(provider => disabled.has(provider.name))) {
+    // Sin elegibles para la etapa es indisponibilidad, no salida inválida: la noticia se reintenta.
+    if (deadlineExceeded || cooling > 0 || eligible.every(provider => disabled.has(provider.name))) {
       throw new FreeLlmError("LLM_UNAVAILABLE", "No hay proveedores LLM gratuitos disponibles en este ciclo");
     }
     throw new FreeLlmError("LLM_OUTPUT_INVALID", "Los proveedores gratuitos no devolvieron una respuesta válida");

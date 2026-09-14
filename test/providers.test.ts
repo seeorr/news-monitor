@@ -99,6 +99,25 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
     await expect(empty(request)).rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
   });
 
+  it("OpenRouter solo puntúa: el análisis no cae en él aunque Groq falle", async () => {
+    const analysis = { ...request, stage: "analysis" as const };
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => new Response("", { status: 500 }));
+    const beforeRequest = vi.fn(async () => "id");
+    const both = createFreeRouter({ providers, timeoutMs: 1000, fetch: transport, beforeRequest });
+    await expect(both(analysis)).rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
+    expect(transport.mock.calls.map(call => call[0])).toEqual(["https://api.groq.com/openai/v1/chat/completions"]);
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+
+    // Solo OpenRouter: indisponible sin reservar cupo ni tocar la red, para que la noticia se reintente.
+    const orFetch = vi.fn<typeof fetch>().mockImplementation(async () => response());
+    const orReserve = vi.fn(async () => "id");
+    const onlyOr = createFreeRouter({ providers: [providers[1]!], timeoutMs: 1000, fetch: orFetch, beforeRequest: orReserve });
+    await expect(onlyOr(analysis)).rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
+    expect(orFetch).not.toHaveBeenCalled();
+    expect(orReserve).not.toHaveBeenCalled();
+    await expect(onlyOr(request)).resolves.toEqual(valid);
+  });
+
   it("prohíbe modelos OpenRouter de pago y fija el filtro de coste cero", async () => {
     expect(() => createFreeRouter({ providers: [{ ...providers[1]!, modelAnalysis: "anthropic/claude-sonnet-4" }], timeoutMs: 1000 })).toThrow("exige");
     expect(() => createFreeRouter({ providers: [{ ...providers[1]!, modelScoring: "openrouter/free " }], timeoutMs: 1000 })).toThrow("exige");

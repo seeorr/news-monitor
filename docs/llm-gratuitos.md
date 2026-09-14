@@ -130,6 +130,13 @@ La implementación:
   guardar o entrenar con los prompts. Contienen noticias públicas; la selección
   sí revela qué valores se vigilan. Revertir: volver a añadir la restricción en
   `src/ai/providers.ts` o usar `LLM_PROVIDERS=groq`.
+- **OpenRouter solo puntúa** desde el 14-09 (`analyzes()` en
+  `src/ai/providers.ts`). Sin la restricción anterior la puntuación real salió
+  bien, pero el análisis agotó los 4.096 tokens razonando y llegó truncado
+  (`LLM_OUTPUT_INVALID`); tardó 38 s y doblar el límite no cabe en 60 s.
+  Si Groq no puede analizar, el análisis queda `LLM_UNAVAILABLE` para reintento,
+  sin reservar cupo. `verify:llm` con OpenRouter prueba solo la puntuación y lo
+  declara con `analysisSkippedByDesign`.
 - Groq no ofrece en esta integración una prueba del plan de facturación de la
   cuenta: mantenerla en Free. Su coste queda desconocido en el ledger hasta
   verificar externamente el plan; no se reutilizan tarifas de Anthropic.
