@@ -65,6 +65,7 @@ type Outcome<T> = {
 } | {
   error: ProviderFailure;
   disable: boolean;
+  retry?: boolean;
   usage: RequestResult;
 };
 
@@ -174,6 +175,14 @@ async function perform<T>(
       body,
     });
     if (!response.ok) {
+      if (response.status === 400 && provider.name === "groq") {
+        // Groq puede rechazar una generación incluso con strict=true. Solo se
+        // reconoce este código fijo; jamás se guarda ni imprime failed_generation.
+        let raw: unknown;
+        try { raw = await readBody(response); } catch { /* Se mantiene HTTP 400. */ }
+        const failure = z.object({ error: z.object({ code: z.literal("json_validate_failed") }) }).safeParse(raw);
+        if (failure.success) return { error: new ProviderFailure("output"), disable: false, retry: true, usage: emptyUsage("failed") };
+      }
       // No leemos errores externos: pueden incluir el prompt o credenciales reflejadas.
       void response.body?.cancel().catch(() => {});
       return { error: new ProviderFailure("http", response.status), disable: true,
@@ -241,6 +250,7 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       available.push(provider);
     }
     let deadlineExceeded = false;
+    const attempts = new Map<FreeProviderName, number>();
     for (const [index, provider] of available.entries()) {
       if (disabled.has(provider.name)) continue;
       const remaining = deadline - Date.now();
@@ -259,8 +269,9 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       // La reserva y su persistencia son controles locales: fallar aquí no habilita fallback.
       const id = await options.beforeRequest?.({
         stage: request.stage, model, provider: provider.name,
-        promptVersion: request.promptVersion, attempt: request.attempt,
+        promptVersion: request.promptVersion, attempt: request.attempt + (attempts.get(provider.name) ?? 0),
       });
+      attempts.set(provider.name, (attempts.get(provider.name) ?? 0) + 1);
       const timeLeft = deadline - Date.now();
       if (timeLeft <= 0) {
         if (id !== undefined) await options.afterRequest?.(id, emptyUsage("failed"));
@@ -273,6 +284,7 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       if (id !== undefined) await options.afterRequest?.(id, outcome.usage);
       if ("value" in outcome) return outcome.value;
       options.onFailure?.(provider.name, outcome.error);
+      if (outcome.retry && attempts.get(provider.name) === 1) available.splice(index + 1, 0, provider);
     }
     if (deadlineExceeded || cooling > 0 || providers.every(provider => disabled.has(provider.name))) {
       throw new FreeLlmError("LLM_UNAVAILABLE", "No hay proveedores LLM gratuitos disponibles en este ciclo");

@@ -27,6 +27,20 @@ function router(store: ControlStore, transport: typeof fetch) {
 }
 afterEach(() => vi.useRealTimers());
 describe("espera LLM durable", () => {
+  it("json_validate_failed de Groq permite un solo reintento contabilizado y no pausa seis horas", async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "json_validate_failed", failed_generation: "private" } }), { status: 400 })).mockImplementation(async () => ok());
+    const before = vi.fn(async () => "receipt"), after = vi.fn(), failures = vi.fn();
+    await expect(createFreeRouter({ providers, timeoutMs: 1000, fetch: transport, beforeRequest: before, afterRequest: after, onFailure: failures })(request)).resolves.toEqual({ ok: true });
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(before).toHaveBeenNthCalledWith(2, expect.objectContaining({ attempt: 2 }));
+    expect(after.mock.calls[0]![1]).not.toHaveProperty("retryAt");
+    expect(String(failures.mock.calls[0]![1])).not.toContain("private");
+  });
+  it("dos generaciones rechazadas no producen bucle ni cooldown de configuración", async () => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ error: { code: "json_validate_failed" } }), { status: 400 }));
+    await expect(createFreeRouter({ providers, timeoutMs: 1000, fetch: transport })(request)).rejects.toMatchObject({ code: "LLM_OUTPUT_INVALID" });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
   it("el respaldo en espera no roba la mitad del plazo al proveedor disponible", async () => {
     vi.useFakeTimers(); vi.setSystemTime(at);
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
