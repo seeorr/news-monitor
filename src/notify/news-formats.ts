@@ -29,7 +29,7 @@ export function formatInteresting(event: NormalizedEvent, scoring: Scoring, upda
   const fact = factualText(event, scoring.one_liner) ? sentence(scoring.one_liner, 260) : "";
   if (!fact) throw new Error("short_fact_not_supported");
   const title = sentence(fact, 105) || "Novedad económica confirmada";
-  return [`📰 ${update ? "Actualización: " : ""}${title}`, ...(title === fact ? [] : [`Qué pasó: ${fact}`]), source(event)].join("\n");
+  return [`📰 ${update ? "Actualización: " : ""}${title}`, ...(title === fact ? [] : [`Qué pasó: ${fact}`]), source(event)].join("\n\n");
 }
 export function formatImportant(event: NormalizedEvent, scoring: Scoring, analysis: Analysis, update = false): string {
   const fact = factualText(event, scoring.one_liner) ? sentence(scoring.one_liner, 240) : "";
@@ -45,7 +45,7 @@ export function formatImportant(event: NormalizedEvent, scoring: Scoring, analys
   return [`🚨 ${update ? "Actualización material: " : ""}${sentence(fact, 105) || "Noticia importante"}`,
     `Qué ha ocurrido: ${fact}`, ...(why ? [`Por qué importa (inferencia): ${why}`] : []),
     ...(assets ? [`Impacto posible (hipótesis): ${assets}`] : []),
-    ...(risk ? [`Incertidumbre: ${risk}`] : []), ...(watch ? [`Qué vigilar: ${watch}`] : []), source(event)].join("\n");
+    ...(risk ? [`Incertidumbre: ${risk}`] : []), ...(watch ? [`Qué vigilar: ${watch}`] : []), source(event)].join("\n\n");
 }
 export function formatNewsBatch(items: { event: NormalizedEvent; scoring: Scoring }[]): string {
   const sections = items.map((item) => formatInteresting(item.event, item.scoring));
