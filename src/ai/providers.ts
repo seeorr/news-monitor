@@ -16,6 +16,8 @@ export type RequestResult = {
   result: "success" | "failed" | "uncertain";
   resolvedModel?: string;
   retryAt?: string;
+  /** `model`: la espera aparta solo el modelo de esta reserva, no el proveedor entero. */
+  retryScope?: "model";
 };
 export interface StructuredRequest<T> {
   stage: "scoring" | "analysis";
@@ -32,6 +34,8 @@ interface FreeProvider {
   apiKey: string;
   modelScoring: string;
   modelAnalysis: string;
+  /** Solo Groq: modelo al que pasar ante 429. Cada modelo de Groq tiene su propio cupo diario. */
+  modelFallback?: string | null;
 }
 interface RouterOptions {
   providers: FreeProvider[];
@@ -40,8 +44,11 @@ interface RouterOptions {
   beforeRequest?: (info: RequestInfo) => Promise<string>;
   afterRequest?: (id: string, result: RequestResult) => Promise<void>;
   onFailure?: (provider: FreeProviderName, error: unknown) => void;
-  /** Lectura durable antes de reservar: una espera no consume intento. */
-  getRetryAt?: (provider: FreeProviderName, now: string) => Promise<string | null>;
+  /** Lectura durable antes de reservar: una espera no consume intento. Con `model`,
+   * incluye además las esperas de ese modelo; sin él, solo las del proveedor. */
+  getRetryAt?: (provider: FreeProviderName, now: string, model?: string) => Promise<string | null>;
+  /** Groq pasa al modelo de respaldo porque el principal está limitado. */
+  onModelFallback?: (provider: FreeProviderName, stage: "scoring" | "analysis") => void;
 }
 
 export class FreeLlmError extends Error {
@@ -251,6 +258,16 @@ async function perform<T>(
   }
 }
 
+type Lane = { provider: FreeProvider; model: string; fallback: boolean };
+
+/** Modelo principal de la etapa y, solo en Groq, el de respaldo si es distinto. */
+function laneModels(provider: FreeProvider, stage: "scoring" | "analysis"): { primary: string; fallback: string | null } {
+  const primary = stage === "scoring" ? provider.modelScoring : provider.modelAnalysis;
+  const fallback = provider.name === "groq" && provider.modelFallback && provider.modelFallback !== primary
+    ? provider.modelFallback : null;
+  return { primary, fallback };
+}
+
 /** Crear por ciclo: consulta la espera durable y aparta fallos durante la ejecución. */
 export function createFreeRouter(options: RouterOptions): StructuredGenerate {
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) throw new Error("LLM: timeout inválido");
@@ -261,37 +278,53 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
       throw new Error("LLM: proveedor duplicado o configuración inválida");
     }
     names.add(provider.name);
-    for (const model of [provider.modelScoring, provider.modelAnalysis]) {
+    for (const model of [provider.modelScoring, provider.modelAnalysis, ...(provider.modelFallback ? [provider.modelFallback] : [])]) {
       if (!model.trim() || (provider.name === "openrouter" && model !== "openrouter/free" && !/^[\w.-]+\/[\w.:-]+:free$/.test(model))) {
         throw new Error("LLM: OpenRouter exige openrouter/free o un modelo :free");
       }
     }
   }
   const disabled = new Set<FreeProviderName>();
+  // Groq limita por modelo: un 429 aparta `proveedor:modelo` durante el ciclo, no el proveedor.
+  const limited = new Set<string>();
   const transport = options.fetch ?? globalThis.fetch;
   return async <T>(request: StructuredRequest<T>): Promise<T> => {
     if (!Number.isSafeInteger(request.maxTokens) || request.maxTokens <= 0) throw new Error("LLM: maxTokens inválido");
     const deadline = Date.now() + options.timeoutMs;
     const schema = strictSchema(request.schema);
     const eligible = providers.filter(provider => request.stage === "scoring" || analyzes(provider.name));
-    const available: FreeProvider[] = [];
+    const available: Lane[] = [];
     let cooling = 0;
+    const waiting = async (provider: FreeProvider, model: string, now: string) => {
+      const retryAt = await options.getRetryAt?.(provider.name, now, model);
+      if (!retryAt) return false;
+      if (!z.iso.datetime().safeParse(retryAt).success) throw new Error("invalid_llm_retry_at");
+      return retryAt > now;
+    };
     for (const provider of eligible.filter(provider => !disabled.has(provider.name))) {
       const now = new Date().toISOString();
-      const retryAt = await options.getRetryAt?.(provider.name, now);
-      if (retryAt) {
-        if (!z.iso.datetime().safeParse(retryAt).success) throw new Error("invalid_llm_retry_at");
-        if (retryAt > now) { cooling++; continue; }
+      const { primary, fallback } = laneModels(provider, request.stage);
+      const key = (model: string) => `${provider.name}:${model}`;
+      if (!limited.has(key(primary)) && !await waiting(provider, primary, now)) {
+        available.push({ provider, model: primary, fallback: false });
+        continue;
       }
-      available.push(provider);
+      // La espera del principal vale para el resto del ciclo; así no se relee en cada noticia.
+      limited.add(key(primary));
+      if (fallback && !limited.has(key(fallback)) && !await waiting(provider, fallback, now)) {
+        options.onModelFallback?.(provider.name, request.stage);
+        available.push({ provider, model: fallback, fallback: true });
+        continue;
+      }
+      cooling++;
     }
     let deadlineExceeded = false;
     const attempts = new Map<FreeProviderName, number>();
-    for (const [index, provider] of available.entries()) {
-      if (disabled.has(provider.name)) continue;
+    for (const [index, lane] of available.entries()) {
+      const { provider, model } = lane;
+      if (disabled.has(provider.name) || limited.has(`${provider.name}:${model}`)) continue;
       const remaining = deadline - Date.now();
       if (remaining <= 0) { deadlineExceeded = true; break; }
-      const model = request.stage === "scoring" ? provider.modelScoring : provider.modelAnalysis;
       const maxTokens = Math.min(8192, request.maxTokens);
       const body = JSON.stringify({
         model,
@@ -317,12 +350,24 @@ export function createFreeRouter(options: RouterOptions): StructuredGenerate {
         break;
       }
       const outcome = await perform(transport, provider, body, request.schema, Math.max(1, Math.floor(timeLeft / (available.length - index))));
-      if ("error" in outcome && outcome.disable) disabled.add(provider.name);
+      // Groq publica sus límites por modelo: un 429 del principal no dice nada del de respaldo.
+      // 401/403/404 siguen apartando el proveedor entero, porque la clave es la misma.
+      const modelLimit = "error" in outcome && provider.name === "groq" && outcome.error.status === 429;
+      if (modelLimit) limited.add(`${provider.name}:${model}`);
+      else if ("error" in outcome && outcome.disable) disabled.add(provider.name);
       // También se contabilizan respuestas rechazadas por el esquema. Un fallo de BD se propaga.
-      if (id !== undefined) await options.afterRequest?.(id, outcome.usage);
+      if (id !== undefined) await options.afterRequest?.(id, modelLimit ? { ...outcome.usage, retryScope: "model" } : outcome.usage);
       if ("value" in outcome) return outcome.value;
       options.onFailure?.(provider.name, outcome.error);
-      if (outcome.retry && attempts.get(provider.name) === 1) available.splice(index + 1, 0, provider);
+      if (modelLimit) {
+        const { fallback } = laneModels(provider, request.stage);
+        if (!lane.fallback && fallback && !limited.has(`${provider.name}:${fallback}`)) {
+          // Misma petición, sin esperar al ciclo siguiente: el respaldo tiene cupo propio.
+          options.onModelFallback?.(provider.name, request.stage);
+          available.splice(index + 1, 0, { provider, model: fallback, fallback: true });
+        } else disabled.add(provider.name); // Sin modelo libre: indisponible, la noticia se reintenta.
+      }
+      if (outcome.retry && attempts.get(provider.name) === 1) available.splice(index + 1, 0, lane);
     }
     // Sin elegibles para la etapa es indisponibilidad, no salida inválida: la noticia se reintenta.
     if (deadlineExceeded || cooling > 0 || eligible.every(provider => disabled.has(provider.name))) {

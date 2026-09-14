@@ -7,6 +7,11 @@ on:
         type: choice
         options: [groq, openrouter]
         default: groq
+      groq_model:
+        description: Modelo Groq que se prueba (solo con provider=groq)
+        type: choice
+        options: [openai/gpt-oss-120b, openai/gpt-oss-20b]
+        default: openai/gpt-oss-120b
   push:
     branches: [codex/activar-llm-gratuitos, codex/salud-cuotas-durables]
 permissions:
@@ -29,5 +34,9 @@ jobs:
           # Un solo proveedor por ejecución: así el resultado acredita a ese, no al respaldo.
           LLM_PROVIDERS: ${{ inputs.provider || 'groq' }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || secrets.GROQ }}
+          # Un único modelo Groq y sin respaldo: el resultado acredita a ese modelo.
+          GROQ_MODEL_SCORING: ${{ inputs.groq_model || 'openai/gpt-oss-120b' }}
+          GROQ_MODEL_ANALYSIS: ${{ inputs.groq_model || 'openai/gpt-oss-120b' }}
+          GROQ_MODEL_FALLBACK: none
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}

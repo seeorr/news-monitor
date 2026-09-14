@@ -120,6 +120,16 @@ La implementación:
   automáticamente; no se borran reservas ni se reinician cuotas.
 - Ante JSON, esquema, truncamiento o rechazo de contenido, prueba el respaldo.
   Una respuesta no válida nunca se convierte en una puntuación ficticia.
+- **Groq tiene respaldo de modelo** desde el 14-09. Sus límites gratuitos van
+  por modelo: `gpt-oss-120b` y `gpt-oss-20b` tienen cada uno 1.000 peticiones y
+  200.000 tokens diarios. Un 429 del principal pausa **solo ese modelo**
+  (`retryScope: "model"` en la reserva) y la misma petición pasa al de respaldo,
+  `GROQ_MODEL_FALLBACK`, que por defecto es `openai/gpt-oss-20b`; `none` lo apaga.
+  Mientras dura la espera, los ciclos siguientes van directos al 20b y vuelven
+  al 120b al vencer. Si los dos están limitados, Groq queda indisponible y la
+  noticia se reintenta. 401, 403 y 404 siguen pausando Groq entero, porque la
+  clave es la misma. Log: `LLM_MODEL_FALLBACK`. Capacidad con los dos modelos:
+  unas 380 llamadas al día frente a ~190 con uno solo.
 - Si Groq devuelve HTTP 400 con el código exacto `json_validate_failed`,
   permite un único reintento con nueva reserva y dentro del mismo plazo.
   Este fallo de generación no activa la pausa de seis horas.

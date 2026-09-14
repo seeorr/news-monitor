@@ -15,14 +15,15 @@ const ok = () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop"
 function router(store: ControlStore, transport: typeof fetch) {
   let id = "";
   return createFreeRouter({ providers, timeoutMs: 1000, fetch: transport,
-    getRetryAt: (provider, now) => store.providerRetryAt!(provider, now),
+    getRetryAt: (provider, now, model) => store.providerRetryAt!(provider, now, model),
     beforeRequest: async (info) => {
       id = crypto.randomUUID();
       await store.reserve({ id, resource: "ai", units: 1, now: new Date().toISOString(), dayLimit: 180 });
       await store.recordAi(id, { ...info, inputTokens: null, outputTokens: null, costUsd: null, result: "uncertain" });
       return id;
     },
-    afterRequest: async (reservation, result) => store.recordAi(reservation, { provider: "groq", model: "test", stage: "scoring", promptVersion: "test", attempt: 1, costUsd: null, ...result }),
+    // El modelo real de la reserva: una espera de modelo se busca por ese nombre.
+    afterRequest: async (reservation, result) => store.recordAi(reservation, { provider: "groq", model: "openai/gpt-oss-120b", stage: "scoring", promptVersion: "test", attempt: 1, costUsd: null, ...result }),
   });
 }
 afterEach(() => vi.useRealTimers());

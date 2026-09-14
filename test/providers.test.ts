@@ -85,7 +85,9 @@ describe("router LLM gratuito: HTTP real simulado solo en fetch", () => {
       "https://openrouter.ai/api/v1/chat/completions",
       "https://openrouter.ai/api/v1/chat/completions",
     ]);
-    expect(afterRequest.mock.calls[0]).toEqual(["reserved", { inputTokens: null, outputTokens: null, result: "failed", retryAt: expect.any(String) }]);
+    // Un 429 de Groq pausa solo ese modelo (sus límites son por modelo); el resto, el proveedor.
+    expect(afterRequest.mock.calls[0]).toEqual(["reserved", { inputTokens: null, outputTokens: null, result: "failed", retryAt: expect.any(String),
+      ...(status === 429 ? { retryScope: "model" } : {}) }]);
     expect(String(onFailure.mock.calls[0]?.[1])).not.toContain("SECRET");
     expect(onFailure.mock.calls[0]?.[1]).toMatchObject({ code: "LLM_REQUEST_FAILED", status });
   });

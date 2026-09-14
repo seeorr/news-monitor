@@ -15,6 +15,8 @@ export interface Config {
   openrouterApiKey?: string | null;
   groqModelScoring?: string;
   groqModelAnalysis?: string;
+  /** Modelo Groq ante 429 del principal; `null` lo apaga. */
+  groqModelFallback?: string | null;
   openrouterModel?: string;
   fredApiKey: string | null;
   telegramBotToken: string | null;
@@ -116,6 +118,7 @@ export function loadConfig(): Config {
     openrouterApiKey: env("OPENROUTER_API_KEY"),
     groqModelScoring: groqModel("GROQ_MODEL_SCORING"),
     groqModelAnalysis: groqModel("GROQ_MODEL_ANALYSIS"),
+    groqModelFallback: groqFallbackModel(),
     openrouterModel: freeOpenrouterModel(),
     fredApiKey: env("FRED_API_KEY"),
     telegramBotToken: env("TELEGRAM_BOT_TOKEN"),
@@ -178,6 +181,13 @@ function groqModel(name: string): string {
   if (!["openai/gpt-oss-120b", "openai/gpt-oss-20b"].includes(value)) throw new Error("invalid_groq_model");
   return value;
 }
+/** Respaldo ante 429: cada modelo de Groq tiene su propio cupo diario. `none` lo apaga. */
+function groqFallbackModel(): string | null {
+  const value = env("GROQ_MODEL_FALLBACK") ?? "openai/gpt-oss-20b";
+  if (value === "none") return null;
+  if (!["openai/gpt-oss-120b", "openai/gpt-oss-20b"].includes(value)) throw new Error("invalid_groq_model");
+  return value;
+}
 function freeOpenrouterModel(): string {
   const value = env("OPENROUTER_MODEL") ?? "openrouter/free";
   if (value !== "openrouter/free" && !/^[\w.-]+\/[\w.:-]+:free$/.test(value)) throw new Error("invalid_openrouter_free_model");
@@ -185,12 +195,13 @@ function freeOpenrouterModel(): string {
 }
 
 export function configuredFreeProviders(c: Config): Array<{
-  name: "groq" | "openrouter"; apiKey: string; modelScoring: string; modelAnalysis: string;
+  name: "groq" | "openrouter"; apiKey: string; modelScoring: string; modelAnalysis: string; modelFallback?: string | null;
 }> {
   const result: ReturnType<typeof configuredFreeProviders> = [];
   for (const name of c.llmProviders ?? []) {
     if (name === "groq" && c.groqApiKey) result.push({ name, apiKey: c.groqApiKey,
-      modelScoring: c.groqModelScoring ?? "openai/gpt-oss-120b", modelAnalysis: c.groqModelAnalysis ?? "openai/gpt-oss-120b" });
+      modelScoring: c.groqModelScoring ?? "openai/gpt-oss-120b", modelAnalysis: c.groqModelAnalysis ?? "openai/gpt-oss-120b",
+      modelFallback: c.groqModelFallback === undefined ? "openai/gpt-oss-20b" : c.groqModelFallback });
     if (name === "openrouter" && c.openrouterApiKey) result.push({ name, apiKey: c.openrouterApiKey,
       modelScoring: c.openrouterModel ?? "openrouter/free", modelAnalysis: c.openrouterModel ?? "openrouter/free" });
   }

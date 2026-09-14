@@ -30,6 +30,8 @@ const CODES = [
   // acuse de Neon y la entrega se queda en `sending`, que nadie libera.
   "ALERT_BLOCKED", "ALERT_REJECTED", "ALERT_UNCERTAIN", "ALERT_RECORD_FAILED",
   "EVENT_FAILED", "CYCLE_END", "LLM_PROVIDER_FAILED",
+  // Groq pasa a su modelo de respaldo porque el principal está limitado (429).
+  "LLM_MODEL_FALLBACK",
   // Cupo diario de IA agotado: el ciclo no falla y avisa una vez al día. `sent` dice si salió.
   "AI_BUDGET_NOTICE",
   // Copia al grupo compartido. Dicen si salió o si Telegram la rechazó. No dicen

@@ -163,10 +163,11 @@ async function main(): Promise<number> {
     };
     if (freeProviders.length) deps.generate = createFreeRouter({ providers: freeProviders,
       timeoutMs: profile === "fast" ? 20_000 : 60_000,
-      getRetryAt: (provider, now) => control.providerRetryAt?.(provider, now) ?? Promise.resolve(null),
+      getRetryAt: (provider, now, model) => control.providerRetryAt?.(provider, now, model) ?? Promise.resolve(null),
       beforeRequest: (info) => deps.beforeRequest!(info),
       afterRequest: (id, result) => deps.afterRequest!(id, result),
       onFailure: (provider, error) => log("LLM_PROVIDER_FAILED", { provider, error }),
+      onModelFallback: (provider, stage) => log("LLM_MODEL_FALLBACK", { provider, stage }),
     });
   }
   let profundos = 0, deepAttempts = 0;

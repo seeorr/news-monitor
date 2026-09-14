@@ -120,6 +120,8 @@ jobs:
           LLM_PROVIDERS: ${{ vars.LLM_PROVIDERS }}
           GROQ_MODEL_SCORING: ${{ vars.GROQ_MODEL_SCORING }}
           GROQ_MODEL_ANALYSIS: ${{ vars.GROQ_MODEL_ANALYSIS }}
+          # Vacío = openai/gpt-oss-20b ante 429 del principal; `none` lo apaga.
+          GROQ_MODEL_FALLBACK: ${{ vars.GROQ_MODEL_FALLBACK }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
