@@ -3,8 +3,12 @@
 /**
  * Entrar y salir. Son las dos únicas escrituras de cookie de la aplicación.
  */
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { almacenNeon } from "../../src/db/intentos-acceso.ts";
+import { cliente } from "../../src/db/lectura.ts";
+import { POLITICA_INTENTOS, claveCliente, ipDeCabeceras } from "../_lib/limite.ts";
+import { urlBaseDeDatos } from "../_lib/servidor.ts";
 import {
   COOKIE_SESION,
   MENSAJE_ACCESO_DENEGADO,
@@ -48,7 +52,25 @@ export async function entrar(_previo: EstadoAcceso, datos: FormData): Promise<Es
   // de la configuración del `matcher`.
   if (!secretoUtilizable(secreto)) return DENEGADO;
 
-  if (!(await contrasenaValida(String(datos.get("clave") ?? ""), secreto))) return DENEGADO;
+  // Límite de intentos. Sin base no hay dónde contar, y sin cuenta la puerta
+  // vuelve a depender solo del tamaño del secreto: se falla cerrado, igual que
+  // sin secreto. Con Neon caído, lo mismo; el dashboard tampoco podría enseñar nada.
+  const url = urlBaseDeDatos();
+  if (!url) return DENEGADO;
+  const intentos = almacenNeon(cliente(url), POLITICA_INTENTOS);
+  const clave = await claveCliente(ipDeCabeceras(await headers()), secreto);
+  try {
+    // Bloqueada: no se mira la clave. Mirarla diría, por el tiempo o por el
+    // resultado, si la de este intento era buena, y alargaría nada.
+    if (await intentos.bloqueadoHasta(clave, new Date())) return DENEGADO;
+    if (!(await contrasenaValida(String(datos.get("clave") ?? ""), secreto))) {
+      await intentos.registrarFallo(clave, new Date());
+      return DENEGADO;
+    }
+    await intentos.limpiar(clave);
+  } catch {
+    return DENEGADO;
+  }
 
   const { valor, expira } = await emitirSesion(secreto);
   // `expires` acompaña a la caducidad que ya va firmada dentro del valor: el

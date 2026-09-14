@@ -302,7 +302,10 @@ Qué hay que hacer a mano antes de desplegar:
    `DASHBOARD_PASSWORD`, marcada para **Production, Preview y Development**. Los
    despliegues de vista previa tienen su propia URL y enseñan lo mismo.
 3. Ponerla también en el `.env` local, o `npm run dashboard` responderá 503.
-4. Comprobar tras el primer despliegue que `/` redirige a `/acceso` estando sin
+4. Aplicar las migraciones (`npm run db:migrate`). El límite de intentos necesita
+   la tabla `dashboard_login_attempts`, y **sin ella no se entra**: sin cuenta,
+   la puerta volvería a depender solo del tamaño del secreto.
+5. Comprobar tras el primer despliegue que `/` redirige a `/acceso` estando sin
    sesión. Es una comprobación de diez segundos y es la que de verdad cierra esto.
 
 Cómo funciona, en cuatro líneas:
@@ -321,6 +324,12 @@ Cómo funciona, en cuatro líneas:
   la ruta de su página, así que el proxy lo bloquea *y* la acción lo vuelve a
   mirar. No es duplicación: el proxy es la puerta y la comprobación de dentro es
   lo que impide rodearla.
+- **Límite de intentos por IP.** 5 fallos en 15 minutos bloquean esa IP 15
+  minutos; la clave buena tampoco entra mientras dura, y el mensaje no cambia.
+  Se cuenta en Neon (`dashboard_login_attempts`), porque en Vercel cada petición
+  puede caer en otra instancia. Se guarda un HMAC de la IP, nunca la IP. Solo esa
+  IP: un tope global dejaría que cualquiera cerrara el acceso a su dueño. Sin
+  base, o con Neon caído, no se entra.
 
 **Cerrar sesión** borra la cookie del navegador. Lo que no hace —porque no hay
 dónde guardarlo gratis— es invalidar una copia que alguien se hubiera llevado

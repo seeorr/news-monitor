@@ -31,8 +31,9 @@ export const RUTA_ACCESO = "/acceso";
 
 /**
  * Longitud mínima del secreto. No es burocracia: la pantalla de acceso está en
- * una URL pública y no hay limitador de intentos gratuito en Hobby, así que lo
- * único que separa el dashboard de una fuerza bruta es el tamaño del secreto.
+ * una URL pública. Desde el 14-09 hay además límite de intentos por IP
+ * (`limite.ts`, contado en Neon), pero una IP nueva vuelve a tener sus intentos:
+ * contra una fuerza bruta repartida sigue mandando el tamaño del secreto.
  * Por debajo de esto el sistema se considera **sin configurar** y no se sirve,
  * que es preferible a servirse con una clave de cinco letras.
  */

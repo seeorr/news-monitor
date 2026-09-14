@@ -1,9 +1,17 @@
 -- Solo preparación local: decisiones independientes de la recepción en Telegram.
 -- Ampliación aditiva para instalaciones que ya tenían la primera cola.
+--
+-- La lista es la VIGENTE, igual que en 20260911_exclusion_al_activar.sql, y no la
+-- de su dia. El migrador reejecuta todos los archivos en orden: con la lista
+-- antigua, este archivo borraba el check y fallaba al recrearlo en cuanto habia
+-- filas `excluded_at_activation`, y como cada sentencia va por separado el
+-- borrado se quedaba hecho. Paso el 14-09 en produccion. Si se anade un motivo,
+-- se anade en los dos archivos; verificar-migraciones-reejecutables.ts lo comprueba.
 alter table capture_queue drop constraint if exists capture_queue_reason_check;
 alter table capture_queue add constraint capture_queue_reason_check check (reason in (
   'stale_at_capture','rules_no_match','rules_low_signal','duplicate_story','legacy_processed',
-  'scoring_failed','processing_expired','analysis_failed','delivery_failed','budget_exhausted','pending_expired'
+  'scoring_failed','processing_expired','analysis_failed','delivery_failed','budget_exhausted','pending_expired',
+  'excluded_at_activation'
 ));
 create table if not exists news_decisions (
   event_id text primary key, decision jsonb not null,

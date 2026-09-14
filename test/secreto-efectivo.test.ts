@@ -46,7 +46,14 @@ vi.mock("next/headers", () => ({
       if (nombre === COOKIE_SESION) tarro.valor = null;
     },
   }),
+  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.7" }),
 }));
+
+// El login cuenta intentos en Neon; aquí basta la misma semántica en memoria.
+vi.mock("../src/db/intentos-acceso.ts", async (original) => {
+  const real = await original<typeof import("../src/db/intentos-acceso.ts")>();
+  return { ...real, almacenNeon: (_sql: unknown, politica: import("../src/db/intentos-acceso.ts").PoliticaIntentos) => real.almacenEnMemoria(politica) };
+});
 
 vi.mock("next/navigation", () => ({
   redirect: (destino: string) => {
@@ -80,10 +87,12 @@ async function entrarCon(clave: string): Promise<string | null> {
 beforeEach(() => {
   tarro.valor = null;
   delete process.env[VARIABLE_SECRETO];
+  process.env["DATABASE_URL"] = "postgres://nadie@ninguna-parte/db";
 });
 
 afterEach(() => {
   delete process.env[VARIABLE_SECRETO];
+  delete process.env["DATABASE_URL"];
 });
 
 describe("el secreto que llega con un salto de línea pegado", () => {
