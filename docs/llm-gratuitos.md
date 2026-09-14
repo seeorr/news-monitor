@@ -1,8 +1,14 @@
 # LLM gratuitos para News Monitor
 
-Revisión: 14-09-2026, 11:20 Madrid. Groq activado en producción en `73af838`.
+Revisión: 14-09-2026, 12:50 Madrid. Groq activado en producción en `73af838`.
 El secreto está guardado como `GROQ`; el workflow lo admite como alias de
-`GROQ_API_KEY`. OpenRouter sigue sin clave y no participa todavía.
+`GROQ_API_KEY`.
+
+OpenRouter tiene clave desde el 14-09 y **solo puntúa** (`babfef1`), sin
+`data_collection=deny` (`75e0781`). Verificado en real con
+`verify-llm` y `provider=openrouter`:
+[run 34834918100](https://github.com/seeorr/news-monitor/actions/runs/34834918100).
+Detalle y motivos en «Límites y comportamiento ante fallos».
 
 Salud y pausas durables publicadas hasta `e6cfe12`. La
 [verificación final](https://github.com/seeorr/news-monitor/actions/runs/34827079199)
