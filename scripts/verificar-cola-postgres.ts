@@ -49,9 +49,18 @@ async function main(): Promise<void> {
   };
   const queue = neonQueueStore("unused-local-only", sql);
   try {
-    const migration = await readFile(join(repo, "neon/migrations/20260910_capture_queue.sql"), "utf8");
-    for (const statement of splitStatements(migration)) await db.query(statement);
-    for (const statement of splitStatements(migration)) await db.query(statement);
+    // Todas las migraciones que dan forma a `capture_queue`, no solo la primera. Con
+    // solo la creación, este script dejó de pasar el 11-09 —el código ya usaba
+    // `fingerprint`, que añade revisiones_de_fuente— y nadie lo vio hasta que el
+    // 14-09 empezó a correr en CI. Dos pasadas: siguen teniendo que ser idempotentes.
+    const migraciones = ["20260910_capture_queue.sql", "20260910_news_control.sql",
+      "20260911_exclusion_al_activar.sql", "20260911_revisiones_de_fuente.sql"];
+    for (let pasada = 0; pasada < 2; pasada++) {
+      for (const archivo of migraciones) {
+        const migration = await readFile(join(repo, "neon/migrations", archivo), "utf8");
+        for (const statement of splitStatements(migration)) await db.query(statement);
+      }
+    }
     checks.push("migration_idempotent");
 
     // Una tabla de entrega testigo, ajena a la cola: caducar processing no toca sending.
