@@ -1,8 +1,15 @@
 # LLM gratuitos para News Monitor
 
-Revisión: 14-09-2026, 11:00 Madrid. Groq activado en producción en `73af838`.
+Revisión: 14-09-2026, 11:20 Madrid. Groq activado en producción en `73af838`.
 El secreto está guardado como `GROQ`; el workflow lo admite como alias de
 `GROQ_API_KEY`. OpenRouter sigue sin clave y no participa todavía.
+
+Salud y pausas durables publicadas hasta `e6cfe12`. La
+[verificación final](https://github.com/seeorr/news-monitor/actions/runs/34827079199)
+pasó typecheck, 847 tests y dos llamadas reales correctas. El
+[ciclo publicado](https://github.com/seeorr/news-monitor/actions/runs/34827255333)
+terminó sin fallos. A las 11:19 Madrid quedan 68 noticias pendientes y 43 de
+180 intentos disponibles. La cola antigua sigue en alerta.
 
 La [prueba real aislada](https://github.com/seeorr/news-monitor/actions/runs/34825380786)
 pasó con dos peticiones: scoring 930/145 tokens y análisis 591/354 tokens de
@@ -62,8 +69,8 @@ en exclusiva. Nunca entra como respaldo automático de los gratuitos.
    claves. Sin claves devuelve `LLM_CHECK_MISSING_KEYS` y salida 1.
 2. Con las claves listas, ejecutar `npm run verify:llm -- --live`. Usa un
    comunicado público histórico del BCE. Puntúa y analiza sin Neon, watchlist
-   ni Telegram. Consume cuota gratuita: normalmente dos peticiones, hasta
-   seis si hay respaldos y reintento antifabricación.
+   ni Telegram. Consume cuota gratuita: normalmente dos peticiones; los
+   respaldos y reintentos también consumen cuota.
 3. Exigir `LLM_CHECK_OK`; después revisar calidad sobre una muestra de noticias
    públicas. La prueba comprueba transporte, esquema y cifras, no la calidad
    editorial. Los tests HTTP simulados tampoco acreditan cuota ni disponibilidad.
@@ -107,6 +114,10 @@ La implementación:
   automáticamente; no se borran reservas ni se reinician cuotas.
 - Ante JSON, esquema, truncamiento o rechazo de contenido, prueba el respaldo.
   Una respuesta no válida nunca se convierte en una puntuación ficticia.
+- Si Groq devuelve HTTP 400 con el código exacto `json_validate_failed`,
+  permite un único reintento con nueva reserva y dentro del mismo plazo.
+  Este fallo de generación no activa la pausa de seis horas. Otros errores
+  400 mantienen la pausa. No se registra el cuerpo del error.
 - Reserva cada intento antes de hacer red, también respaldos y reintentos.
   Un error de cuota interna o persistencia no provoca más peticiones.
 - Si no queda ningún proveedor disponible, conserva la noticia para reintento

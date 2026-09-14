@@ -183,7 +183,7 @@ async function perform<T>(
         const failure = z.object({ error: z.object({ code: z.literal("json_validate_failed") }) }).safeParse(raw);
         if (failure.success) return { error: new ProviderFailure("output"), disable: false, retry: true, usage: emptyUsage("failed") };
       }
-      // No leemos errores externos: pueden incluir el prompt o credenciales reflejadas.
+      // No registramos cuerpos externos: pueden incluir prompt o credenciales reflejadas.
       void response.body?.cancel().catch(() => {});
       return { error: new ProviderFailure("http", response.status), disable: true,
         usage: { ...emptyUsage("failed"), retryAt: providerRetryAt(response.status, response.headers.get("retry-after")) } };
