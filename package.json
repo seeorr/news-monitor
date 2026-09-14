@@ -21,6 +21,8 @@
     "verify:llm": "tsx scripts/verificar-llm.ts",
     "verify:queue:postgres": "tsx scripts/verificar-cola-postgres.ts",
     "verify:control:postgres": "tsx scripts/verificar-control-postgres.ts",
+    "verify:migrations:postgres": "tsx scripts/verificar-migraciones-reejecutables.ts",
+    "verify:access:postgres": "tsx scripts/verificar-acceso-postgres.ts",
     "evaluate:news": "tsx scripts/evaluar-noticias.ts",
     "audit:news": "tsx scripts/auditar-noticias.ts",
     "dashboard": "next dev",

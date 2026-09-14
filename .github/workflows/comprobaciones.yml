@@ -1,0 +1,68 @@
+# Las comprobaciones que se hacen solas en cada cambio.
+#
+# Hasta el 14-09 ningún workflow ejecutaba ni los tests en un push a main: solo
+# verify-llm.yml, a mano. Y las verificaciones con PostgreSQL real no las
+# ejecutaba nadie salvo que alguien se acordara. Ese día una migración antigua,
+# al reejecutarse, borró un check en producción; los 880 tests pasaban y lo
+# habría cazado `verify:migrations:postgres` antes de tocar Neon.
+#
+# Sin secretos y con permisos de solo lectura: no toca Neon, Telegram, modelos
+# ni Cloudflare. PGlite es PostgreSQL compilado a WASM, sin servicio ni red
+# después de descargarlo. En un repositorio público los minutos son gratis.
+name: Comprobaciones
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama deja obsoleta la comprobación anterior.
+concurrency:
+  group: comprobaciones-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tipos y tests
+        run: npm run check
+
+      # Mismo procedimiento que documenta scripts/verificar-cola-postgres.ts, con la
+      # versión fijada: una PGlite distinta podría pasar lo que la de local no pasa.
+      - name: Preparar PostgreSQL local (PGlite 0.5.8)
+        run: |
+          mkdir -p .cache/pglite
+          npm pack @electric-sql/pglite@0.5.8 --ignore-scripts --pack-destination .cache --cache .cache/npm
+          tar -xf .cache/electric-sql-pglite-0.5.8.tgz -C .cache/pglite
+
+      - name: Migraciones reejecutables sin cambiar ninguna restricción
+        run: npm run verify:migrations:postgres
+
+      - name: Cola
+        run: npm run verify:queue:postgres
+
+      - name: Control y cuotas
+        run: npm run verify:control:postgres
+
+      - name: Cadencia y salud
+        run: npm run verify:cadence:postgres
+
+      - name: Límite de intentos del dashboard
+        run: npm run verify:access:postgres
