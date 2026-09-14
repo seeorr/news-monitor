@@ -260,10 +260,14 @@ async function perform<T>(
 
 type Lane = { provider: FreeProvider; model: string; fallback: boolean };
 
-/** Modelo principal de la etapa y, solo en Groq, el de respaldo si es distinto. */
+/**
+ * Modelo principal de la etapa y, solo en Groq y solo al puntuar, el de respaldo.
+ * El análisis no cae al 20b: en la prueba real del 14-09 puntuó bien, pero el análisis
+ * (esquema más complejo) devolvió `output_parse_failed`. Son pocos al día y esperan al 120b.
+ */
 function laneModels(provider: FreeProvider, stage: "scoring" | "analysis"): { primary: string; fallback: string | null } {
   const primary = stage === "scoring" ? provider.modelScoring : provider.modelAnalysis;
-  const fallback = provider.name === "groq" && provider.modelFallback && provider.modelFallback !== primary
+  const fallback = provider.name === "groq" && stage === "scoring" && provider.modelFallback && provider.modelFallback !== primary
     ? provider.modelFallback : null;
   return { primary, fallback };
 }

@@ -123,8 +123,11 @@ La implementación:
 - **Groq tiene respaldo de modelo** desde el 14-09. Sus límites gratuitos van
   por modelo: `gpt-oss-120b` y `gpt-oss-20b` tienen cada uno 1.000 peticiones y
   200.000 tokens diarios. Un 429 del principal pausa **solo ese modelo**
-  (`retryScope: "model"` en la reserva) y la misma petición pasa al de respaldo,
-  `GROQ_MODEL_FALLBACK`, que por defecto es `openai/gpt-oss-20b`; `none` lo apaga.
+  (`retryScope: "model"` en la reserva) y, **al puntuar**, la misma petición pasa
+  al de respaldo, `GROQ_MODEL_FALLBACK`, que por defecto es `openai/gpt-oss-20b`;
+  `none` lo apaga. **El análisis no usa el 20b**: en la prueba real puntuó bien,
+  pero el análisis devolvió `output_parse_failed`. Con el 120b limitado, el
+  análisis espera, como con OpenRouter. Son 2-4 análisis al día.
   Mientras dura la espera, los ciclos siguientes van directos al 20b y vuelven
   al 120b al vencer. Si los dos están limitados, Groq queda indisponible y la
   noticia se reintenta. 401, 403 y 404 siguen pausando Groq entero, porque la

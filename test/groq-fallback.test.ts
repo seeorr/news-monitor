@@ -85,10 +85,13 @@ describe("respaldo de modelo en Groq ante 429", () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
-  it("el análisis también cae al 20b", async () => {
+  it("el análisis no cae al 20b (output_parse_failed en la prueba real): espera al 120b", async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(limited()).mockImplementation(async () => ok());
-    await expect(cycle(memoryControlStore(), transport)({ ...request, stage: "analysis" })).resolves.toEqual({ ok: true });
-    expect(transport.mock.calls.map(modelOf)).toEqual([BIG, SMALL]);
+    const onModelFallback = vi.fn();
+    await expect(cycle(memoryControlStore(), transport, [groq], onModelFallback)({ ...request, stage: "analysis" }))
+      .rejects.toMatchObject({ code: "LLM_UNAVAILABLE" });
+    expect(transport.mock.calls.map(modelOf)).toEqual([BIG]);
+    expect(onModelFallback).not.toHaveBeenCalled();
   });
 
   it("Neon filtra la espera de modelo por su nombre, con parámetros", async () => {

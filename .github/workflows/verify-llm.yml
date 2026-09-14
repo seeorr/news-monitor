@@ -34,9 +34,10 @@ jobs:
           # Un solo proveedor por ejecución: así el resultado acredita a ese, no al respaldo.
           LLM_PROVIDERS: ${{ inputs.provider || 'groq' }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || secrets.GROQ }}
-          # Un único modelo Groq y sin respaldo: el resultado acredita a ese modelo.
+          # Sin respaldo: la puntuación acredita al modelo elegido. El análisis va siempre
+          # con 120b, porque el 20b no analiza (output_parse_failed en la prueba del 14-09).
           GROQ_MODEL_SCORING: ${{ inputs.groq_model || 'openai/gpt-oss-120b' }}
-          GROQ_MODEL_ANALYSIS: ${{ inputs.groq_model || 'openai/gpt-oss-120b' }}
+          GROQ_MODEL_ANALYSIS: openai/gpt-oss-120b
           GROQ_MODEL_FALLBACK: none
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
