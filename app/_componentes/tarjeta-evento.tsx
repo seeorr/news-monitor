@@ -21,6 +21,18 @@ import {
 } from "./insignias.tsx";
 import { SIN_CONSENSO, cifras, fechaYHora, observado, puntos } from "../_lib/formato.ts";
 import type { AnalisisProfundo, FilaEvento } from "../../src/db/lectura.ts";
+import { factualText, prosaDelAnalisis, supportedAssets } from "../../src/notify/news-formats.ts";
+
+/**
+ * En lugar de un texto guardado que cita una cifra que no está en la fuente. No se
+ * borra nada de la base: se deja de enseñar, con el mismo control que Telegram.
+ * Afecta sobre todo a lo guardado antes del 14-09, cuando al guardar se aplicaba
+ * un control más permisivo.
+ */
+export const ANALISIS_RETIRADO =
+  "Análisis no mostrado: cita una cifra que no está en la fuente. Lo verificable es el titular y la fuente.";
+export const RESUMEN_RETIRADO =
+  "Resumen no mostrado: cita una cifra que no está en la fuente. Lee el titular y la fuente.";
 
 export function TarjetaEvento({
   evento,
@@ -119,7 +131,11 @@ function Detalle({ evento }: { evento: FilaEvento }) {
         septiembre lo perdieron al formatearlo—, así que el componente entero
         desaparece en vez de dejar cinco titulillos sin nada debajo.
       */}
-      {evento.analysis ? <Analisis analisis={evento.analysis} /> : null}
+      {evento.analysis ? (
+        factualText(evento, prosaDelAnalisis(evento.analysis))
+          ? <Analisis analisis={evento.analysis} evento={evento} />
+          : <p className="mt-3 text-meta text-txt-3">{ANALISIS_RETIRADO}</p>
+      ) : null}
 
       {/*
         `alerts.body` se sigue enseñando tal cual, en preformateado, y **debajo**
@@ -134,10 +150,12 @@ function Detalle({ evento }: { evento: FilaEvento }) {
           <div className="cuerpo-alerta">{evento.body}</div>
         </div>
       ) : evento.one_liner ? (
-        <p className="mt-3 text-secundario">
-          <span className="text-txt-3">Resumen del scoring: </span>
-          {evento.one_liner}
-        </p>
+        factualText(evento, evento.one_liner) ? (
+          <p className="mt-3 text-secundario">
+            <span className="text-txt-3">Resumen del scoring: </span>
+            {evento.one_liner}
+          </p>
+        ) : <p className="mt-3 text-meta text-txt-3">{RESUMEN_RETIRADO}</p>
       ) : null}
 
       {evento.source_url ? (
@@ -166,9 +184,11 @@ function Detalle({ evento }: { evento: FilaEvento }) {
  * Van encima de `alerts.body` y no en su lugar. Esto es la lectura del evento;
  * `body` es el registro de lo que se envió, y los dos son ciertos.
  */
-function Analisis({ analisis }: { analisis: AnalisisProfundo }) {
+function Analisis({ analisis, evento }: { analisis: AnalisisProfundo; evento: FilaEvento }) {
   const porque = analisis.why_it_matters.trim();
-  const activos = analisis.affected_assets.filter((a) => a.symbol.trim() !== "");
+  // Solo símbolos que están en la fuente, como en Telegram: lo guardado antes del
+  // 14-09 no pasaba por este filtro.
+  const activos = supportedAssets(evento, analisis.affected_assets.filter((a) => a.symbol.trim() !== ""));
   const catalizadores = puntos(analisis.catalysts);
   const riesgos = puntos(analisis.risks);
   const vigilar = puntos(analisis.what_to_watch);

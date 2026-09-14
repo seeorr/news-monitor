@@ -14,9 +14,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { checkFabrication, extractNumbers } from "../lib/fabrication.ts";
+import { extractNumbers } from "../lib/fabrication.ts";
 import type { NormalizedEvent } from "../schema/event.ts";
-import { factualText } from "../notify/news-formats.ts";
+import { factualText, prosaDelAnalisis, supportedAssets, unsupportedNumbers } from "../notify/news-formats.ts";
 import type { StructuredGenerate, RequestInfo, RequestResult } from "./providers.ts";
 
 export const Scoring = z.object({
@@ -297,14 +297,16 @@ export async function analyzeEvent(event: NormalizedEvent, deps: CascadeDeps): P
     const parsed = res.parsed_output;
     if (!parsed) throw new Error(`Analisis sin salida valida para ${event.id}`);
 
-    // El control anti-fabricación corre sobre la prosa, no sobre los campos
-    // estructurados: es ahí donde un modelo se inventa un "subió un 4 %".
-    const prose = [parsed.why_it_matters, ...parsed.catalysts, ...parsed.risks].join(" ");
-    const check = checkFabrication(prose, allowedNumbers(event));
-    if (check.ok) return parsed;
+    // El mismo control estricto que Telegram, sobre toda la prosa —también
+    // what_to_watch— y ANTES de guardar: lo que se persiste lo enseña el dashboard.
+    // Hasta el 14-09 aquí iba checkFabrication, que admite números «estructurales»
+    // (3, 12, 100…) y ratio↔porcentaje, y no miraba what_to_watch: Telegram
+    // rechazaba al formatear lo que la base ya había guardado.
+    const sinRespaldo = unsupportedNumbers(event, prosaDelAnalisis(parsed));
+    if (sinRespaldo.length === 0) return { ...parsed, affected_assets: supportedAssets(event, parsed.affected_assets) };
 
-    ultimas = check.violations;
-    deps.onFabrication?.(intento, check.violations);
+    ultimas = sinRespaldo.map((n) => `la cifra ${n} no aparece en los datos de entrada`);
+    deps.onFabrication?.(intento, ultimas);
   }
 
   throw new FabricationError(event.id, ultimas);

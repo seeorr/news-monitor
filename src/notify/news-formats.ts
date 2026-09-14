@@ -11,12 +11,43 @@ const sentence = (s: string, limit: number) => {
   for (const part of parts) { if ((out + part).length > limit) break; out += part; }
   return out.trim();
 };
-export function factualText(event: NormalizedEvent, proposed: string): boolean {
+/**
+ * Lo que el control estricto necesita de un evento. Estructural a propósito: vale
+ * igual para un evento del ciclo que para una fila del dashboard, y así las dos
+ * rutas comprueban con la misma función y no con dos copias que acaben discrepando.
+ */
+export interface FuenteDeCifras {
+  title: string;
+  summary: string | null;
+  actual: number | null;
+  previous: number | null;
+  consensus: number | null;
+  surprises: ReadonlyArray<{ value: number }>;
+  series_id?: string | null;
+}
+
+/** Cifras del texto que no están en la fuente: titular, entradilla, dato, anterior, consenso o sorpresas. */
+export function unsupportedNumbers(event: FuenteDeCifras, proposed: string): number[] {
   const input = extractNumbers(`${event.title} ${event.summary ?? ""}`);
   for (const value of [event.actual, event.previous, event.consensus, ...event.surprises.map((x) => x.value)]) if (value !== null) input.push(value);
   // Los números estructurales admitidos en análisis no sirven como hechos:
   // un 5 % también tiene que estar realmente en la fuente del aviso.
-  return extractNumbers(proposed).every((n) => input.some((v) => Math.abs(n - v) < 0.001));
+  return [...new Set(extractNumbers(proposed).filter((n) => !input.some((v) => Math.abs(n - v) < 0.001)))];
+}
+
+export function factualText(event: FuenteDeCifras, proposed: string): boolean {
+  return unsupportedNumbers(event, proposed).length === 0;
+}
+
+/** Toda la prosa del análisis, que es lo que se comprueba entero: también `what_to_watch`. */
+export function prosaDelAnalisis(analysis: Pick<Analysis, "why_it_matters" | "catalysts" | "risks" | "what_to_watch">): string {
+  return [analysis.why_it_matters, ...analysis.catalysts, ...analysis.risks, ...analysis.what_to_watch].join(" ");
+}
+
+/** Activos que aparecen de verdad en la fuente. Un símbolo que el modelo trae de memoria no se enseña. */
+export function supportedAssets<T extends { symbol: string }>(event: FuenteDeCifras, assets: readonly T[]): T[] {
+  const tokens = new Set(`${event.title} ${event.summary ?? ""} ${event.series_id ?? ""}`.toUpperCase().split(/[^\p{L}\p{N}.$^]+/u));
+  return assets.filter((a) => tokens.has(a.symbol.toUpperCase()));
 }
 function source(event: NormalizedEvent): string {
   if (event.source_url) {
@@ -34,13 +65,11 @@ export function formatInteresting(event: NormalizedEvent, scoring: Scoring, upda
 export function formatImportant(event: NormalizedEvent, scoring: Scoring, analysis: Analysis, update = false): string {
   const fact = factualText(event, scoring.one_liner) ? sentence(scoring.one_liner, 240) : "";
   if (!fact) throw new Error("important_fact_not_supported");
-  const all = [analysis.why_it_matters, ...analysis.what_to_watch, ...analysis.risks, ...analysis.catalysts].join(" ");
-  if (!factualText(event, all)) throw new Error("analysis_numbers_not_supported");
+  if (!factualText(event, prosaDelAnalisis(analysis))) throw new Error("analysis_numbers_not_supported");
   const why = sentence(analysis.why_it_matters, 300);
   const watch = sentence(analysis.what_to_watch.join(" "), 260);
   const risk = sentence(analysis.risks.join(" "), 220);
-  const inputTokens = new Set(`${event.title} ${event.summary ?? ""} ${event.series_id ?? ""}`.toUpperCase().split(/[^\p{L}\p{N}.$^]+/u));
-  const assets = analysis.affected_assets.filter((a) => inputTokens.has(a.symbol.toUpperCase()))
+  const assets = supportedAssets(event, analysis.affected_assets)
     .map((a) => `${a.symbol}: ${a.direction === "up" ? "presión al alza posible" : a.direction === "down" ? "presión a la baja posible" : "dirección incierta"}`).slice(0, 3).join("; ");
   return [`🚨 ${update ? "Actualización material: " : ""}${sentence(fact, 105) || "Noticia importante"}`,
     `Qué ha ocurrido: ${fact}`, ...(why ? [`Por qué importa (inferencia): ${why}`] : []),

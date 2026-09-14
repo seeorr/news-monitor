@@ -207,6 +207,30 @@ describe("dos niveles, con transportes simulados", () => {
     ]);
     expect(after).toHaveBeenNthCalledWith(2, "receipt", { inputTokens: 110, outputTokens: 40, result: "success" });
   });
+  it("al guardar, el análisis pasa el mismo control estricto que Telegram, también what_to_watch", async () => {
+    // «3 meses» era un número «estructural» para el control anterior, y what_to_watch ni se miraba.
+    const conCifraInventada = { ...analysis, what_to_watch: ["La producción de los próximos 3 meses."] };
+    const parse = vi.fn().mockResolvedValueOnce({ parsed_output: conCifraInventada })
+      .mockResolvedValueOnce({ parsed_output: analysis });
+    const fabricaciones: string[][] = [];
+    const d = { ...deps(parse), onFabrication: (_intento: number, v: string[]) => fabricaciones.push(v) };
+    expect(await analyzeEvent(event("estricto"), d)).toEqual(analysis);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(fabricaciones).toEqual([["la cifra 3 no aparece en los datos de entrada"]]);
+
+    const siempreInventa = vi.fn().mockResolvedValue({ parsed_output: conCifraInventada });
+    await expect(analyzeEvent(event("estricto-2"), deps(siempreInventa))).rejects.toMatchObject({ name: "FabricationError" });
+    expect(siempreInventa).toHaveBeenCalledTimes(2);
+  });
+  it("al guardar, los activos que no están en la fuente se quitan", async () => {
+    const conActivos = { ...analysis, affected_assets: [
+      { symbol: "Copper", direction: "up" as const, confidence: 2 },
+      { symbol: "ACME", direction: "down" as const, confidence: 1 },
+    ] };
+    const parse = vi.fn().mockResolvedValue({ parsed_output: conActivos });
+    const guardado = await analyzeEvent(event("activos"), deps(parse));
+    expect(guardado.affected_assets.map((a) => a.symbol)).toEqual(["Copper"]);
+  });
 });
 
 /**
