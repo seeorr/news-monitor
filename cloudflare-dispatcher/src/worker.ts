@@ -36,12 +36,17 @@ export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "
 export type SafeRecord = { state: DispatchState; profile?: DispatchProfile; http?: number; target?: "health" };
 export const CRON = "3,13,23,33,43,53 * * * *";
 /**
- * El vigilante sale del mismo reloj. Su `schedule` horario en GitHub entregó 6 disparos
- * en 15 horas el 14-09: un vigilante que no se ejecuta se parece a un día tranquilo.
- * Se queda además ese `schedule` como respaldo, porque si este reloj se para, el
- * vigilante que lanza se para con él.
+ * El vigilante sale del mismo reloj y del mismo disparo: en el de las :53 de cada hora,
+ * además del monitor. Su `schedule` horario en GitHub entregó 6 disparos en 15 horas el
+ * 14-09, y un vigilante que no se ejecuta se parece a un día tranquilo.
+ *
+ * No tiene cron propio a propósito. Se probó un segundo trigger (`51 * * * *`): quedó
+ * registrado en Cloudflare, con su «Next» avanzando, y no se invocó ni una vez en tres
+ * horas, igual que le pasó a este reloj el 10-09. El trigger del monitor sí está
+ * demostrado. Se queda además el `schedule` de GitHub como respaldo, porque si este
+ * reloj se para, el vigilante que lanza se para con él.
  */
-export const HEALTH_CRON = "51 * * * *";
+export const HEALTH_MINUTE = 53;
 export type DispatchTarget = "monitor" | "health";
 /**
  * workerd —el runtime real de Cloudflare, no Node— NO implementa `redirect: "error"`.
@@ -96,7 +101,7 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   try {
     // El vigilante no tiene perfil: solo se valida que dispare en su minuto.
     if (target === "monitor") profile = selectProfile(scheduledTime, env.STRATEGY);
-    else if (new Date(scheduledTime).getUTCMinutes() !== 51) throw new Error();
+    else if (new Date(scheduledTime).getUTCMinutes() !== HEALTH_MINUTE) throw new Error();
     if (env.ENABLED !== "true" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(env.GITHUB_OWNER) ||
         !/^[A-Za-z0-9_.-]{1,100}$/.test(env.GITHUB_REPO) || [".", ".."].includes(env.GITHUB_REPO) || !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(workflow) ||
         !env.GITHUB_REF || env.GITHUB_REF.length > 200 || /[\x00-\x20\x7f]/.test(env.GITHUB_REF) ||
@@ -139,8 +144,17 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   return fail([401, 403, 404, 422, 429].includes(response.status) ? "rejected" : "uncertain", response.status);
 }
 export default {
-  // `cron` es la expresión que disparó: con dos triggers, es lo que dice a quién llamar.
-  async scheduled(controller: { scheduledTime: number; cron?: string }, env: Env): Promise<void> {
-    await dispatch(controller.scheduledTime, env, {}, controller.cron === HEALTH_CRON ? "health" : "monitor");
+  /**
+   * Siempre el monitor; a las :53, también el vigilante. Independientes: si uno falla,
+   * el otro sale igual. Después se relanza el primer fallo, para que el disparo quede
+   * en rojo en los Cron Events en vez de parecer correcto.
+   */
+  async scheduled(controller: { scheduledTime: number }, env: Env): Promise<void> {
+    const tareas = [dispatch(controller.scheduledTime, env, {}, "monitor")];
+    if (new Date(controller.scheduledTime).getUTCMinutes() === HEALTH_MINUTE) {
+      tareas.push(dispatch(controller.scheduledTime, env, {}, "health"));
+    }
+    const fallo = (await Promise.allSettled(tareas)).find((resultado) => resultado.status === "rejected");
+    if (fallo) throw fallo.reason;
   },
 };
