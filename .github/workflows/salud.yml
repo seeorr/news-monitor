@@ -14,10 +14,17 @@
 #
 # Cada hora y no una vez al dia porque el planificador de GitHub descarta
 # disparos —entrega alrededor del 22,9 % de los programados, y un cron diario de
-# este mismo repositorio no disparo ni una vez el 9 de septiembre de 2026—. El
-# aviso ya esta protegido contra repeticion: un intento por dia UTC, reclamado
-# en el mismo ledger con `operational-health:<fecha>`, asi que 24 oportunidades
-# al dia siguen siendo como mucho un mensaje al dia.
+# este mismo repositorio no disparo ni una vez el 9 de septiembre de 2026—.
+#
+# Desde el 14-09 lo dispara ademas el Worker de Cloudflare a los :51
+# (`HEALTH_CRON`): este `schedule` entrego 6 disparos en 15 horas. Se queda como
+# respaldo independiente, porque si el reloj de Cloudflare se para, el vigilante
+# que lanza se para con el.
+#
+# Aviso: como mucho uno por estado grave y dia UTC, reclamado en el mismo ledger
+# con `operational-health:<fecha>:<estado>`. Varios estados nuevos en una misma
+# lectura salen en un solo mensaje. Los informativos (cola envejecida, retraso,
+# parcial) y los que ya avisa otra via (cupo agotado, ciclo fallido) no avisan.
 name: Salud
 
 on:

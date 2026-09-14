@@ -50,4 +50,31 @@ describe("salud medible y aviso privado desactivado", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(await seen.alertState?.("financial-event")).toBeNull();
   });
+  it("un estado informativo no gasta aviso: la cola envejecida no tapa una parada posterior", async () => {
+    const seen = memorySeenStore(), send = vi.fn(async () => "sent" as const);
+    const aged = evaluateHealth([record()], { now, oldestPendingAt: "2026-09-10T09:00:00Z" });
+    expect(aged.states).toEqual(["aged_queue"]);
+    expect(await sendOperationalNotice(aged, { enabled: true, now, seen, send })).toBe("not_notifiable");
+    expect(send).not.toHaveBeenCalled();
+    // Más tarde, el mismo día, se para: sí avisa.
+    expect(await sendOperationalNotice(evaluateHealth([], { now }), { enabled: true, now, seen, send })).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("un aviso por estado grave y día; los nuevos de una misma lectura van en un solo mensaje", async () => {
+    const seen = memorySeenStore(), send = vi.fn(async (_body: string) => "sent" as const);
+    const blocked = evaluateHealth([record()], { now, blockedDeliveries: 1 });
+    expect(await sendOperationalNotice(blocked, { enabled: true, now, seen, send })).toBe("sent");
+    expect(await sendOperationalNotice(blocked, { enabled: true, now, seen, send })).toBe("blocked");
+    const both = evaluateHealth([record()], { now, blockedDeliveries: 1, uncertainDeliveries: 2 });
+    expect(await sendOperationalNotice(both, { enabled: true, now, seen, send })).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(2);
+    // Solo lo nuevo: la entrega bloqueada ya se avisó hoy.
+    expect(send.mock.calls[1]![0]).toContain("delivery_uncertain");
+    expect(send.mock.calls[1]![0]).not.toContain("delivery_blocked");
+    const later = evaluateHealth([], { now, blockedDeliveries: 1, uncertainDeliveries: 1 });
+    expect(await sendOperationalNotice(later, { enabled: true, now, seen, send })).toBe("sent");
+    expect(send.mock.calls[2]![0]).toMatch(/^News Monitor · salud: no_recent_execution\./);
+    // Día UTC nuevo: vuelve a poder avisar de lo mismo.
+    expect(await sendOperationalNotice(blocked, { enabled: true, now: "2026-09-11T00:10:00.000Z", seen, send })).toBe("sent");
+  });
 });

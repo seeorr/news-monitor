@@ -7,6 +7,8 @@ export interface Env {
   GITHUB_REF: string;
   GITHUB_TOKEN?: string;
   STRATEGY: "mixed" | "fast-only";
+  /** Workflow del vigilante de salud (`salud.yml`). Sin él, el cron del vigilante falla visible. */
+  GITHUB_HEALTH_WORKFLOW?: string;
 }
 /**
  * El reloj dice CUÁNDO, no EN QUÉ MODO. Y esto no es una simplificación: era una
@@ -31,8 +33,16 @@ export type DispatchProfile = "fast" | "full";
 // «no se sabe si GitHub la recibió». Mezclarlos costó cinco horas de diagnóstico
 // el 10-09: un TypeError permanente parecía una red inestable e invitaba a esperar.
 export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config" | "invalid_request";
-export type SafeRecord = { state: DispatchState; profile?: DispatchProfile; http?: number };
+export type SafeRecord = { state: DispatchState; profile?: DispatchProfile; http?: number; target?: "health" };
 export const CRON = "3,13,23,33,43,53 * * * *";
+/**
+ * El vigilante sale del mismo reloj. Su `schedule` horario en GitHub entregó 6 disparos
+ * en 15 horas el 14-09: un vigilante que no se ejecuta se parece a un día tranquilo.
+ * Se queda además ese `schedule` como respaldo, porque si este reloj se para, el
+ * vigilante que lanza se para con él.
+ */
+export const HEALTH_CRON = "51 * * * *";
+export type DispatchTarget = "monitor" | "health";
 /**
  * workerd —el runtime real de Cloudflare, no Node— NO implementa `redirect: "error"`.
  * Lanza un TypeError SÍNCRONO al construir la petición, antes de que salga un byte:
@@ -72,19 +82,23 @@ export function selectProfile(scheduledTime: number, strategy: Env["STRATEGY"]):
 }
 export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   fetch?: typeof fetch; log?: (record: SafeRecord) => void; timeoutMs?: number;
-} = {}): Promise<SafeRecord> {
+} = {}, target: DispatchTarget = "monitor"): Promise<SafeRecord> {
   const log = dependencies.log ?? ((record) => console.log(JSON.stringify(record)));
   let profile: DispatchProfile | undefined;
+  const tag = target === "health" ? { target } as const : {};
   const fail = (state: DispatchState, http?: number): never => {
-    log({ state, ...(profile ? { profile } : {}), ...(http ? { http } : {}) });
+    log({ state, ...tag, ...(profile ? { profile } : {}), ...(http ? { http } : {}) });
     // Nunca propagar errores de fetch, del proveedor ni datos configurados.
     throw new Error(`dispatch_${state}`);
   };
-  if (env.ENABLED === "false") { const result = { state: "disabled" } as const; log(result); return result; }
+  if (env.ENABLED === "false") { const result = { state: "disabled", ...tag } as const; log(result); return result; }
+  const workflow = target === "health" ? env.GITHUB_HEALTH_WORKFLOW ?? "" : env.GITHUB_WORKFLOW;
   try {
-    profile = selectProfile(scheduledTime, env.STRATEGY);
+    // El vigilante no tiene perfil: solo se valida que dispare en su minuto.
+    if (target === "monitor") profile = selectProfile(scheduledTime, env.STRATEGY);
+    else if (new Date(scheduledTime).getUTCMinutes() !== 51) throw new Error();
     if (env.ENABLED !== "true" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(env.GITHUB_OWNER) ||
-        !/^[A-Za-z0-9_.-]{1,100}$/.test(env.GITHUB_REPO) || [".", ".."].includes(env.GITHUB_REPO) || !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(env.GITHUB_WORKFLOW) ||
+        !/^[A-Za-z0-9_.-]{1,100}$/.test(env.GITHUB_REPO) || [".", ".."].includes(env.GITHUB_REPO) || !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(workflow) ||
         !env.GITHUB_REF || env.GITHUB_REF.length > 200 || /[\x00-\x20\x7f]/.test(env.GITHUB_REF) ||
         !env.GITHUB_TOKEN) throw new Error();
   } catch { return fail("invalid_config"); }
@@ -98,12 +112,14 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
     method: "POST", redirect: REDIRECT, signal: controller.signal,
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${env.GITHUB_TOKEN}`,
       "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json", "User-Agent": "news-monitor-clock" },
-    body: JSON.stringify({ ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: MODE } }),
+    // `salud.yml` no declara inputs: mandarle los del monitor sería un 422.
+    body: JSON.stringify(target === "health" ? { ref: env.GITHUB_REF }
+      : { ref: env.GITHUB_REF, inputs: { profile, origin: "external", mode: MODE } }),
   };
   try {
     // La carrera acota también un transporte que no atienda AbortSignal.
     response = await Promise.race([
-      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`, peticion),
+      (dependencies.fetch ?? fetch)(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`, peticion),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error()); }, timeoutMs); }),
     ]);
   } catch (error) {
@@ -117,12 +133,14 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   finally { clearTimeout(timer); }
   // 204: contrato anterior; 200: contrato oficial API 2026-03-10. El cuerpo no se lee.
   if (response.status === 204 || response.status === 200) {
-    const result = { state: "accepted", profile, http: response.status } as const; log(result); return result;
+    const result: SafeRecord = { state: "accepted", ...tag, ...(profile ? { profile } : {}), http: response.status };
+    log(result); return result;
   }
   return fail([401, 403, 404, 422, 429].includes(response.status) ? "rejected" : "uncertain", response.status);
 }
 export default {
-  async scheduled(controller: { scheduledTime: number }, env: Env): Promise<void> {
-    await dispatch(controller.scheduledTime, env);
+  // `cron` es la expresión que disparó: con dos triggers, es lo que dice a quién llamar.
+  async scheduled(controller: { scheduledTime: number; cron?: string }, env: Env): Promise<void> {
+    await dispatch(controller.scheduledTime, env, {}, controller.cron === HEALTH_CRON ? "health" : "monitor");
   },
 };

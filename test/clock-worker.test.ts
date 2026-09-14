@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import worker, { dispatch, selectProfile, type Env, type SafeRecord } from "../cloudflare-dispatcher/src/worker.ts";
+import worker, { CRON, HEALTH_CRON, dispatch, selectProfile, type Env, type SafeRecord } from "../cloudflare-dispatcher/src/worker.ts";
 const env: Env = { ENABLED: "true", GITHUB_OWNER: "example", GITHUB_REPO: "monitor", GITHUB_WORKFLOW: "monitor.yml",
   GITHUB_REF: "main", GITHUB_TOKEN: "synthetic-sensitive-marker", STRATEGY: "mixed" };
 const at = (minute: number) => Date.UTC(2026, 8, 10, 12, minute);
@@ -50,6 +50,35 @@ describe("reloj externo, todas las peticiones simuladas", () => {
     await expect(dispatch(at(23), env, { fetch: rejecting, log })).rejects.toThrow("dispatch_invalid_request");
     expect(log.mock.calls).toEqual([[{ state: "invalid_request", profile: "fast" }]]);
     expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
+  });
+  it("vigilante: a los :51 lanza salud.yml sin perfil ni inputs, con el mismo token y sin redirecciones", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const log = vi.fn();
+    const healthEnv = { ...env, GITHUB_HEALTH_WORKFLOW: "salud.yml" };
+    expect(await dispatch(at(51), healthEnv, { fetch, log }, "health")).toEqual({ state: "accepted", target: "health", http: 204 });
+    const [url, request] = fetch.mock.calls[0]!;
+    expect(url).toBe("https://api.github.com/repos/example/monitor/actions/workflows/salud.yml/dispatches");
+    expect(JSON.parse(request.body)).toEqual({ ref: "main" });
+    expect(request).toMatchObject({ method: "POST", redirect: "manual" });
+    expect(JSON.stringify(log.mock.calls)).not.toContain(env.GITHUB_TOKEN);
+  });
+  it("vigilante sin workflow configurado o fuera de su minuto no llega a la red", async () => {
+    const fetch = vi.fn(), records: SafeRecord[] = [];
+    await expect(dispatch(at(51), env, { fetch, log: (r) => records.push(r) }, "health")).rejects.toThrow("dispatch_invalid_config");
+    await expect(dispatch(at(23), { ...env, GITHUB_HEALTH_WORKFLOW: "salud.yml" }, { fetch, log: (r) => records.push(r) }, "health"))
+      .rejects.toThrow("dispatch_invalid_config");
+    expect(records).toEqual([{ state: "invalid_config", target: "health" }, { state: "invalid_config", target: "health" }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("el manejador programado elige destino por el cron que disparó", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await worker.scheduled({ scheduledTime: at(51), cron: HEALTH_CRON }, { ...env, GITHUB_HEALTH_WORKFLOW: "salud.yml" });
+      await worker.scheduled({ scheduledTime: at(23), cron: CRON }, env);
+      expect(fetch.mock.calls.map((call) => String(call[0]).split("/workflows/")[1])).toEqual(["salud.yml/dispatches", "monitor.yml/dispatches"]);
+    } finally { vi.unstubAllGlobals(); vi.restoreAllMocks(); }
   });
   it("desactivado no requiere secreto; configuración hostil no llega a la red", async () => {
     const fetch = vi.fn(), log = vi.fn();

@@ -5,7 +5,8 @@
   "compatibility_date": "2026-09-10",
   "workers_dev": false,
   "preview_urls": false,
-  "triggers": { "crons": ["3,13,23,33,43,53 * * * *"] },
+  // El segundo trigger lanza el vigilante (salud.yml) a los :51. Workers Free admite 5.
+  "triggers": { "crons": ["3,13,23,33,43,53 * * * *", "51 * * * *"] },
   "observability": { "enabled": true },
   // ENABLED describe el estado QUERIDO del reloj, y en produccion el reloj esta
   // encendido. Estuvo en "false" como supuesta red de seguridad, y era justo lo
@@ -20,6 +21,7 @@
     "GITHUB_OWNER": "seeorr",
     "GITHUB_REPO": "news-monitor",
     "GITHUB_WORKFLOW": "monitor.yml",
+    "GITHUB_HEALTH_WORKFLOW": "salud.yml",
     "GITHUB_REF": "main",
     "STRATEGY": "mixed"
   }

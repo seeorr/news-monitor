@@ -10,7 +10,8 @@ import { sendTelegram } from "../src/notify/telegram.ts";
 import type { Ejecutor } from "../src/db/cliente.ts";
 export async function readHealthMetrics(sql: Ejecutor, now: string, since: string, limits: ReturnType<typeof healthLimits>) {
   const rows = await sql`with financial_deliveries as (
-    select * from alert_deliveries where event_id not like 'operational-health:%'
+    -- Todos los avisos operativos (salud y cupo) viven en el mismo ledger y no son noticias.
+    select * from alert_deliveries where event_id not like 'operational-%'
   ) select
     (select min(first_captured_at) from capture_queue where state in ('pending','processing','retryable_failed')) as oldest,
     (select count(*)::int from financial_deliveries where state = 'rejected'

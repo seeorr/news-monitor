@@ -24,6 +24,13 @@ export type NewsDeliveryOptions = RuleOptions & {
   send: (body: string) => Promise<EstadoEntrega | ResultadoEnvio>;
   onFailure?: (error: unknown) => void;
   /**
+   * Desenlace de una entrega que no quedó `sent`. Antes estos caminos sumaban
+   * `failed` sin dejar rastro: el 14-09 un breve de 3 noticias quedó `uncertain`
+   * y el log no decía ni qué contestó Telegram. `http` sale del código propio
+   * `telegram_<estado>`; `error`, si el envío lanzó. Nunca el cuerpo ni la descripción.
+   */
+  onDeliveryOutcome?: (outcome: { state: "rejected" | "uncertain" | "blocked"; count: number; http?: number; error?: unknown }) => void;
+  /**
    * La copia al destino secundario. Su desenlace es **suyo**: lo que devuelva
    * —o lance— no toca el de la alerta privada, que a estas alturas ya esta
    * entregada y anotada. Sin valor de vuelta no se anota nada, que es lo que
@@ -69,7 +76,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
         if (entrega.nextAttemptAt && Date.parse(entrega.nextAttemptAt) > Date.parse(options.now)) continue;
       } else {
         if (!options.dry) await queue.completeDelivery(entry.id);
-        if (entrega.estado !== "sent") failed++;
+        if (entrega.estado !== "sent") { failed++; options.onDeliveryOutcome?.({ state: "blocked", count: 1 }); }
         continue;
       }
     }
@@ -212,10 +219,11 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     // Si otro consumidor reclamó una parte, nunca incluirla en el mensaje.
     if (owned.length !== items.length) body = formatNewsBatch(owned.map(({ item }) => ({ event: capturedEvent(item.entry), scoring: item.scoring })));
     let resultado: ResultadoEnvio;
+    let fallo: unknown;
     try {
       const respuesta = await options.send(body);
       resultado = typeof respuesta === "string" ? { state: respuesta } : respuesta;
-    } catch { resultado = { state: "uncertain" }; }
+    } catch (error) { fallo = error; resultado = { state: "uncertain" }; }
     // Cuatro desenlaces, y solo uno vuelve solo. `sent` escribe `alerts`. Un
     // rechazo recuperable —429, y nada mas— se aplaza con su plazo, porque
     // Telegram ha dicho por escrito que no acepto nada y reintentar no puede
@@ -235,7 +243,12 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       if (aplazable) await anotar(item, "deferred_transport_rate_limited", nextAttemptAt);
       else await queue.completeDelivery(item.entry.id);
     }
-    if (resultado.state !== "sent") { failed++; return; }
+    if (resultado.state !== "sent") {
+      const http = /^telegram_(\d{3})$/.exec((resultado as { code?: string }).code ?? "")?.[1];
+      options.onDeliveryOutcome?.({ state: resultado.state === "rejected" ? "rejected" : "uncertain", count: owned.length,
+        ...(http ? { http: Number(http) } : {}), ...(fallo !== undefined ? { error: fallo } : {}) });
+      failed++; return;
+    }
     sent++;
     // Destino secundario solo después de cerrar el acuse privado, y con su
     // propio desenlace: que el grupo rechace la copia no cambia nada de la

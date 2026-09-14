@@ -168,6 +168,21 @@ describe("dos niveles, con transportes simulados", () => {
     await prepare(o, event("uncertain")); await deliverNews(o); await deliverNews(o);
     expect(o.send).toHaveBeenCalledTimes(1); expect(await o.seen.alertState?.("uncertain")).toBe("uncertain");
   });
+  it("un envío incierto deja rastro: estado HTTP o error, número de noticias, sin reenviar", async () => {
+    const outcomes: unknown[] = [];
+    const o = options({ send: async () => ({ state: "uncertain", code: "telegram_502" }) as never, onDeliveryOutcome: (x) => outcomes.push(x) });
+    await prepare(o, event("unc"));
+    expect(await deliverNews(o)).toMatchObject({ sent: 0, failed: 1 });
+    expect(outcomes).toEqual([{ state: "uncertain", count: 1, http: 502 }]);
+    const thrown = new Error("network down");
+    const o2 = options({ send: async () => { throw thrown; }, onDeliveryOutcome: (x) => outcomes.push(x) });
+    await prepare(o2, event("throw"));
+    await deliverNews(o2);
+    expect(outcomes.at(-1)).toEqual({ state: "uncertain", count: 1, error: thrown });
+    // Cerrada en `uncertain`: la vuelta siguiente no la reenvía.
+    await deliverNews(o2);
+    expect(o2.send).toHaveBeenCalledTimes(1);
+  });
   it("dos consumidores solo pueden reclamar una misma noticia", async () => {
     const o = options(); await prepare(o, event("race"));
     await Promise.all([deliverNews(o), deliverNews(o)]);

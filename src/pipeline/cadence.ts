@@ -194,23 +194,48 @@ export async function privateHealthNotice(health: ReturnType<typeof evaluateHeal
   return true;
 }
 
-/** Canal operativo separado del contenido financiero: máximo un intento por
- * día UTC, protegido por el mismo ledger, sin guardar un falso evento de mercado. */
+/**
+ * Estados que piden actuar a una persona. Los demás no avisan desde el vigilante:
+ * `aged_queue`, `delayed`, `execution_partial` y `circuit_unproven` informan pero no
+ * exigen nada; `processing_paused` es querido; `budget_exhausted` ya avisa el ciclo
+ * y `execution_failed`, el propio `monitor.yml`. El 14-09 un `aged_queue` gastó el
+ * único aviso del día y habría tapado una parada real.
+ */
+export const NOTIFIABLE_HEALTH_STATES: readonly HealthState[] = [
+  "no_recent_execution", "critical_source_failed", "delivery_blocked", "delivery_uncertain",
+  "trigger_inactive", "telegram_unconfigured",
+];
+
+export function healthNoticeText(states: readonly HealthState[]): string {
+  return [`News Monitor · salud: ${states.join(", ")}.`, ...states.map((state) => `- ${state}: ${HEALTH_STATE_MEANING[state]}`),
+    "Detalle: npm run audit:health."].join("\n");
+}
+
+/** Canal operativo separado del contenido financiero: como mucho un aviso por estado
+ * grave y día UTC, protegido por el mismo ledger, sin guardar un falso evento de mercado.
+ * Los estados graves nuevos de una misma lectura salen juntos en un solo mensaje. */
 export async function sendOperationalNotice(health: ReturnType<typeof evaluateHealth>, options: {
   enabled: boolean; now: string; seen: Pick<SeenStore, "claimAlert" | "finishAlert">;
   send: (message: string) => Promise<"sent" | "rejected" | "uncertain">;
-}): Promise<"disabled" | "healthy" | "blocked" | "sent" | "rejected" | "uncertain"> {
+}): Promise<"disabled" | "healthy" | "not_notifiable" | "blocked" | "sent" | "rejected" | "uncertain"> {
   if (!options.enabled) return "disabled";
   if (health.states.every((state) => state === "healthy")) return "healthy";
-  const id = `operational-health:${new Date(options.now).toISOString().slice(0,10)}`, token = randomUUID();
-  if (!await options.seen.claimAlert(id, { token })) return "blocked";
-  let state: "sent" | "rejected" | "uncertain" = "uncertain";
-  try {
-    await privateHealthNotice(health, { enabled: true, send: async (body) => { state = await options.send(body); } });
-  } catch { state = "uncertain"; }
-  try { await options.seen.finishAlert(id, token, state); }
-  catch { return "uncertain"; } // sending queda bloqueado si falta el acuse.
-  return state;
+  const graves = health.states.filter((state) => NOTIFIABLE_HEALTH_STATES.includes(state));
+  if (!graves.length) return "not_notifiable";
+  const day = new Date(options.now).toISOString().slice(0, 10);
+  const owned: { id: string; token: string; state: HealthState }[] = [];
+  for (const state of graves) {
+    const id = `operational-health:${day}:${state}`, token = randomUUID();
+    if (await options.seen.claimAlert(id, { token })) owned.push({ id, token, state });
+  }
+  if (!owned.length) return "blocked";
+  let result: "sent" | "rejected" | "uncertain" = "uncertain";
+  try { result = await options.send(healthNoticeText(owned.map(({ state }) => state))); } catch { result = "uncertain"; }
+  let lost = false;
+  for (const { id, token } of owned) {
+    try { await options.seen.finishAlert(id, token, result); } catch { lost = true; } // sending queda bloqueado si falta el acuse.
+  }
+  return lost ? "uncertain" : result;
 }
 
 export const BUDGET_NOTICE_TEXT = "News Monitor: cupo diario de IA agotado. Las noticias esperan en la cola " +

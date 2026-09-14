@@ -211,6 +211,9 @@ async function main(): Promise<number> {
       log("ALERT_SENT", { stage: "persist", source: event.source });
       await copiarAlGrupo(config, event, body);
     }, onFailure: (error) => log("EVENT_FAILED", { stage: "telegram", error }),
+    // Qué contestó Telegram cuando no quedó `sent`: estado HTTP o forma del error, nunca su texto.
+    onDeliveryOutcome: (outcome) => log(outcome.state === "blocked" ? "ALERT_BLOCKED" : outcome.state === "rejected" ? "ALERT_REJECTED" : "ALERT_UNCERTAIN",
+      { stage: "telegram", count: outcome.count, ...(outcome.http ? { error: { status: outcome.http } } : outcome.error !== undefined ? { error: outcome.error } : {}) }),
   }); remainingDeepLevels -= result.deep;
     if (result.telegramUnconfigured) result.failed++;
     return result; };
