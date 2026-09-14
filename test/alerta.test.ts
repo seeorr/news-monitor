@@ -47,18 +47,18 @@ const analysis: Analysis = {
 describe("formato de la alerta", () => {
   it("respeta el formato objetivo del spec", () => {
     const t = formatAlert(event, scoring, analysis);
-    expect(t).toContain("MARKET ALERT");
+    expect(t).toContain("ALERTA DE MERCADO");
     expect(t).toContain("US CPI");
-    expect(t).toContain("Actual: 3,2% | Consenso: 3,4% | Sorpresa: -0,2 pp (vs consenso)");
+    expect(t).toContain("Actual: 3,2%\nConsenso: 3,4%\nSorpresa: -0,2 pp (vs consenso)");
     expect(t).toContain("IMPORTANCIA: 9/10 | IMPACTO:");
     expect(t).toContain("NVDA");
-    expect(t).toContain("Qué vigilar ahora: US 2Y · US 10Y · Nasdaq futures");
+    expect(t).toContain("Qué vigilar ahora:\n• US 2Y\n• US 10Y\n• Nasdaq futures");
   });
 
   it("limpia los puntos finales de la lista de vigilancia", () => {
     const conPuntos = { ...analysis, what_to_watch: ["Vivienda y servicios.", "La variacion mensual."] };
     const t = formatAlert(event, scoring, conPuntos);
-    expect(t).toContain("Vivienda y servicios · La variacion mensual");
+    expect(t).toContain("Vivienda y servicios\n• La variacion mensual");
     expect(t).not.toContain("servicios., ");
   });
 
@@ -71,7 +71,7 @@ describe("formato de la alerta", () => {
   it("descarta los elementos basura sin dejar separadores sueltos", () => {
     const sucia = { ...analysis, what_to_watch: ["US 2Y", ".", "US 10Y"] };
     const t = formatAlert(event, scoring, sucia);
-    expect(t).toContain("Qué vigilar ahora: US 2Y · US 10Y");
+    expect(t).toContain("Qué vigilar ahora:\n• US 2Y\n• US 10Y");
   });
 
   it("omite los activos sin simbolo", () => {

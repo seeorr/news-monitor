@@ -88,7 +88,7 @@ export function formatAlert(
   opts: { tambien?: string[] } = {},
 ): string {
   const unit = event.unit ?? "";
-  const lines: string[] = ["🚨 MARKET ALERT", `${event.country ?? ""} ${event.title}`.trim()];
+  const lines: string[] = ["🚨 ALERTA DE MERCADO", `${event.country ?? ""} ${event.title}`.trim()];
 
   // Linea de cifras. Solo aparece lo que existe: un hueco es preferible a un cero.
   const cifras: string[] = [];
@@ -97,7 +97,7 @@ export function formatAlert(
   else if (event.previous !== null) cifras.push(`Anterior: ${es(event.previous)}${unit}`);
   const linea = sorpresas(event.surprises);
   if (linea !== null) cifras.push(`Sorpresa: ${linea}`);
-  if (cifras.length > 0) lines.push(cifras.join(" | "));
+  if (cifras.length > 0) lines.push(cifras.join("\n"));
 
   lines.push(
     `IMPORTANCIA: ${Math.round(scoring.importance_score)}/10 | IMPACTO: ${IMPACT[scoring.sentiment]}`,
@@ -115,7 +115,7 @@ export function formatAlert(
     // se filtra DESPUÉS de limpiar: si no, un elemento que era solo un punto deja
     // la etiqueta colgando sin nada detrás. Paso justo en la primera alerta real.
     const vigilar = analysis.what_to_watch.map(limpiar).filter((x) => x !== "");
-    if (vigilar.length > 0) lines.push(`Qué vigilar ahora: ${vigilar.join(" · ")}`);
+    if (vigilar.length > 0) lines.push(`Qué vigilar ahora:\n${vigilar.map((v) => `• ${v}`).join("\n")}`);
   } else {
     lines.push(`Resumen: ${scoring.one_liner}`);
   }
@@ -133,7 +133,7 @@ export function formatAlert(
     `Fuente: ${event.source_url ?? event.source} · ${ETIQUETA_FECHA[event.kind]} ${fecha(event.observed_at)}`,
   );
 
-  return lines.join("\n");
+  return lines.join("\n\n");
 }
 
 /**

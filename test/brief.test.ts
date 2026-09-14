@@ -69,8 +69,8 @@ describe("contenido determinista", () => {
     const brief = await generateBrief(deps, { now });
     expect(brief.body).toContain("Sin eventos puntuados");
     expect(brief.body).toContain("no demuestra calma");
-    expect(brief.body).toContain("insufficient_data");
-    expect(brief.body).toContain("2026-09-08T06:00:00.000Z");
+    expect(brief.body).toContain("Datos insuficientes");
+    expect(brief.payload.window.from).toBe("2026-09-08T06:00:00.000Z");
     expect(brief.body).toContain("https://fred.stlouisfed.org/releases");
     expect(brief.payload.coverage).toBe("unknown");
     expect(brief).toEqual(await generateBrief(deps, { now }));

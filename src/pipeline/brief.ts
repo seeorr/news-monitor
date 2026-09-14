@@ -106,17 +106,18 @@ function source(url: string | null, fallback: string): string {
 const SHORTENED = "\n… [recortado; detalle en registro]";
 
 export function formatBrief(payload: BriefPayload): string {
-  const header = `RESUMEN MATINAL · ${payload.generatedAt.slice(0, 10)} UTC\n` +
-    `Ingesta 24 h: ${payload.window.from} → ${payload.window.to} (fin excluido)`;
+  const header = `☀️ RESUMEN MATINAL · ${payload.generatedAt.slice(0, 10)}\n` +
+    "Noticias recogidas en las últimas 24 h · Fechas en UTC";
   const footer = "Cobertura de ingesta no verificada: la ausencia de eventos no demuestra calma.";
   const gapText = payload.gaps.length ? `Carencias: ${payload.gaps.join("; ")}.` : "";
-  const agendaHeader = `AGENDA FRED · ${payload.agendaWindow.from} → ${payload.agendaWindow.to}\n` +
-    "https://fred.stlouisfed.org/releases · Fechas sin hora; cobertura limitada a publicaciones seguidas.\n";
+  const agendaHeader = `📅 AGENDA FRED · próximos días\n` +
+    `${payload.agendaWindow.from} → ${payload.agendaWindow.to} · Sin hora confirmada\n`;
   const agendaContent = payload.agenda.status === "unavailable"
     ? "Agenda no disponible; no equivale a ausencia de citas."
     : payload.agenda.data.length === 0 ? "Sin citas devueltas en la ventana consultada."
-    : payload.agenda.data.map((c) => `${c.date} · ${line(c.title, 100)} (FRED ${c.releaseId})`).join("\n");
-  const agenda = cut(agendaHeader + agendaContent, 600, SHORTENED);
+    : payload.agenda.data.map((c) => `• ${c.date} · ${line(c.title, 100)}`).join("\n");
+  const agenda = cut(agendaHeader + agendaContent, 450, SHORTENED) +
+    "\nSolo publicaciones seguidas · https://fred.stlouisfed.org/releases";
   let regime = "RÉGIMEN\nNo disponible; no permite inferir un mercado estable.";
   if (payload.regimen.status === "ok") {
     const r = payload.regimen.data;
@@ -125,26 +126,28 @@ export function formatBrief(payload: BriefPayload): string {
     const signals = r.signals.map((s) =>
       `${line(s.label, 40)}: ${s.value === null ? "sin dato" : line(String(s.value), 25)} ${line(s.unit, 15)}` +
       ` · ${s.date === null ? "sin fecha" : line(s.date, 30)}${s.stale ? " · OBSOLETO" : ""}` +
-      `\n${line(s.detail, 100)}\n${source(s.sourceUrl, s.id)}`,
-    ).join("\n");
-    regime = `RÉGIMEN · ${line(r.state, 24)} · ${line(r.asOf, 30)} · ${line(r.version, 40)}\n` +
-      "Regla: unanimidad de VIX, tendencia y crédito; mixto si discrepan; insuficiente si faltan votos.\n" +
-      "Heurística, no predicción. Dólar amplio: contexto sin voto. Liquidez no cubierta.\n" +
-      (signals || "Sin señales disponibles.");
+      `\n${source(s.sourceUrl, s.id)}`,
+    ).join("\n\n");
+    const states = { risk_on: "Mayor apetito por riesgo", risk_off: "Aversión al riesgo",
+      mixed: "Señales mixtas", insufficient_data: "Datos insuficientes" };
+    regime = `📊 RÉGIMEN DE MERCADO · ${states[r.state]}\n\n` +
+      (signals || "Sin señales disponibles.") + "\n\n" +
+      "Regla: unanimidad de VIX, tendencia y crédito. Heurística, no predicción.\n" +
+      "Dólar: contexto sin voto. Liquidez no cubierta.";
   }
-  regime = cut(regime, 1700, SHORTENED);
+  regime = cut(regime, 1250, SHORTENED);
   const rest = [header, agenda, regime, gapText, footer].filter(Boolean);
   const newsBudget = 4096 - rest.join("\n\n").length - 2;
-  let news = "EVENTOS PUNTUADOS · top 5 por importancia\n";
+  let news = "📰 NOTICIAS DESTACADAS\n\n";
   if (payload.events.status === "unavailable") news += "Lectura no disponible; actualidad desconocida.";
   else if (!payload.events.data.length) news += "Sin eventos puntuados en esta ventana. Puede faltar ingesta o puntuación.";
   else {
-    const budget = Math.floor((newsBudget - news.length) / payload.events.data.length) - 1;
+    const budget = Math.floor((newsBudget - news.length) / payload.events.data.length) - 2;
     news += payload.events.data.map((e, i) => {
       // Reservar fechas y fuente antes de acortar el titular privado.
-      const meta = `\nDato/publicación: ${line(e.observed_at, 30)} · Ingesta: ${new Date(e.first_seen_at).toISOString()}` +
+      const meta = `\n${e.kind === "macro_release" ? "Periodo del dato" : "Publicado"}: ${line(e.observed_at.replace("T", " ").replace(/:\d\d(?:\.\d+)?Z$/, " UTC"), 30)}` +
         `\nFuente: ${source(e.source_url, e.source)}${e.stale ? " · OBSOLETO" : ""}`;
-      const rank = `${i + 1}. ${e.importance_score}/10 · `;
+      const rank = `${i + 1}. ${e.importance_score}/10\n`;
       const proseBudget = Math.max(10, budget - rank.length - meta.length);
       const context = e.one_liner?.trim();
       if (context && proseBudget >= 60) {
@@ -153,7 +156,7 @@ export function formatBrief(payload: BriefPayload): string {
           line(context, proseBudget - titleBudget - 11) + meta;
       }
       return rank + line(e.title, proseBudget) + meta;
-    }).join("\n");
+    }).join("\n\n");
   }
   return [header, cut(news, newsBudget, SHORTENED), agenda, regime, gapText, footer].filter(Boolean).join("\n\n");
 }
