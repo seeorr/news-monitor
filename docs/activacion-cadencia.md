@@ -997,6 +997,11 @@ la carga en Neon antes de darlo por bueno.
 
 ### Reversión completa, en orden, si algo sale mal a mitad
 
+> **Sustituida el 14-09-2026 por [`reversion.md`](reversion.md).** Se conserva como
+> historia. El paso 2 está desfasado: el Worker manda `mode: auto`, así que
+> `capture-only` es una sola llave, la variable de GitHub, y no hay que desplegar
+> el Worker. `news-monitor-clock-2` ya no existe.
+
 1. `ENABLED=false` en el Worker —o revocar el token en GitHub si hay que parar
    ya— para cortar disparos nuevos. Los cambios de cron tardan en propagarse; el
    token no.
