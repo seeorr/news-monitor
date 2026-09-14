@@ -168,9 +168,12 @@ La implementación:
   verificar externamente el plan; no se reutilizan tarifas de Anthropic.
 
 El cupo local es común a proveedores. Su valor de código por defecto sigue
-siendo 120. Producción usó 260 y después 305 el 14-09, solo para vaciar la cola
-atrasada; vuelve a 180 el 15-09. 180 intentos de Groq son ~187.000 tokens, justo
-por debajo de sus 200.000 diarios: subir más cambia el cupo por pausas 429.
+siendo 120. Producción usó 260 y 305 el 14-09 para vaciar la cola atrasada, y
+queda en **350** desde `520abe6`. Con un solo modelo, 180 intentos ya eran
+~187.000 tokens de los 200.000 diarios del 120b. Con el respaldo 20b para
+puntuar, el techo pasa a unas 380 llamadas: el 429 del 120b deja de ser el
+final del día. La demanda medida entre el 11 y el 14-09 es de ~100-140
+llamadas diarias.
 
 **Cupo agotado no es un fallo del ciclo** desde el 14-09. La noticia queda
 `retryable_failed` por `budget_exhausted`, el log sigue diciendo
