@@ -1,7 +1,21 @@
 # LLM gratuitos para News Monitor
 
-Revisión: 14-09-2026. Integración local preparada; pendiente de claves,
-prueba con proveedores reales y publicación. No hay cambios en producción.
+Revisión: 14-09-2026, 11:00 Madrid. Groq activado en producción en `73af838`.
+El secreto está guardado como `GROQ`; el workflow lo admite como alias de
+`GROQ_API_KEY`. OpenRouter sigue sin clave y no participa todavía.
+
+La [prueba real aislada](https://github.com/seeorr/news-monitor/actions/runs/34825380786)
+pasó con dos peticiones: scoring 930/145 tokens y análisis 591/354 tokens de
+entrada/salida. También pasaron typecheck y 827 pruebas en GitHub.
+El [primer ciclo de producción](https://github.com/seeorr/news-monitor/actions/runs/34825503168)
+puntuó cuatro noticias y confirmó una entrega a Telegram a las 10:59:41 Madrid,
+sin errores. Cola: 77 → 73 pendientes. No se da por saneado todo el backlog.
+
+Variables operativas: `MAX_SCORING_PER_CYCLE=4`, `MAX_DEEP_PER_CYCLE=1`,
+`AI_CALLS_PER_DAY=180`. Valores anteriores: 12, 3 y 120 respectivamente.
+El aumento deja 60 intentos adicionales el día de la activación sin borrar
+reservas. Revisar consumo observado antes de nuevos aumentos. La cuota del
+proveedor sigue siendo independiente del cupo interno.
 
 ## Claves que hay que crear
 
@@ -53,8 +67,8 @@ en exclusiva. Nunca entra como respaldo automático de los gratuitos.
 3. Exigir `LLM_CHECK_OK`; después revisar calidad sobre una muestra de noticias
    públicas. La prueba comprueba transporte, esquema y cifras, no la calidad
    editorial. Los tests HTTP simulados tampoco acreditan cuota ni disponibilidad.
-4. Publicar los cambios verificados y configurar Secrets. Esta sesión deja
-   ambos pasos pendientes por petición del usuario.
+4. Publicar los cambios verificados y configurar Secrets. Completado para Groq
+   el 14-09; repetir la prueba si se incorpora otro proveedor.
 5. Observar el siguiente ciclo automático y `npm run audit:health`. Comprobar
    nuevas puntuaciones en `monitor_runs` y proveedor/modelo/tokens en
    `news_usage.ai_record`. Confirmar entregas nuevas, sin usar `--force`.
@@ -97,11 +111,11 @@ La implementación:
   cuenta: mantenerla en Free. Su coste queda desconocido en el ledger hasta
   verificar externamente el plan; no se reutilizan tarifas de Anthropic.
 
-El cupo local `AI_CALLS_PER_DAY=120` sigue vigente y es común a proveedores.
-Cambiar de proveedor no reinicia las reservas del día. El 14-09 ya estaba
-agotado: se renueva a las 00:00 UTC, el 15-09 a las 02:00 de Madrid. Para una
-recuperación anterior habría que aprobar un aumento acotado tras medir tokens;
-no borrar el ledger. Revisar capacidad después de observar consumo real.
+El cupo local es común a proveedores. Su valor de código por defecto sigue
+siendo 120; producción usa 180 desde la activación. Cambiar de proveedor no
+reinicia reservas. Se renuevan a las 00:00 UTC, el 15-09 a las 02:00 de Madrid.
+El cupo anterior estaba agotado; se amplió después de medir la prueba real.
+No se borró el ledger. Revisar capacidad después de observar consumo real.
 
 ## Por qué estos proveedores
 
