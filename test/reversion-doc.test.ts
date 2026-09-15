@@ -34,11 +34,11 @@ describe("docs/reversion.md sigue diciendo la verdad", () => {
   it("parar el reloj con ENABLED:false funciona de verdad en el Worker", () => {
     expect(doc).toContain("--var ENABLED:false");
     expect(leer("cloudflare-dispatcher/wrangler.json")).toMatch(/"ENABLED":\s*"true"/);
-    expect(leer("cloudflare-dispatcher/src/worker.ts")).toContain('env.ENABLED === "false"');
+    expect(leer("cloudflare-dispatcher/src/reloj.ts")).toContain('env.ENABLED === "false"');
   });
 
   it("una sola llave para capture-only: el Worker no manda su propio modo", () => {
-    expect(leer("cloudflare-dispatcher/src/worker.ts")).toMatch(/const MODE = "auto"/);
+    expect(leer("cloudflare-dispatcher/src/reloj.ts")).toMatch(/const MODE = "auto"/);
     expect(leer(".github/workflows/monitor.yml")).toContain("vars.MONITOR_MODE");
   });
 

@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import worker, { HEALTH_MINUTE, dispatch, selectProfile, type Env, type SafeRecord } from "../cloudflare-dispatcher/src/worker.ts";
+import * as moduloWorker from "../cloudflare-dispatcher/src/worker.ts";
+import { HEALTH_MINUTE, dispatch, selectProfile, type Env, type SafeRecord } from "../cloudflare-dispatcher/src/reloj.ts";
+const worker = moduloWorker.default;
+describe("punto de entrada del Worker", () => {
+  // workerd trata cada export del módulo principal como punto de entrada: una constante
+  // exportada allí (`CRON`) le hacía rechazar el Worker entero en `wrangler dev`.
+  it("worker.ts solo exporta el manejador por defecto", () => {
+    expect(Object.keys(moduloWorker)).toEqual(["default"]);
+    expect(typeof worker.scheduled).toBe("function");
+  });
+});
 const env: Env = { ENABLED: "true", GITHUB_OWNER: "example", GITHUB_REPO: "monitor", GITHUB_WORKFLOW: "monitor.yml",
   GITHUB_REF: "main", GITHUB_TOKEN: "synthetic-sensitive-marker", STRATEGY: "mixed" };
 const at = (minute: number) => Date.UTC(2026, 8, 10, 12, minute);
