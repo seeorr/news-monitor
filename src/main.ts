@@ -198,6 +198,7 @@ async function main(): Promise<number> {
   const sendTwoLevels = async (onlyCritical = false) => { const result = await deliverNews({ now: new Date().toISOString(), deps, queue, control, seen, watchlist, onlyCritical,
     briefHour: config.briefNewsHour ?? 6, briefDay: config.briefNewsDay ?? 24,
     importantHour: config.importantNewsHour ?? 3, importantDay: config.importantNewsDay ?? 12,
+    briefQuietHours: config.briefQuietHours ?? null,
     batchSize: config.briefBatchSize ?? 3, briefIntervalMinutes: config.briefIntervalMinutes ?? 60,
     maxPendingHours: config.maxPendingHours ?? 48, maxDeep: remainingDeepLevels, excludeIds: attemptedLevels,
     briefThreshold: config.briefNewsThreshold ?? 5, importantThreshold: config.alertThreshold,

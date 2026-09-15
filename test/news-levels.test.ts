@@ -131,6 +131,20 @@ describe("dos niveles, con transportes simulados", () => {
     await deliverNews({ ...o, now: "2026-09-10T11:01:00.000Z" });
     expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
   });
+  it("de noche el breve espera sin gastar cupo y el importante sale igual", async () => {
+    const noche = "2026-09-10T23:30:00.000Z"; // 01:30 en Madrid
+    const o = options({ now: noche, briefQuietHours: { desde: 0, hasta: 8, zona: "Europe/Madrid" } });
+    await prepare(o, event("breve"), score(5), noche);
+    await prepare(o, event("urgente", "Gold exports halted after mine closure"), score(8, "Se detienen las exportaciones de oro."), noche);
+    expect(await deliverNews(o)).toMatchObject({ sent: 1 });
+    expect(o.send.mock.calls[0]![0]).toContain("exportaciones de oro");
+    expect(await o.control.getDecision("breve")).toMatchObject({ nextAt: "2026-09-11T06:00:00.000Z" });
+    expect((await o.control.getDecision("breve"))?.reasons).toContain("deferred_quiet_hours");
+    expect((await o.control.stats(noche)).find((r) => r.resource === "brief")?.units ?? 0).toBe(0);
+    expect((await o.queue.listDeliveryPending()).map((e) => e.id)).toEqual(["breve"]);
+    await deliverNews({ ...o, now: "2026-09-11T06:04:00.000Z" }); // 08:04 en Madrid
+    expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
   it("la antigüedad caduca con motivo explícito, sin renovar la primera captura", async () => {
     const o = options(); await prepare(o, event("old"));
     await deliverNews({ ...o, now: "2026-09-13T10:00:00.000Z" });

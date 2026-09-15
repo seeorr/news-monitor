@@ -119,9 +119,10 @@ cuentan noticias del destino principal, no copias al grupo ni agenda/resumen.
 | `NEWS_DELIVERY_MODE` | `two-level` |
 | `BRIEF_NEWS_THRESHOLD` / `ALERT_THRESHOLD` | 5 / 7 |
 | `WATCHLIST_IMPORTANT_THRESHOLD` | 6 |
-| `BRIEF_NEWS_PER_HOUR` / `BRIEF_NEWS_PER_DAY` | 6 / 24 |
+| `BRIEF_NEWS_PER_HOUR` / `BRIEF_NEWS_PER_DAY` | 6 / 24 (producción: 48 desde el 15-09) |
 | `IMPORTANT_NEWS_PER_HOUR` / `IMPORTANT_NEWS_PER_DAY` | 3 / 12 |
 | `BRIEF_BATCH_SIZE` / `BRIEF_INTERVAL_MINUTES` | 3 / 60 |
+| `BRIEF_QUIET_HOURS` / `NEWS_TIMEZONE` | `0-8` / `Europe/Madrid` (`none` lo apaga) |
 | `MAX_PENDING_HOURS` | 48 desde primera captura |
 | `AI_CALLS_PER_DAY` | 120 peticiones, incluidos reintentos |
 | `MAX_SCORING_PER_CYCLE` / `MAX_DEEP_PER_CYCLE` | 12 / 3 |
@@ -132,6 +133,13 @@ se reduce si solo queda parte del cupo. Los intentos siguientes reservan de nuev
 para que una reserva de ayer no salte la cuota de hoy. El aplazamiento registra
 motivo y siguiente instante orientativo; no programa un disparador. A las 48 h se
 registra expiración. Caducar no borra el historial ni lo enviado.
+
+Horas de silencio: de 00:00 a 07:59 en Madrid los breves no reservan cupo ni se
+envían; quedan pendientes con `deferred_quiet_hours` y el fin del silencio como
+siguiente instante, y salen después a 3 por hora. Los importantes no se callan.
+Motivo: el 15-09 el cupo se reinició a las 02:00 de Madrid y la cola de la noche
+lo gastó entero antes de las 10:04. Con 16 horas activas a 3 por hora caben 48
+breves, que es el cupo diario de producción.
 
 ## Comparación reproducible
 

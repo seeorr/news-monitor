@@ -6,6 +6,7 @@
  * habrá presupuesto para una alternativa de pago.
  */
 import { existsSync } from "node:fs";
+import { leerHorasDeSilencio, type HorasDeSilencio } from "./pipeline/horas-de-silencio.ts";
 
 export interface Config {
   anthropicApiKey: string | null;
@@ -58,6 +59,8 @@ export interface Config {
   importantNewsDay?: number;
   briefBatchSize?: number;
   briefIntervalMinutes?: number;
+  /** `BRIEF_QUIET_HOURS` en `NEWS_TIMEZONE`. `null`: los breves salen a cualquier hora. */
+  briefQuietHours?: HorasDeSilencio | null;
   maxPendingHours?: number;
   aiCallsDay?: number;
   aiScoringInputUsd?: number | null;
@@ -146,6 +149,7 @@ export function loadConfig(): Config {
     importantNewsDay: entero("IMPORTANT_NEWS_PER_DAY", 12, 0, 100),
     briefBatchSize: entero("BRIEF_BATCH_SIZE", 3, 1, 6),
     briefIntervalMinutes: entero("BRIEF_INTERVAL_MINUTES", 60, 0, 360),
+    briefQuietHours: leerHorasDeSilencio(env("BRIEF_QUIET_HOURS"), env("NEWS_TIMEZONE")),
     maxPendingHours: entero("MAX_PENDING_HOURS", 48, 1, 168),
     aiCallsDay: entero("AI_CALLS_PER_DAY", 120, 0, 2000),
     aiScoringInputUsd: optionalPrice("AI_SCORING_INPUT_USD_PER_MILLION"),

@@ -10,9 +10,12 @@ import { capturedEvent } from "./queue-cycle.ts";
 import type { RuleOptions } from "./rules.ts";
 import { relatedUpdate } from "./agrupar.ts";
 import { criticalMacro } from "./critical-macro.ts";
+import { silencioHasta, type HorasDeSilencio } from "./horas-de-silencio.ts";
 export type NewsDeliveryOptions = RuleOptions & {
   now: string; deps: CascadeDeps | null; queue: QueueStore; control: ControlStore; seen: SeenStore;
   briefHour: number; briefDay: number; importantHour: number; importantDay: number;
+  /** Horas en que los breves esperan en la cola sin gastar cupo. Los importantes no. */
+  briefQuietHours?: HorasDeSilencio | null;
   batchSize: number; briefIntervalMinutes: number; maxPendingHours: number; maxDeep: number;
   briefThreshold: number; importantThreshold: number; watchlistImportantThreshold: number;
   canSend: boolean; dry?: boolean; force?: boolean; maxItems: number;
@@ -138,6 +141,13 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       if (item.decision.updateOf) body = `Actualización material de una noticia anterior\nAntes: ${item.decision.updateOf.previousFact}\nAhora: ${item.decision.updateOf.change}\n\n${body}`;
       await sendItems([item], body, Boolean(analysis), analysis);
     } catch (error) { failed++; options.onFailure?.(error); }
+  }
+  // De noche los breves no reservan: si lo hicieran, la cola de la noche gastaría
+  // el cupo del día antes de que nadie lo lea. Siguen pendientes, con su motivo.
+  const silencio = brief.length && options.canSend && !options.dry ? silencioHasta(options.now, options.briefQuietHours ?? null) : null;
+  if (silencio) {
+    for (const item of brief) await anotar(item, "deferred_quiet_hours", silencio);
+    return { sent, failed, deep, groupSent, groupFailed, telegramUnconfigured };
   }
   if (brief.length && options.canSend && !options.dry) {
     // Cada intento reserva de nuevo; un fallo previo no salta la cuota de mañana.
