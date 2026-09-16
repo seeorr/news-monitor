@@ -6,10 +6,13 @@
  * Es el único componente de cliente del layout, y solo porque saber cuál es la
  * página actual exige leer la ruta en el navegador.
  *
- * `/markets`, `/earnings` y `/regime` **no están**. Un enlace a una página que
- * no puede tener contenido es peor que no tenerlo: promete un dato que el
- * sistema no produce. Se añaden cuando el backend los produzca (huecos G3, G4 y
- * G5), no antes.
+ * `/markets` y `/earnings` **no están**. Un enlace a una página que no puede
+ * tener contenido es peor que no tenerlo: promete un dato que el sistema no
+ * produce. Se añaden cuando el backend los produzca (huecos G4 y G5), no antes.
+ *
+ * `/regime` sí está desde el 16-09: `market_regimes` tiene una fotografía por
+ * día con sus entradas y su versión de regla, así que la página enseña un dato
+ * que existe. Era la condición, y se cumple.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -18,6 +21,7 @@ const PAGINAS = [
   { href: "/", texto: "Home" },
   { href: "/news", texto: "News" },
   { href: "/calendar", texto: "Calendar" },
+  { href: "/regime", texto: "Régimen" },
   { href: "/watchlist", texto: "Watchlist" },
   { href: "/alerts", texto: "Alerts" },
 ] as const;

@@ -30,18 +30,56 @@ export const SERIES_REGIMEN = [
   { id: "SP500", title: "S&P 500 · S&P DJI", unit: "puntos" },
   { id: "BAMLH0A0HYM2", title: "Spread HY · ICE BofA", unit: "%" },
   { id: "DTWEXBGS", title: "Dólar amplio · Fed", unit: "índice" },
+  { id: "NFCI", title: "Condiciones financieras · Fed de Chicago", unit: "índice" },
 ] as const;
 export type IdSerieRegimen = (typeof SERIES_REGIMEN)[number]["id"];
 export type DatosRegimen = Partial<Record<IdSerieRegimen, Observacion[]>>;
 
+/**
+ * Las que acompañan y no clasifican.
+ *
+ * La liquidez entra por aquí, con `NFCI`, y no como cuarto voto. Mover una serie
+ * de esta lista a la de votos cambia lo que significa la unanimidad: las
+ * fotografías ya escritas con `riesgo-us-v1` dejarían de ser comparables con las
+ * nuevas aunque la tabla pareciera la misma. Ese día es una versión nueva de la
+ * regla, `riesgo-us-v2`, y no un retoque de esta constante.
+ *
+ * Además `NFCI` es semanal y con retraso, y los tres votos son diarios: dejarle
+ * vetar la clasificación de hoy sería dejar que un número de hace doce días
+ * decida sobre un mercado que abrió esta mañana.
+ */
+export const CONTEXTO: ReadonlySet<string> = new Set<IdSerieRegimen>(["DTWEXBGS", "NFCI"]);
+
+/**
+ * Margen de frescura en días naturales: admite fin de semana y festivo.
+ *
+ * El dólar se publica con más retraso. `NFCI` sale los miércoles y se refiere al
+ * viernes anterior, así que la víspera de una publicación el último dato ya tiene
+ * doce días sin que pase nada raro: con cinco días se marcaría antiguo cada
+ * semana y la palabra dejaría de significar nada.
+ */
+const MARGEN_DIAS: Record<IdSerieRegimen, number> = {
+  VIXCLS: 5, SP500: 5, BAMLH0A0HYM2: 5, DTWEXBGS: 10, NFCI: 14,
+};
+
+/**
+ * Quién puede ser negativo.
+ *
+ * `NFCI` lo es casi siempre —negativo son condiciones más laxas que la media
+ * histórica—, y descartarlo por el signo dejaba la señal vacía todos los días. Un
+ * VIX, un precio o un spread negativos son un error de la fuente y se siguen
+ * descartando: ahí el signo no es información, es un dato roto.
+ */
+const ADMITE_NEGATIVOS: ReadonlySet<string> = new Set<IdSerieRegimen>(["NFCI"]);
+
 /** Ordena y elimina fechas inválidas, futuras y duplicadas. No rellena huecos. */
-function normalizar(obs: Observacion[], hoy: string): Observacion[] {
+function normalizar(obs: Observacion[], hoy: string, negativos = false): Observacion[] {
   const porDia = new Map<string, Observacion>();
   for (const o of obs) {
     const t = Date.parse(o.date + "T00:00:00Z");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date) || !Number.isFinite(t) ||
         new Date(t).toISOString().slice(0, 10) !== o.date || o.date > hoy ||
-        !Number.isFinite(o.value) || o.value < 0) continue;
+        !Number.isFinite(o.value) || (o.value < 0 && !negativos)) continue;
     porDia.set(o.date, o);
   }
   return [...porDia.values()].sort((a, b) => b.date.localeCompare(a.date));
@@ -97,12 +135,10 @@ function faltanSesiones(ventana: Observacion[]): boolean {
 export function calcularRegimen(datos: DatosRegimen, now = new Date()): Regimen {
   const hoy = now.toISOString().slice(0, 10);
   const signals: SenalRegimen[] = SERIES_REGIMEN.map((spec) => {
-    const serie = normalizar(datos[spec.id] ?? [], hoy);
+    const serie = normalizar(datos[spec.id] ?? [], hoy, ADMITE_NEGATIVOS.has(spec.id));
     const ultima = serie[0];
     const edad = ultima ? (Date.parse(hoy) - Date.parse(ultima.date)) / 86_400_000 : Infinity;
-    // Margen en días naturales: admite fin de semana y festivo. El dólar
-    // se publica con más retraso y sólo aporta contexto, no un voto.
-    const stale = edad > (spec.id === "DTWEXBGS" ? 10 : 5);
+    const stale = edad > MARGEN_DIAS[spec.id];
     const s: SenalRegimen = {
       id: spec.id, label: spec.title,
       sourceUrl: `https://fred.stlouisfed.org/series/${spec.id}`,
@@ -132,12 +168,16 @@ export function calcularRegimen(datos: DatosRegimen, now = new Date()): Regimen 
         s.vote = ultima.value > media ? 1 : ultima.value < media ? -1 : 0;
         s.detail = `Media 200 sesiones: ${round(media, 2)} puntos. Cierre por encima: favorable; por debajo: adverso; igual: mixto.`;
       }
+    } else if (spec.id === "NFCI") {
+      // El signo va escrito porque es contraintuitivo: sin esta frase al lado, la
+      // mitad de quien lo lee entiende el número al revés.
+      s.detail = "Contexto: condiciones financieras, semanal. Negativo: más laxas que la media histórica; positivo: más restrictivas. No vota.";
     } else {
       s.detail = "Contexto: índice amplio nominal de la Fed; no es DXY y no vota.";
     }
     return s;
   });
-  const votos = signals.filter((s) => s.id !== "DTWEXBGS").map((s) => s.vote);
+  const votos = signals.filter((s) => !CONTEXTO.has(s.id)).map((s) => s.vote);
   const state: Regimen["state"] = votos.some((v) => v === null) ? "insufficient_data"
     : votos.every((v) => v === 1) ? "risk_on"
     : votos.every((v) => v === -1) ? "risk_off" : "mixed";
@@ -150,7 +190,7 @@ export async function fetchRegimen(
 ): Promise<Regimen> {
   const datos: DatosRegimen = {};
   const resultados = await Promise.allSettled(SERIES_REGIMEN.map(async (s) => {
-    const spec: SeriesSpec = { ...s, country: "US", transform: "level", periodsPerYear: 252 };
+    const spec: SeriesSpec = { ...s, country: "US", transform: "level", periodsPerYear: s.id === "NFCI" ? 52 : 252 };
     const obs = await (opts.fetcher ?? fetchObservations)(spec, apiKey, s.id === "SP500" ? 300 : 20);
     return { id: s.id, obs };
   }));
@@ -166,7 +206,7 @@ export function formatRegimen(r: Regimen): string {
   };
   return [
     `Régimen US: ${nombres[r.state]} (${r.version}).`,
-    "Regla descriptiva: unanimidad de VIX, tendencia y crédito; no es una predicción. Liquidez no cubierta.",
+    "Regla descriptiva: unanimidad de VIX, tendencia y crédito; no es una predicción. El dólar amplio y las condiciones financieras acompañan como contexto y no votan.",
     ...r.signals.map((s) => `${s.label}: ${s.value ?? "sin dato"} ${s.unit} · ${s.date ?? "sin fecha"}${s.stale && s.date ? " · antiguo" : ""}. ${s.detail}\n${s.sourceUrl}`),
   ].join("\n");
 }

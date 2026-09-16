@@ -60,14 +60,15 @@ dice lo que se publica esta semana. No pasa por la cascada porque no hay nada qu
 interpretar en una lista de fechas.
 
 Y un **dashboard** en Next.js sobre las mismas tablas, en `app/`: `/alerts`,
-`/news`, `/watchlist` —la única página que escribe—, Home, `/calendar` y
-`/settings`, todas **detrás de una clave** (`proxy.ts`, y otra vez dentro de cada
-acción de escritura). Su especificación de UI/UX está en
+`/news`, `/watchlist` —la única página que escribe—, Home, `/calendar`,
+`/regime` y `/settings`, todas **detrás de una clave** (`proxy.ts`, y otra vez
+dentro de cada acción de escritura). Su especificación de UI/UX está en
 [docs/dashboard-ui-ux.md](docs/dashboard-ui-ux.md), anclada a lo que el sistema
 produce de verdad: dice de qué tabla y de qué columna sale cada cosa y, sobre
-todo, qué pide el diseño que el backend todavía no genera. `/markets`,
-`/earnings` y `/regime` no existen ni salen en la navegación, porque sus datos
-tampoco.
+todo, qué pide el diseño que el backend todavía no genera. `/markets` y
+`/earnings` no existen ni salen en la navegación, porque sus datos tampoco.
+`/regime` sí, desde el 16-09: `market_regimes` tiene una fotografía por día con
+sus entradas y su versión de regla, que era la condición para construirla.
 
 El dashboard vive en **este mismo paquete** y no en uno aparte: sus páginas leen
 `src/db/lectura.ts` y su formulario llama a `src/db/watchlist.ts`. Con dos
@@ -207,7 +208,7 @@ Telegram como hace la agenda.
 
 ### Régimen y resumen matinal
 
-`npm run regimen -- --dry --preview` consulta cuatro series de FRED y deja
+`npm run regimen -- --dry --preview` consulta cinco series de FRED y deja
 una vista privada en `.cache/regimen.txt`. Sin `--dry`, persiste una fotografía
 diaria en `market_regimes`. No usa modelos ni envía mensajes.
 
@@ -215,8 +216,12 @@ La clasificación descriptiva `riesgo-us-v1` exige unanimidad de VIX, tendencia
 del S&P 500 frente a su media de 200 sesiones y spread HY. VIX <20 y spread <4%
 son favorables; VIX >=30 y spread >=6% son adversos; los intervalos son mixtos.
 La tendencia vota según el cierre esté por encima o debajo de la media.
-Sin las tres señales válidas se declara `insufficient_data`. El dólar amplio
-de la Fed es contexto: no es DXY. La liquidez sigue sin cubrirse. Estos umbrales
+Sin las tres señales válidas se declara `insufficient_data`. Dos series
+acompañan y **no votan**: el dólar amplio de la Fed —que no es el DXY— y la
+liquidez, con el `NFCI` del Fed de Chicago, donde negativo son condiciones más
+laxas que la media histórica. Es contexto y no un cuarto voto porque cambiar el
+número de votos cambiaría en silencio el significado de la unanimidad en las
+fotografías ya escritas; el día que vote, eso es `riesgo-us-v2`. Estos umbrales
 son una heurística explícita, sin validación predictiva ni recomendaciones de
 operación. Cada fotografía guarda las observaciones usadas, las fechas y las
 reglas para recalcularla.

@@ -14,6 +14,7 @@ function datos(): DatosRegimen {
     VIXCLS: [{date: "2026-09-08", value: 19.99}], SP500: sp,
     BAMLH0A0HYM2: [{date: "2026-09-08", value: 3.99}],
     DTWEXBGS: [{date: "2026-09-04", value: 120}],
+    NFCI: [{date: "2026-09-04", value: -0.53}],
   };
 }
 describe("régimen trazable", () => {
@@ -86,7 +87,7 @@ describe("régimen trazable", () => {
     expect(r.state).toBe("risk_on");
     expect(r.signals[3]?.value).toBeNull();
     const text = formatRegimen(r);
-    expect(text).toContain("Liquidez no cubierta");
+    expect(text).toContain("no votan");
     expect(text).toContain("https://fred.stlouisfed.org/series/VIXCLS");
     expect(text).not.toContain("NaN");
   });
@@ -99,6 +100,40 @@ describe("régimen trazable", () => {
     expect(r.state).toBe("insufficient_data");
     expect(r.signals[1]?.value).toBe(200);
     expect(JSON.stringify(r)).not.toContain("secreto-falso");
+  });
+  it("la liquidez acompaña y no vota: un NFCI adverso no rompe la unanimidad", () => {
+    const d = datos(); d.NFCI![0]!.value = 2.4;
+    const r = calcularRegimen(d, now);
+    expect(r.state).toBe("risk_on");
+    expect(r.signals[4]?.vote).toBeNull();
+    expect(r.version).toBe("riesgo-us-v1");
+  });
+  it("el NFCI negativo se conserva, con el signo explicado", () => {
+    const r = calcularRegimen(datos(), now);
+    expect(r.signals[4]?.value).toBe(-0.53);
+    expect(r.signals[4]?.detail).toContain("Negativo: más laxas");
+    expect(r.signals[4]?.stale).toBe(false);
+    expect(formatRegimen(r)).toContain("-0.53");
+  });
+  it("un VIX negativo sigue siendo un dato roto y se descarta", () => {
+    const d = datos(); d.VIXCLS![0]!.value = -1;
+    const r = calcularRegimen(d, now);
+    expect(r.state).toBe("insufficient_data");
+    expect(r.signals[0]?.value).toBeNull();
+  });
+  it("la liquidez ausente no impide clasificar", () => {
+    const d = datos(); delete d.NFCI;
+    const r = calcularRegimen(d, now);
+    expect(r.state).toBe("risk_on");
+    expect(r.signals[4]?.value).toBeNull();
+  });
+  it("una semana de retraso del NFCI es normal; quince días ya no", () => {
+    const d = datos(); d.NFCI![0]!.date = "2026-08-27";
+    expect(calcularRegimen(d, now).signals[4]?.stale).toBe(false);
+    d.NFCI![0]!.date = "2026-08-25";
+    const r = calcularRegimen(d, now);
+    expect(r.signals[4]?.stale).toBe(true);
+    expect(r.state).toBe("risk_on");
   });
   it("la fotografía SQL guarda entradas y versión y rechaza sobrescrituras antiguas", async () => {
     const r = calcularRegimen(datos(), now);

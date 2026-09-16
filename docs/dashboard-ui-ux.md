@@ -1249,6 +1249,12 @@ HY votan; el dólar amplio de la Fed aporta contexto. Se guardan observaciones,
 fechas y versión de regla. La liquidez y la página `/regime` siguen pendientes.
 No debe presentarse esta clasificación como régimen macro global ni como DXY.
 
+> **Revisado el 16 de septiembre**: las dos cosas están hechas. La liquidez entra
+> como contexto con `NFCI` —sin tocar la versión de la regla, que sigue siendo
+> `riesgo-us-v1`— y `/regime` existe, con sus dos tablas separadas y en la
+> navegación. Lo que queda pendiente de G3 es solo el histórico, y por decisión:
+> unos pocos puntos no son una serie.
+
 El resumen matinal se genera con `npm run brief`, vive en `daily_briefs` y
 reutiliza los eventos puntuados de las últimas 24 horas. El workflow lo envía
 con `--send`. Desde que existe el grupo compartido hay una fila por fecha **y

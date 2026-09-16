@@ -1,7 +1,7 @@
 import { loadConfig, loadDotEnv } from "./config.ts";
 import { cliente } from "./db/lectura.ts";
 import { guardarRegimen } from "./db/regimen.ts";
-import { fetchRegimen, formatRegimen } from "./sources/regimen.ts";
+import { fetchRegimen, formatRegimen, SERIES_REGIMEN } from "./sources/regimen.ts";
 
 async function main(): Promise<void> {
   loadDotEnv();
@@ -16,7 +16,7 @@ async function main(): Promise<void> {
     : null;
   if (problema) { console.error(problema); process.exitCode = 1; return; }
   const regimen = await fetchRegimen(config.fredApiKey!);
-  console.log(`Régimen calculado: ${regimen.state}. Señales disponibles: ${regimen.signals.filter(s => s.value !== null).length}/4.`);
+  console.log(`Régimen calculado: ${regimen.state}. Señales disponibles: ${regimen.signals.filter(s => s.value !== null).length}/${SERIES_REGIMEN.length}.`);
   if (preview) {
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(".cache", { recursive: true });
