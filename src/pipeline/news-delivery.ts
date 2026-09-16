@@ -11,11 +11,17 @@ import type { RuleOptions } from "./rules.ts";
 import { relatedUpdate } from "./agrupar.ts";
 import { criticalMacro } from "./critical-macro.ts";
 import { silencioHasta, type HorasDeSilencio } from "./horas-de-silencio.ts";
+import { recientes } from "./collect.ts";
 export type NewsDeliveryOptions = RuleOptions & {
   now: string; deps: CascadeDeps | null; queue: QueueStore; control: ControlStore; seen: SeenStore;
   briefHour: number; briefDay: number; importantHour: number; importantDay: number;
   /** Horas en que los breves esperan en la cola sin gastar cupo. Los importantes no. */
   briefQuietHours?: HorasDeSilencio | null;
+  /**
+   * Edad máxima de un breve **al llegarle el turno**, no al capturarlo. Sin
+   * valor no hay corte, igual que `briefQuietHours` sin horas.
+   */
+  briefMaxAgeHours?: number;
   batchSize: number; briefIntervalMinutes: number; maxPendingHours: number; maxDeep: number;
   briefThreshold: number; importantThreshold: number; watchlistImportantThreshold: number;
   canSend: boolean; dry?: boolean; force?: boolean; maxItems: number;
@@ -84,6 +90,27 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       }
     }
     const item: Ready = { entry, decision, scoring };
+    // Una noticia vieja no es una noticia: es historia, y llega tarde para
+    // servir de algo.
+    //
+    // El corte por frescura existía solo en la CAPTURA (`maxItemAgeHours`, 72 h),
+    // y ese es otro momento: entre capturar y repartir hay una cola con cupo
+    // diario y horas de silencio, y el 16-09 esa cola iba casi dos días por
+    // detrás. La noticia entraba fresca y salía de anteayer.
+    //
+    // Se mide con `recientes()`, la misma función que decide la frescura en la
+    // captura, para que "edad de la noticia" signifique lo mismo en los dos
+    // sitios: por `observed_at` —la fecha de publicación— y dejando pasar lo que
+    // no lleva fecha interpretable.
+    //
+    // Solo para los breves. Un importante que llega tarde sigue saliendo: el
+    // volumen no es su problema, y callarlo sería decidir por el lector qué
+    // noticia grave ha caducado. Es la misma línea que las horas de silencio.
+    if (decision.level !== "important" && options.briefMaxAgeHours !== undefined &&
+        recientes([event], { now: new Date(options.now), maxAgeHours: options.briefMaxAgeHours }).length === 0) {
+      await cerrarSinEntregar(item, "stale_at_delivery");
+      continue;
+    }
     // Un breve cuya redaccion no se puede respaldar con cifras del original
     // lanza `short_fact_not_supported`, y eso esta bien: el guardarrail
     // antifabricacion hace su trabajo. Lo que estaba mal era CUANDO se

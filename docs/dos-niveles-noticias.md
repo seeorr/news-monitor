@@ -123,6 +123,7 @@ cuentan noticias del destino principal, no copias al grupo ni agenda/resumen.
 | `IMPORTANT_NEWS_PER_HOUR` / `IMPORTANT_NEWS_PER_DAY` | 3 / 12 |
 | `BRIEF_BATCH_SIZE` / `BRIEF_INTERVAL_MINUTES` | 3 / 60 |
 | `BRIEF_QUIET_HOURS` / `NEWS_TIMEZONE` | `0-8` / `Europe/Madrid` (`none` lo apaga) |
+| `BRIEF_MAX_AGE_HOURS` | 12, medidas al llegarle el turno al breve |
 | `MAX_PENDING_HOURS` | 48 desde primera captura |
 | `AI_CALLS_PER_DAY` | 120 peticiones, incluidos reintentos |
 | `MAX_SCORING_PER_CYCLE` / `MAX_DEEP_PER_CYCLE` | 12 / 3 |
@@ -140,6 +141,25 @@ siguiente instante, y salen después a 3 por hora. Los importantes no se callan.
 Motivo: el 15-09 el cupo se reinició a las 02:00 de Madrid y la cola de la noche
 lo gastó entero antes de las 10:04. Con 16 horas activas a 3 por hora caben 48
 breves, que es el cupo diario de producción.
+
+Frescura en el reparto: un breve al que le llega el turno con más de
+`BRIEF_MAX_AGE_HOURS` de publicado **no se envía**. Se cierra con
+`stale_at_delivery`, suelta `delivery_pending` y queda `undeliverable` en la
+máquina de entrega: la fila sigue entera en la cola, con su motivo al lado, y
+`alerts` sigue significando lo que salió de verdad. No se borra nada, entre otras
+cosas porque la fila es la memoria de deduplicación: sin ella, la misma noticia
+vuelve a entrar en la siguiente captura.
+
+La edad es la de la noticia, por `observed_at`, y la mide `recientes()`, la misma
+función que decide la frescura en la captura: "edad de la noticia" significa lo
+mismo en los dos sitios. Los importantes no se cortan, igual que no se callan de
+noche.
+
+Motivo: `MAX_ITEM_AGE_HOURS` (72) corta al **capturar**, y entre capturar y
+repartir hay una cola. El 16-09 esa cola iba casi dos días por detrás —83 breves
+esperando, de los cuales 76 de días anteriores— y lo que entraba fresco salía de
+anteayer. Doce horas es el número que mantiene el cierre americano de ayer
+—22:00 en Madrid— dentro del primer reparto de la mañana, a las 08:04.
 
 ## Comparación reproducible
 

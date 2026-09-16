@@ -168,6 +168,7 @@ jobs:
           BRIEF_BATCH_SIZE: ${{ vars.BRIEF_BATCH_SIZE }}
           BRIEF_INTERVAL_MINUTES: ${{ vars.BRIEF_INTERVAL_MINUTES }}
           BRIEF_QUIET_HOURS: ${{ vars.BRIEF_QUIET_HOURS }}
+          BRIEF_MAX_AGE_HOURS: ${{ vars.BRIEF_MAX_AGE_HOURS }}
           NEWS_TIMEZONE: ${{ vars.NEWS_TIMEZONE }}
           MAX_PENDING_HOURS: ${{ vars.MAX_PENDING_HOURS }}
           AI_CALLS_PER_DAY: ${{ vars.AI_CALLS_PER_DAY }}

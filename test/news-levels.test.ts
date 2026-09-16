@@ -145,6 +145,46 @@ describe("dos niveles, con transportes simulados", () => {
     await deliverNews({ ...o, now: "2026-09-11T06:04:00.000Z" }); // 08:04 en Madrid
     expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
   });
+  it("un breve que llega tarde a su turno no se envía: se cierra con su motivo", async () => {
+    // El corte de la captura (72 h) no protege de esto: entre capturar y
+    // repartir hay una cola con cupo y horas de silencio, y el 16-09 iba dos
+    // días por detrás. La noticia entraba fresca y salía de anteayer.
+    const viejo = "2026-09-09T12:00:00.000Z"; // 22 h antes de NOW
+    const o = options({ briefMaxAgeHours: 12 });
+    await prepare(o, event("rancia", "Copper production falls during maintenance", { observed_at: viejo }));
+    expect(await deliverNews(o)).toMatchObject({ sent: 0 });
+    expect(o.send).not.toHaveBeenCalled();
+    expect((await o.control.getDecision("rancia"))?.reasons).toContain("stale_at_delivery");
+    // Suelta la cola: no vuelve a encabezarla en cada vuelta.
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+    // Y no se marca como entregada: `alerts` sigue significando lo que salió.
+    expect(await o.seen.alertState?.("rancia")).toBe("undeliverable");
+    expect((await o.control.stats(NOW)).find((r) => r.resource === "brief")?.units ?? 0).toBe(0);
+  });
+  it("un importante viejo sale igual: el corte es solo para los breves", async () => {
+    const viejo = "2026-09-09T12:00:00.000Z";
+    const o = options({ briefMaxAgeHours: 12 });
+    await prepare(o, event("grave", "Gold exports halted after mine closure", { observed_at: viejo }),
+      score(8, "Se detienen las exportaciones de oro."));
+    expect(await deliverNews(o)).toMatchObject({ sent: 1 });
+    expect((await o.control.getDecision("grave"))?.reasons).not.toContain("stale_at_delivery");
+  });
+  it("lo de anoche sigue llegando en el primer reparto de la mañana", async () => {
+    // El caso que decide el número: a las 08:04 de Madrid, el cierre americano
+    // de ayer tiene diez horas y tiene que salir. Es lo que separa "estar al
+    // día" de "empezar la mañana vacía".
+    const cierre = "2026-09-10T20:00:00.000Z"; // 22:00 en Madrid
+    const manana = "2026-09-11T06:04:00.000Z"; // 08:04 en Madrid, fin del silencio
+    const o = options({ now: manana, briefMaxAgeHours: 12,
+      briefQuietHours: { desde: 0, hasta: 8, zona: "Europe/Madrid" } });
+    await prepare(o, event("anoche", "Copper production falls during maintenance", { observed_at: cierre }), score(5), cierre);
+    expect(await deliverNews(o)).toMatchObject({ sent: 1 });
+  });
+  it("sin edad máxima configurada no se corta nada", async () => {
+    const o = options();
+    await prepare(o, event("antigua", "Copper production falls during maintenance", { observed_at: "2026-09-08T10:00:00.000Z" }));
+    expect(await deliverNews(o)).toMatchObject({ sent: 1 });
+  });
   it("la antigüedad caduca con motivo explícito, sin renovar la primera captura", async () => {
     const o = options(); await prepare(o, event("old"));
     await deliverNews({ ...o, now: "2026-09-13T10:00:00.000Z" });

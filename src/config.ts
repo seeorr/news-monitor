@@ -61,6 +61,12 @@ export interface Config {
   briefIntervalMinutes?: number;
   /** `BRIEF_QUIET_HOURS` en `NEWS_TIMEZONE`. `null`: los breves salen a cualquier hora. */
   briefQuietHours?: HorasDeSilencio | null;
+  /**
+   * `BRIEF_MAX_AGE_HOURS`: edad máxima de un breve **cuando le llega el turno**.
+   * No es `MAX_ITEM_AGE_HOURS`, que corta al capturar: entre capturar y repartir
+   * hay una cola, y lo que entró fresco puede salir de anteayer.
+   */
+  briefMaxAgeHours?: number;
   maxPendingHours?: number;
   aiCallsDay?: number;
   aiScoringInputUsd?: number | null;
@@ -150,6 +156,7 @@ export function loadConfig(): Config {
     briefBatchSize: entero("BRIEF_BATCH_SIZE", 3, 1, 6),
     briefIntervalMinutes: entero("BRIEF_INTERVAL_MINUTES", 60, 0, 360),
     briefQuietHours: leerHorasDeSilencio(env("BRIEF_QUIET_HOURS"), env("NEWS_TIMEZONE")),
+    briefMaxAgeHours: entero("BRIEF_MAX_AGE_HOURS", 12, 1, 72),
     maxPendingHours: entero("MAX_PENDING_HOURS", 48, 1, 168),
     aiCallsDay: entero("AI_CALLS_PER_DAY", 120, 0, 2000),
     aiScoringInputUsd: optionalPrice("AI_SCORING_INPUT_USD_PER_MILLION"),
