@@ -64,5 +64,8 @@ jobs:
       - name: Cadencia y salud
         run: npm run verify:cadence:postgres
 
+      - name: Retención sin borrar noticias
+        run: npm run verify:retention:postgres
+
       - name: Límite de intentos del dashboard
         run: npm run verify:access:postgres

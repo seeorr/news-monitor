@@ -22,6 +22,8 @@
     "verify:queue:postgres": "tsx scripts/verificar-cola-postgres.ts",
     "verify:control:postgres": "tsx scripts/verificar-control-postgres.ts",
     "verify:migrations:postgres": "tsx scripts/verificar-migraciones-reejecutables.ts",
+    "verify:retention:postgres": "tsx scripts/verificar-retencion-postgres.ts",
+    "retencion": "tsx scripts/retencion.ts",
     "verify:access:postgres": "tsx scripts/verificar-acceso-postgres.ts",
     "evaluate:news": "tsx scripts/evaluar-noticias.ts",
     "audit:news": "tsx scripts/auditar-noticias.ts",

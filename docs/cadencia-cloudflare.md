@@ -125,7 +125,17 @@ Estimación para `core`, con FRED configurado, todos los disparos entregados y s
 - `workflow_run` puede crear además hasta 192 jobs cortos de comprobación del Resumen; fast/process salen antes de dependencias. En días laborables, full puede ofrecer hasta 24 recuperaciones en su ventana de seis horas. Agenda/Resumen independientes y consultas de esas recuperaciones no están incluidos en las 1.920 tareas de Monitor.
 - Sin candidatas pendientes nuevas: cero llamadas al modelo. El máximo teórico de slots de scoring sube, pero el límite diario compartido sigue en **120 peticiones de IA**, incluidos análisis/reintentos de formato. Límites editoriales por defecto: 24 noticias breves y 12 importantes al día. No se han ampliado.
 - Historial: hasta 192 filas nuevas/día. Con 1 KB de payload por ejecución: ~0,2 MB/día y 17 MB/90 días antes de índices/MVCC. Checkpoints: aproximadamente 2.500 actualizaciones pequeñas/día en el escenario base. Hay más actividad de Neon aunque no aparezcan noticias nuevas; medir compute, almacenamiento, WAL y auto-suspensión antes de mantenerlo indefinidamente.
-- Cola: repetidas actualizan contador, no crean filas. Ejemplo orientativo: 250 únicas/día × 2 KB ≈ 0,5 MB/día de snapshots, más índices/decisiones/análisis. Un comunicado enriquecido puede añadir hasta 12 KB. No se añade purga automática: no borrar backlog ni ledger para ahorrar espacio.
+- Cola: repetidas actualizan contador, no crean filas. Ejemplo orientativo: 250 únicas/día × 2 KB ≈ 0,5 MB/día de snapshots, más índices/decisiones/análisis. Un comunicado enriquecido puede añadir hasta 12 KB.
+
+> **Revisado el 17-09-2026, con el consumo medido.** «No borrar backlog ni ledger
+> para ahorrar espacio» sigue vigente y no se ha tocado: no se borra ni una fila.
+> Lo que sí hay ahora es **poda del cuerpo** de los snapshots ya descartados y
+> antiguos (`npm run retencion`, seco por defecto), porque el dato real obligaba
+> a preverlo: 48 MB de 500 en nueve días, unos 5,4 MB/día, y el disco lleno hacia
+> diciembre. Cuando Neon se llena **fallan también los `DELETE`**, así que una
+> política escrita ese día ya no se puede ejecutar. La fila se queda entera —es
+> la memoria de deduplicación— con `id`, `kind`, fuente y titular; se va la
+> entradilla. Detalle y límites en `src/db/retencion.ts`.
 
 [Workers Free](https://developers.cloudflare.com/workers/platform/limits/) publica 100.000 solicitudes/día, 10 ms de CPU por invocación, 50 subrequests y 5 cron triggers por cuenta. El Worker usa un trigger y un POST por invocación; el tiempo esperando HTTP no equivale a CPU. El bundle local es ~3,2 KiB (~1,4 KiB gzip). Hay que observar CPU y errores reales; el dry-run no mide carga desplegada. Consultar también [precios oficiales](https://developers.cloudflare.com/workers/platform/pricing/): no seleccionar Workers Paid ni asumir que el resto del sistema es gratuito por caber este reloj en Free.
 
