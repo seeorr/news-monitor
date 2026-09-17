@@ -127,6 +127,28 @@ Estimación para `core`, con FRED configurado, todos los disparos entregados y s
 - Historial: hasta 192 filas nuevas/día. Con 1 KB de payload por ejecución: ~0,2 MB/día y 17 MB/90 días antes de índices/MVCC. Checkpoints: aproximadamente 2.500 actualizaciones pequeñas/día en el escenario base. Hay más actividad de Neon aunque no aparezcan noticias nuevas; medir compute, almacenamiento, WAL y auto-suspensión antes de mantenerlo indefinidamente.
 - Cola: repetidas actualizan contador, no crean filas. Ejemplo orientativo: 250 únicas/día × 2 KB ≈ 0,5 MB/día de snapshots, más índices/decisiones/análisis. Un comunicado enriquecido puede añadir hasta 12 KB.
 
+
+## Revisión del 17-09-2026 · cuatro disparos por hora
+
+El reloj pasa de `3,13,23,33,43,53` a **`3,18,33,48`**: de seis disparos por hora
+a cuatro, 96 al día en vez de 144.
+
+El motivo es el consumo medido, no una estimación: **25,71 CU-horas en nueve
+días**, unas 2,9 al día, que en un mes completo son ~90 de las 100 del plan
+gratuito. Y el mando obvio no existe: **el plan Free no deja cambiar los cinco
+minutos de inactividad** antes de suspender el cómputo. Con un disparo cada diez
+minutos la base no llega a dormirse nunca; con uno cada quince, sí. Estimación
+con el coste por ciclo ya medido: ~60 CU-horas al mes.
+
+Lo que **no** cambia: los dos `full` siguen a las :03 y a las :33. Se quitan dos
+`fast` intermedios, no cobertura de fuentes lentas.
+
+Lo que cambia además, y no es un detalle: el vigilante sale en el último disparo
+de la hora, que ahora son **las :48** y no las :53 (`HEALTH_MINUTE`). Y
+`HEALTH_FAST_MINUTES` sube de 15 a 25 minutos, porque los feeds críticos entran
+en todos los disparos y con quince minutos de hueco el informe habría marcado
+`delayed` justo antes de cada ciclo, todos los ciclos.
+
 > **Revisado el 17-09-2026, con el consumo medido.** «No borrar backlog ni ledger
 > para ahorrar espacio» sigue vigente y no se ha tocado: no se borra ni una fila.
 > Lo que sí hay ahora es **poda del cuerpo** de los snapshots ya descartados y

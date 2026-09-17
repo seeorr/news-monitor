@@ -46,9 +46,22 @@ export type DispatchProfile = "fast" | "full";
 // el 10-09: un TypeError permanente parecía una red inestable e invitaba a esperar.
 export type DispatchState = "disabled" | "accepted" | "rejected" | "timeout" | "uncertain" | "invalid_config" | "invalid_request";
 export type SafeRecord = { state: DispatchState; profile?: DispatchProfile; http?: number; target?: "health" };
-export const CRON = "3,13,23,33,43,53 * * * *";
 /**
- * El vigilante sale del mismo reloj y del mismo disparo: en el de las :53 de cada hora,
+ * Cuatro disparos por hora, no seis, desde el 17-09.
+ *
+ * El motivo es el coste, medido y no estimado: con seis disparos la base de Neon
+ * gastaba ~2,9 CU-horas al día —unas 90 de las 100 del mes— porque el plan
+ * gratuito NO deja tocar los cinco minutos de inactividad antes de suspender, y
+ * con un disparo cada diez la base no llega a dormirse. Cuatro por hora la dejan
+ * apagarse entre ciclo y ciclo y bajan el consumo a unas 60 al mes.
+ *
+ * Los dos `full` se quedan donde estaban, a las :03 y a las :33: lo que se
+ * quitan son dos `fast` intermedios. Un `full` hace las fuentes lentas, y
+ * perderlo habría cambiado la cobertura, que no es lo que se quería tocar.
+ */
+export const CRON = "3,18,33,48 * * * *";
+/**
+ * El vigilante sale del mismo reloj y del mismo disparo: en el ULTIMO de cada hora,
  * además del monitor. Su `schedule` horario en GitHub entregó 6 disparos en 15 horas el
  * 14-09, y un vigilante que no se ejecuta se parece a un día tranquilo.
  *
@@ -58,7 +71,7 @@ export const CRON = "3,13,23,33,43,53 * * * *";
  * demostrado. Se queda además el `schedule` de GitHub como respaldo, porque si este
  * reloj se para, el vigilante que lanza se para con él.
  */
-export const HEALTH_MINUTE = 53;
+export const HEALTH_MINUTE = 48;
 export type DispatchTarget = "monitor" | "health";
 /**
  * workerd —el runtime real de Cloudflare, no Node— NO implementa `redirect: "error"`.
@@ -94,7 +107,7 @@ const REDIRECT: RedirectSoportadoPorWorkerd = "manual";
 type PeticionDeReloj = Omit<RequestInit, "redirect"> & { redirect: RedirectSoportadoPorWorkerd };
 export function selectProfile(scheduledTime: number, strategy: Env["STRATEGY"]): DispatchProfile {
   const minute = new Date(scheduledTime).getUTCMinutes();
-  if (![3, 13, 23, 33, 43, 53].includes(minute) || !["mixed", "fast-only"].includes(strategy)) throw new Error("invalid_config");
+  if (![3, 18, 33, 48].includes(minute) || !["mixed", "fast-only"].includes(strategy)) throw new Error("invalid_config");
   return strategy === "mixed" && (minute === 3 || minute === 33) ? "full" : "fast";
 }
 export async function dispatch(scheduledTime: number, env: Env, dependencies: {
@@ -156,7 +169,7 @@ export async function dispatch(scheduledTime: number, env: Env, dependencies: {
   return fail([401, 403, 404, 422, 429].includes(response.status) ? "rejected" : "uncertain", response.status);
 }
 /**
- * Siempre el monitor; a las :53, también el vigilante. Independientes: si uno falla,
+ * Siempre el monitor; en el último disparo de la hora, también el vigilante. Independientes: si uno falla,
  * el otro sale igual. Después se relanza el primer fallo, para que el disparo quede
  * en rojo en los Cron Events en vez de parecer correcto.
  */

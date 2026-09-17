@@ -16,8 +16,9 @@
 # disparos —entrega alrededor del 22,9 % de los programados, y un cron diario de
 # este mismo repositorio no disparo ni una vez el 9 de septiembre de 2026—.
 #
-# Desde el 14-09 lo dispara ademas el Worker de Cloudflare en su disparo de las
-# :53 (`HEALTH_MINUTE`), junto al monitor: este `schedule` entrego 6 disparos en
+# Desde el 14-09 lo dispara ademas el Worker de Cloudflare en el ULTIMO disparo
+# de cada hora (`HEALTH_MINUTE`), junto al monitor. Eran las :53 con seis disparos
+# por hora; desde el 17-09 son las :48, con cuatro: este `schedule` entrego 6 disparos en
 # 15 horas. Un cron propio a los :51 no se invoco nunca y se retiro. Este
 # `schedule` se queda como respaldo independiente, porque si el reloj de
 # Cloudflare se para, el vigilante que lanza se para con el.

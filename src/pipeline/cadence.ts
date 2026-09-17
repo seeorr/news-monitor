@@ -30,7 +30,15 @@ export function healthLimits(env: Record<string, string | undefined> = {}): Heal
     if (!Number.isFinite(value) || value <= 0 || value > 10080) throw new Error("invalid_health_limit");
     return value;
   };
-  return { fastMinutes: number("HEALTH_FAST_MINUTES", 15), fullMinutes: number("HEALTH_FULL_MINUTES", 45),
+  // `fastMinutes` sube de 15 a 25 el 17-09, con el reloj: el vigilante mide la
+  // antiguedad de la ultima captura de un feed critico, y esos feeds entran en
+  // TODOS los disparos. Con cuatro por hora el hueco entre dos es de 15 minutos
+  // exactos, asi que un limite de 15 marcaria `delayed` justo antes de cada
+  // ciclo, todos los ciclos. No avisa por Telegram —`delayed` no es notificable—
+  // pero dejaria el informe de salud en rojo permanente, y un rojo que siempre
+  // esta encendido no distingue nada. 25 conserva el mismo margen relativo que
+  // tenia con seis disparos por hora.
+  return { fastMinutes: number("HEALTH_FAST_MINUTES", 25), fullMinutes: number("HEALTH_FULL_MINUTES", 45),
     noExecutionMinutes: number("HEALTH_NO_EXECUTION_MINUTES", 90), queueMinutes: number("HEALTH_QUEUE_MINUTES", 120),
     rateCaptureMinutes: number("HEALTH_RATE_CAPTURE_MINUTES", 10), rateAlertMinutes: number("HEALTH_RATE_ALERT_MINUTES", 15) };
 }
