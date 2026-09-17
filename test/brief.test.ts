@@ -141,8 +141,22 @@ describe("contenido determinista", () => {
     expect((await generateBrief(deps, { now })).payload.gaps).toEqual([]);
   });
 
-  it("cuatro señales sintéticas conservan TODOS los valores, fechas y fuentes sin URLs repetidas", async () => {
-    const ids = ["VIXCLS", "SP500", "BAMLH0A0HYM2", "DTWEXBGS"];
+  it("un contexto que no llegó tampoco finge carencia: los tres votos mandan", async () => {
+    // `NFCI` es semanal y de otra publicación: que FRED falle solo en ella no
+    // convierte en insuficiente un régimen con los tres votos frescos y unánimes.
+    for (const roto of [{ value: null }, { date: null }, { stale: true }]) {
+      const { deps } = setup({ regimen: async () => ({ ...regimen, state: "risk_on",
+        signals: [regimen.signals[0]!, { ...regimen.signals[0]!, id: "NFCI", label: "NFCI", vote: null, ...roto }] }) });
+      expect((await generateBrief(deps, { now })).payload.gaps).toEqual([]);
+    }
+    // Y si la rota es una que vota, la carencia sigue apareciendo.
+    const { deps } = setup({ regimen: async () => ({ ...regimen, state: "risk_on",
+      signals: [{ ...regimen.signals[0]!, id: "VIXCLS", value: null }] }) });
+    expect((await generateBrief(deps, { now })).payload.gaps).toContain("régimen con datos insuficientes u obsoletos");
+  });
+
+  it("las cinco señales sintéticas conservan TODOS los valores, fechas y fuentes sin URLs repetidas", async () => {
+    const ids = ["VIXCLS", "SP500", "BAMLH0A0HYM2", "DTWEXBGS", "NFCI"];
     const r: Regimen = { ...regimen, state: "risk_on", signals: ids.map((id, i) => ({
       ...regimen.signals[0]!, id, label: id, value: 123 + i, date: `2026-09-0${i + 1}`,
       sourceUrl: `https://example.org/${id}`, vote: i === 3 ? null : 1,
@@ -157,7 +171,10 @@ describe("contenido determinista", () => {
       expect(brief.body).toContain(`${s.label}: ${s.value} puntos · ${s.date}`);
       expect(brief.body.split(s.sourceUrl)).toHaveLength(2);
     }
-    expect(brief.body).toContain("Liquidez no cubierta");
+    // La línea de contexto se escribe desde las señales, no a mano: con el NFCI
+    // dentro, el mensaje ya no puede decir que la liquidez no está cubierta.
+    expect(brief.body).toContain("no votan.");
+    expect(brief.body).not.toContain("Liquidez no cubierta");
     expect(brief.body).toContain("Contexto original de prueba");
     expect(brief.body).toContain("5. 7/10");
     expect(brief.body.length).toBeLessThanOrEqual(4096);

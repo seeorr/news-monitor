@@ -1,7 +1,7 @@
 /** Resumen determinista: solo lecturas y aritmética; sin cascada ni LLM. */
 import { randomUUID } from "node:crypto";
 import type { Cita } from "../sources/calendario.ts";
-import type { Regimen } from "../sources/regimen.ts";
+import { CONTEXTO, type Regimen } from "../sources/regimen.ts";
 
 export interface BriefEvent {
   id: string;
@@ -122,7 +122,7 @@ export function formatBrief(payload: BriefPayload): string {
   if (payload.regimen.status === "ok") {
     const r = payload.regimen.data;
     // La prosa extensa original queda en payload.regimenText. En Telegram se
-    // reservan primero las cuatro señales, incluidas las que no emiten voto.
+    // reservan primero todas las señales, incluidas las que no emiten voto.
     const signals = r.signals.map((s) =>
       `${line(s.label, 40)}: ${s.value === null ? "sin dato" : line(String(s.value), 25)} ${line(s.unit, 15)}` +
       ` · ${s.date === null ? "sin fecha" : line(s.date, 30)}${s.stale ? " · OBSOLETO" : ""}` +
@@ -133,7 +133,10 @@ export function formatBrief(payload: BriefPayload): string {
     regime = `📊 RÉGIMEN DE MERCADO · ${states[r.state]}\n\n` +
       (signals || "Sin señales disponibles.") + "\n\n" +
       "Regla: unanimidad de VIX, tendencia y crédito. Heurística, no predicción.\n" +
-      "Dólar: contexto sin voto. Liquidez no cubierta.";
+      // La frase la manda la lista de contexto, no una copia a mano. Decía
+      // "Liquidez no cubierta" mientras el bloque de arriba ya imprimía la fila
+      // del NFCI: el mensaje se desmentía a sí mismo ocho líneas después.
+      `${r.signals.filter((s) => CONTEXTO.has(s.id)).map((s) => s.label.split(" · ")[0]).join(" y ")}: contexto, no votan.`;
   }
   regime = cut(regime, 1250, SHORTENED);
   const rest = [header, agenda, regime, gapText, footer].filter(Boolean);
@@ -210,9 +213,13 @@ export function calcularCarencias(payload: BriefPayload): void {
   }
   if (payload.agenda.status === "unavailable") payload.gaps.push("agenda no disponible");
   if (payload.regimen.status === "unavailable") payload.gaps.push("régimen no disponible");
-  else if (payload.regimen.data.state === "insufficient_data" || payload.regimen.data.signals.some(
-    (s) => s.stale || s.value === null || s.date === null,
-  )) payload.gaps.push("régimen con datos insuficientes u obsoletos");
+  // Solo las que votan. El contexto no clasifica nada, así que un NFCI que no
+  // llegó —serie semanal, de otra publicación— no puede declarar insuficiente un
+  // régimen cuyos tres votos están frescos y de acuerdo.
+  else if (payload.regimen.data.state === "insufficient_data" ||
+    payload.regimen.data.signals.filter((s) => !CONTEXTO.has(s.id)).some(
+      (s) => s.stale || s.value === null || s.date === null,
+    )) payload.gaps.push("régimen con datos insuficientes u obsoletos");
 }
 
 /**
