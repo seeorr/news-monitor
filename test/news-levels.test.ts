@@ -161,6 +161,30 @@ describe("dos niveles, con transportes simulados", () => {
     expect(await o.seen.alertState?.("rancia")).toBe("undeliverable");
     expect((await o.control.stats(NOW)).find((r) => r.resource === "brief")?.units ?? 0).toBe(0);
   });
+  it("cerrar breves por viejos se cuenta aparte de los fallos y no deja el ciclo mudo", async () => {
+    // El primer ciclo con la regla cerro 72 breves, termino en verde con
+    // `sent: 0` y la unica huella quedo en `news_decisions`. Si el cierre no se
+    // cuenta, "hoy no habia nada" y "hoy he tirado setenta" se leen igual.
+    const viejo = "2026-09-09T12:00:00.000Z";
+    const o = options({ briefMaxAgeHours: 12, briefIntervalMinutes: 0 });
+    await prepare(o, event("rancia-1", "Copper production falls during maintenance", { observed_at: viejo }), score(), "2026-09-09T12:00:00.000Z");
+    await prepare(o, event("rancia-2", "Gold exports halted after mine closure", { observed_at: viejo }), score(5, "Se detienen las exportaciones de oro."), "2026-09-09T12:30:00.000Z");
+    await prepare(o, event("fresca"), score(), "2026-09-10T09:00:00.000Z");
+    const resultado = await deliverNews(o);
+    expect(resultado.staleClosed).toBe(2);
+    // Y no como fallo: un dia con la cola retrasada no puede parecer un dia roto.
+    expect(resultado.failed).toBe(0);
+    expect(resultado.sent).toBe(1);
+    expect(o.send.mock.calls[0]![0]).not.toContain("oro");
+  });
+  it("sin nada que cerrar el contador es cero, tambien cuando no sale ningun breve", async () => {
+    const o = options({ briefMaxAgeHours: 12 });
+    await prepare(o, event("fresca"));
+    expect(await deliverNews(o)).toMatchObject({ staleClosed: 0, sent: 1 });
+    const mudo = options({ briefMaxAgeHours: 12, canSend: false });
+    await prepare(mudo, event("fresca"));
+    expect(await deliverNews(mudo)).toMatchObject({ staleClosed: 0, telegramUnconfigured: true });
+  });
   it("un importante viejo sale igual: el corte es solo para los breves", async () => {
     const viejo = "2026-09-09T12:00:00.000Z";
     const o = options({ briefMaxAgeHours: 12 });
@@ -366,6 +390,40 @@ describe("qué se hace con cada desenlace del transporte", () => {
     expect(o.send).toHaveBeenCalledTimes(2);
     expect(await o.seen.alertState?.("limitada")).toBe("sent");
     expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("un aplazado que caduca se cierra de verdad y deja de decir que espera reintento", async () => {
+    // El agujero: `markUndeliverable` es un `insert ... do nothing`, y con la
+    // fila ya en `deferred` no escribia nada. La cola se soltaba igual, asi que
+    // `alert_deliveries` se quedaba diciendo "pendiente de reintento" con un
+    // plazo en el pasado y nadie iba a reintentarlo nunca.
+    const o = options({ briefIntervalMinutes: 0, briefMaxAgeHours: 12,
+      send: vi.fn(async () => ({ state: "rejected" as const, rejection: "recoverable" as const, retryAfterMs: 120_000, code: "telegram_429" })) });
+    await prepare(o, event("aplazada"));
+    await deliverNews(o);
+    expect(await o.seen.alertDelivery?.("aplazada")).toMatchObject({ estado: "deferred" });
+    // Trece horas y media despues le toca el turno, y ya es vieja para un breve.
+    const tarde = "2026-09-10T23:30:00.000Z";
+    expect(await deliverNews({ ...o, now: tarde })).toMatchObject({ staleClosed: 1 });
+    expect(o.send).toHaveBeenCalledTimes(1);
+    expect(await o.seen.alertDelivery?.("aplazada")).toEqual({ estado: "undeliverable", nextAttemptAt: null });
+    expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("el cierre del aplazado no toca ningun estado terminal ni una entrega en vuelo", async () => {
+    // El `where ... and state = 'deferred'` no es prudencia de mas: promover un
+    // `sent` o un `sending` es el doble envio que costo escribir la tabla.
+    const seen = memorySeenStore();
+    for (const [id, estado] of [["ida", "sent"], ["rechazada", "rejected"], ["dudosa", "uncertain"]] as const) {
+      await seen.claimAlert(id, { token: id, now: NOW });
+      await seen.finishAlert(id, id, estado);
+      expect(await seen.closeDeferred?.(id)).toBe(false);
+      expect(await seen.alertState?.(id)).toBe(estado);
+    }
+    await seen.claimAlert("en-vuelo", { token: "t", now: NOW });
+    expect(await seen.closeDeferred?.("en-vuelo")).toBe(false);
+    expect(await seen.alertState?.("en-vuelo")).toBe("sending");
+    // Y sin fila no hay nada que rematar: el cierre lo escribe `markUndeliverable`.
+    expect(await seen.closeDeferred?.("inexistente")).toBe(false);
+    expect(await seen.alertState?.("inexistente")).toBeNull();
   });
   it("un rechazo permanente no se reintenta jamás y deja de ocupar la cola", async () => {
     const o = options({ briefIntervalMinutes: 0, send: vi.fn(async () => ({ state: "rejected" as const, rejection: "permanent" as const, code: "telegram_400" })) });

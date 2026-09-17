@@ -171,6 +171,36 @@ export function neonSeenStore(databaseUrl: string, sql: Ejecutor = neon(database
     },
 
     /**
+     * Remata el cierre cuando `markUndeliverable` no escribio porque la entrega
+     * ya estaba **aplazada**.
+     *
+     * Un 429 de Telegram deja la fila en `deferred` con su plazo. Si despues la
+     * noticia se cierra por vieja, el `do nothing` de arriba no cambiaba nada y
+     * el valor de vuelta se descartaba: `capture_queue.delivery_pending` quedaba
+     * en `false` —nadie la va a volver a coger— y `alert_deliveries` seguia
+     * diciendo "pendiente de reintento" con una fecha en el pasado. La base
+     * afirmaba algo que no iba a pasar nunca.
+     *
+     * El `where` acota a `deferred` y no es prudencia de mas: `sent`, `rejected`
+     * y `uncertain` son terminales y `sending` esta en vuelo. El motivo por el
+     * que ninguno de esos cuatro se toca esta escrito en
+     * `neon/migrations/20260911_entrega_aplazable.sql`, y es el doble envio.
+     *
+     * `next_attempt_at` se borra en la misma sentencia porque el CHECK
+     * `alert_deliveries_plazo_solo_aplazada` no admite plazo fuera de `deferred`:
+     * dejarlo puesto no seria un detalle feo, seria un error de la base.
+     */
+    async closeDeferred(eventId: string) {
+      const filas = (await sql`
+        update alert_deliveries
+        set state = 'undeliverable', settled_at = now(), updated_at = now(), next_attempt_at = null
+        where event_id = ${eventId} and state = 'deferred'
+        returning event_id
+      `) as unknown[];
+      return filas.length === 1;
+    },
+
+    /**
      * El evento se guarda primero: `alerts.event_id` tiene clave foránea y una
      * alerta sin su evento no debe existir. El índice único de `alerts` es la
      * segunda red contra el reenvío, por si el registro de vistos falla.

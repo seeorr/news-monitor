@@ -231,6 +231,24 @@ export interface SeenStore {
    * igual que el relleno histórico: aquí no hubo reclamo que fingir.
    */
   markUndeliverable?(eventId: string): Promise<boolean>;
+  /**
+   * Remata un cierre que `markUndeliverable` no pudo escribir porque ya habia
+   * fila **aplazada**.
+   *
+   * `markUndeliverable` no pisa nada, y esta bien que no lo haga; el problema es
+   * lo que quedaba cuando no escribia: un 429 deja la entrega en `deferred` con
+   * su plazo, y si la noticia se cierra despues por vieja, la cola se suelta
+   * (`delivery_pending = false`) mientras la entrega sigue diciendo "pendiente de
+   * reintento" con un plazo ya vencido. Nadie la reintenta nunca y la base miente.
+   *
+   * Solo promueve desde `deferred`, y es deliberado: `sent`, `rejected` y
+   * `uncertain` son terminales y `sending` esta en vuelo. Tocar cualquiera de
+   * ellos es el doble envio que costo escribir esta tabla —el motivo esta en
+   * `neon/migrations/20260911_entrega_aplazable.sql`— y aqui no se hace.
+   * Devuelve `false` si la fila no estaba `deferred`: entonces no habia nada que
+   * rematar.
+   */
+  closeDeferred?(eventId: string): Promise<boolean>;
   /** Se envió esta alerta. */
   saveAlert(event: NormalizedEvent, alert: AlertRecord): Promise<void>;
   size(): Promise<number>;
@@ -292,6 +310,15 @@ function reclamosEnMemoria() {
     markUndeliverable: async (eventId: string): Promise<boolean> => {
       if (entregas.has(eventId)) return false;
       entregas.set(eventId, { estado: "undeliverable", token: null, nextAttemptAt: null });
+      return true;
+    },
+    closeDeferred: async (eventId: string): Promise<boolean> => {
+      const entrega = entregas.get(eventId);
+      if (!entrega || entrega.estado !== "deferred") return false;
+      // El plazo se borra con el estado: dejarlo seria invitar a alguien a
+      // usarlo para liberar algo que ya no se reintenta. El token se conserva,
+      // que es el rastro de quien la mando la ultima vez.
+      entregas.set(eventId, { estado: "undeliverable", token: entrega.token, nextAttemptAt: null });
       return true;
     },
   };
@@ -419,6 +446,15 @@ function reclamosEnArchivo(stateDir: string) {
         return true;
       });
     },
+    closeDeferred: async (eventId: string): Promise<boolean> => {
+      if (!eventId) throw new Error("invalid_alert_claim");
+      return change((rows) => {
+        const previous = rows.get(eventId);
+        if (!previous || previous.estado !== "deferred") return false;
+        rows.set(eventId, { ...previous, estado: "undeliverable", nextAttemptAt: null });
+        return true;
+      });
+    },
   };
 }
 
@@ -455,7 +491,7 @@ export function fileSeenStore(stateDir: string): SeenStore {
     writeFileSync(path, JSON.stringify([...ids].slice(-5000), null, 0), "utf8");
   };
 
-  const { claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable } = reclamosEnArchivo(stateDir);
+  const { claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable, closeDeferred } = reclamosEnArchivo(stateDir);
 
   return {
     has: async (id) => ids.has(id),
@@ -468,6 +504,7 @@ export function fileSeenStore(stateDir: string): SeenStore {
     alertDelivery,
     finishAlert,
     markUndeliverable,
+    closeDeferred,
     saveAlert: async (event) => {
       ids.add(event.id);
       persist();
@@ -487,7 +524,7 @@ export function memorySeenStore(
   const ids = new Set(initial);
   const alerts: AlertRecord[] = [];
   const puntuaciones = new Map<string, Puntuacion>();
-  const { entregas, claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable } = reclamosEnMemoria();
+  const { entregas, claimAlert, finishAlert, alertState, alertDelivery, markUndeliverable, closeDeferred } = reclamosEnMemoria();
   return {
     alerts,
     puntuaciones,
@@ -497,6 +534,7 @@ export function memorySeenStore(
     alertDelivery,
     finishAlert,
     markUndeliverable,
+    closeDeferred,
     has: async (id) => ids.has(id),
     mark: async (event, puntuacion) => {
       ids.add(event.id);

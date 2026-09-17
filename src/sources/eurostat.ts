@@ -24,10 +24,10 @@
  * de 2026: `une_rt_m` con `geo=EA20` y con `geo=EA22` responden lo mismo, 200 y
  * `"size": [...,0,...]`.
  *
- * Es el modo de fallo del `TSMC` de la watchlist —una consulta que no vigila
- * nada y no se queja— pero peor, porque llega solo con el tiempo: el código que
- * hoy funciona empezaría a devolver vacío el día que entre el país 22, sin haber
- * desplegado nada.
+ * Es el mismo modo de fallo que un ticker mal escrito en la watchlist —una
+ * consulta que no vigila nada y no se queja— pero peor, porque llega solo con
+ * el tiempo: el código que hoy funciona empezaría a devolver vacío el día que
+ * entre el país 22, sin haber desplegado nada.
  *
  * Y no se arregla fijando `EA21` en todas partes, porque cada dataset admite
  * agregados distintos. Comprobado el mismo día: `une_rt_m` solo tiene `EA21`;

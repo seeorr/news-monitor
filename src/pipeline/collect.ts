@@ -314,8 +314,34 @@ async function collectWithinBudget(
  * mediados de septiembre. Aplicarle este filtro lo tiraría siempre, que es justo
  * el dato por el que existe el monitor. Ahí la novedad la decide el registro de
  * vistos, no el calendario.
+ *
+ * Un movimiento de mercado sí se fecha al publicarse: «ASML −6,54 % en la
+ * sesión» nace con la sesión y a los seis días no informa de nada. Estaba fuera
+ * del conjunto y por eso salían movimientos de hace una semana. Su fecha es un
+ * día, no un instante, y de ahí `instanteDeReferencia()`.
  */
-const FECHADOS_AL_PUBLICAR = new Set(["news", "filing"]);
+const FECHADOS_AL_PUBLICAR = new Set(["news", "filing", "market_move"]);
+
+/**
+ * El instante contra el que se mide la edad de un evento.
+ *
+ * `observed_at` no siempre es un instante: un movimiento de mercado lo fecha con
+ * el DIA de la sesion (`2026-09-11`), y `Date.parse` de una fecha sin hora da la
+ * medianoche UTC. Medir desde ahi haria que la sesion de hoy naciera con hasta
+ * 24 h encima: un valor estadounidense cierra a las 20:00 UTC, o sea 20 h
+ * despues de su propia medianoche, y con un corte de 12 h no habria salido nunca
+ * ni uno solo. El corte que quiere tirar lo de hace seis dias habria acabado
+ * tirandolo TODO, en silencio, que es exactamente lo que se estaba arreglando.
+ *
+ * Un dia solo dice el dia. El ultimo instante compatible con el es su final, asi
+ * que es desde ahi desde donde se cuenta. Es la lectura conservadora: nunca
+ * envejece un evento mas de lo que la fuente asegura.
+ */
+function instanteDeReferencia(observedAt: string): number {
+  const t = Date.parse(observedAt);
+  if (!Number.isFinite(t)) return Number.NaN;
+  return /^\d{4}-\d{2}-\d{2}$/.test(observedAt.trim()) ? t + 24 * 3600_000 : t;
+}
 
 export function recientes(
   events: NormalizedEvent[],
@@ -324,7 +350,7 @@ export function recientes(
   const limite = opts.now.getTime() - opts.maxAgeHours * 3600_000;
   return events.filter((e) => {
     if (!FECHADOS_AL_PUBLICAR.has(e.kind)) return true;
-    const t = Date.parse(e.observed_at);
+    const t = instanteDeReferencia(e.observed_at);
     if (!Number.isFinite(t)) return true; // Sin fecha interpretable, que decida el scoring.
     return t >= limite;
   });

@@ -38,6 +38,11 @@ const CODES = [
   // de qué evento: la fuente ya es vocabulario cerrado y con ella basta para
   // diagnosticar.
   "GROUP_SENT", "GROUP_REJECTED", "GROUP_FAILED",
+  // Breves cerrados por viejos al llegarles el turno (`stale_at_delivery`).
+  // No es un fallo y no cuenta como tal: es la cola diciendo que va por detras.
+  // Existe porque sin el, un ciclo que cierra setenta breves y no manda ninguno
+  // sale en verde con `sent: 0`, indistinguible de un ciclo sin nada que mandar.
+  "BRIEF_STALE_CLOSED",
   "QUEUE_CAPTURE", "QUEUE_STATS", "QUEUE_DISCARDED", "QUEUE_PLAN", "QUEUE_RETRY",
   "QUEUE_DELIVERY_PENDING", "SEC_COVERAGE", "CAPTURE_ONLY", "UNHANDLED", "LOG_SUPPRESSED",
 ] as const;

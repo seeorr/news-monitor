@@ -219,8 +219,8 @@ async function main(): Promise<number> {
   }); remainingDeepLevels -= result.deep;
     if (result.telegramUnconfigured) result.failed++;
     return result; };
-  const beforeLevels = levels ? await sendTwoLevels(true) : { sent: 0, failed: 0, deep: 0 };
-  const immediate = { sent: 0, failed: 0, deep: 0 };
+  const beforeLevels = levels ? await sendTwoLevels(true) : { sent: 0, failed: 0, deep: 0, staleClosed: 0 };
+  const immediate = { sent: 0, failed: 0, deep: 0, staleClosed: 0 };
   if (!deps) log("SCORING_UNAVAILABLE", { stage: "scoring" });
   const processing = deps ? await processQueue(queue, {
     maxScoring: config.maxScoringPerCycle, scanLimit: config.queueScanLimit,
@@ -236,7 +236,7 @@ async function main(): Promise<number> {
       // no retrasan una decisión ya preparada. Las cuotas siguen siendo comunes.
       if (levels && criticalMacro(event)) {
         const result = await sendTwoLevels(true);
-        immediate.sent += result.sent; immediate.failed += result.failed; immediate.deep += result.deep;
+        immediate.sent += result.sent; immediate.failed += result.failed; immediate.deep += result.deep; immediate.staleClosed += result.staleClosed;
       } else if (criticalMacro(event)) {
         const result = await deliver(1);
         immediate.sent += result.sent; immediate.failed += result.failed;
@@ -260,12 +260,20 @@ async function main(): Promise<number> {
   }
   const remaining = config.maxScoringPerCycle - attemptedDelivery.size;
   const after = !levels && remaining > 0 ? await deliver(remaining) : { sent: 0, failed: 0 };
-  const afterLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0 };
+  const afterLevels = levels ? await sendTwoLevels() : { sent: 0, failed: 0, deep: 0, staleClosed: 0 };
   const delivery = { sent: before.sent + after.sent + beforeLevels.sent + afterLevels.sent + immediate.sent,
     failed: before.failed + after.failed + beforeLevels.failed + afterLevels.failed + immediate.failed };
   profundos += beforeLevels.deep + afterLevels.deep + immediate.deep;
   await reportQueue(queue);
   const failed = processing.failed + delivery.failed;
+  // Breves cerrados por viejos al llegarles el turno. NO entra en `failed`: es
+  // una decision, no una averia. Se dice aqui porque sin esta linea un ciclo que
+  // cierra setenta breves y no manda ninguno se lee en el log exactamente igual
+  // que un ciclo sin nada que mandar —verde, `sent: 0`— y la diferencia solo
+  // aparece consultando `news_decisions` a mano. Es la forma en que este
+  // proyecto ha fallado cinco veces: el codigo correcto y el sistema callado.
+  const cerradosPorFrescura = beforeLevels.staleClosed + afterLevels.staleClosed + immediate.staleClosed;
+  if (cerradosPorFrescura > 0) log("BRIEF_STALE_CLOSED", { stage: "freshness", count: cerradosPorFrescura });
   log("CYCLE_END", { stage: "cycle", sent: delivery.sent, deep: profundos, failed });
   run.scored = processing.scored; run.sent = delivery.sent;
   run.status = sourceFailure || !deps || (failed > 0 && delivery.sent === 0) ? "failed"

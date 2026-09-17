@@ -55,7 +55,15 @@ export async function deliverNews(options: NewsDeliveryOptions) {
   const candidates = (await queue.listDeliveryPending(options.maxItems)).filter((entry) => !options.excludeIds?.has(entry.id) && (!options.onlyCritical || criticalMacro(entry.event)));
   const brief: Ready[] = [];
   const important: Ready[] = [];
-  let sent = 0, failed = 0, deep = 0, groupSent = 0, groupFailed = 0, telegramUnconfigured = false;
+  // `staleClosed` no se suma a `failed` a proposito. Cerrar un breve por viejo
+  // es una DECISION del sistema, no una averia: mezclarlos haria que un dia
+  // normal —con la cola algo retrasada— se leyera igual que un dia con Telegram
+  // caido, y el estado del ciclo (`failed > 0 && sent === 0` es un ciclo rojo)
+  // dependeria de cuantas noticias han caducado. Va en su propio contador
+  // porque el primer ciclo con la regla cerro 72 breves, termino en verde con
+  // `sent: 0` y la unica huella quedo en `news_decisions`: por fuera eso se ve
+  // como "hoy me han llegado menos mensajes" y nada mas.
+  let sent = 0, failed = 0, deep = 0, groupSent = 0, groupFailed = 0, staleClosed = 0, telegramUnconfigured = false;
   for (const entry of candidates) {
     const event = capturedEvent(entry), scoring = entry.score as Scoring;
     const decision: NewsDecision = decideNews(event, scoring, options);
@@ -108,6 +116,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     // noticia grave ha caducado. Es la misma línea que las horas de silencio.
     if (decision.level !== "important" && options.briefMaxAgeHours !== undefined &&
         recientes([event], { now: new Date(options.now), maxAgeHours: options.briefMaxAgeHours }).length === 0) {
+      staleClosed++;
       await cerrarSinEntregar(item, "stale_at_delivery");
       continue;
     }
@@ -138,7 +147,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       await anotar(item, "telegram_unconfigured", null);
     }
     options.onFailure?.(new Error("telegram_unconfigured"));
-    return { sent, failed, deep, groupSent, groupFailed, telegramUnconfigured };
+    return { sent, failed, deep, groupSent, groupFailed, staleClosed, telegramUnconfigured };
   }
   // La cuota de importantes no depende de cuándo se envió el último boletín.
   for (const item of important) {
@@ -174,7 +183,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
   const silencio = brief.length && options.canSend && !options.dry ? silencioHasta(options.now, options.briefQuietHours ?? null) : null;
   if (silencio) {
     for (const item of brief) await anotar(item, "deferred_quiet_hours", silencio);
-    return { sent, failed, deep, groupSent, groupFailed, telegramUnconfigured };
+    return { sent, failed, deep, groupSent, groupFailed, staleClosed, telegramUnconfigured };
   }
   if (brief.length && options.canSend && !options.dry) {
     // Cada intento reserva de nuevo; un fallo previo no salta la cuota de mañana.
@@ -183,7 +192,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     for (const item of items) options.excludeIds?.add(item.entry.id);
     if (!items.length) {
       for (const item of brief) await anotar(item, "deferred_quota_brief_disabled", null);
-      return { sent, failed, deep, groupSent, groupFailed, telegramUnconfigured };
+      return { sent, failed, deep, groupSent, groupFailed, staleClosed, telegramUnconfigured };
     }
     try {
       while (items.length) {
@@ -210,7 +219,7 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       }
     } catch (error) { failed++; options.onFailure?.(error); }
   }
-  return { sent, failed, deep, groupSent, groupFailed, telegramUnconfigured };
+  return { sent, failed, deep, groupSent, groupFailed, staleClosed, telegramUnconfigured };
 
   /** Estado durable de la entrega, con el plazo si lo tiene. */
   async function estadoEntrega(id: string): Promise<EntregaReclamada | null> {
@@ -243,7 +252,14 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     await anotar(item, razon, null);
     // Antes de soltar la cola: si el proceso muere en medio, la vuelta siguiente
     // encuentra el cierre puesto y termina el trabajo. Al reves lo perderia.
-    await seen.markUndeliverable?.(item.entry.id);
+    //
+    // Y el cierre tiene que ser un cierre de verdad. `markUndeliverable` no pisa
+    // fila existente —bien: la entrega es de quien la reclamo— pero eso deja un
+    // caso abierto que produce cualquier 429: la fila esta `deferred` con su
+    // plazo, aqui se suelta `delivery_pending` y la entrega se queda diciendo
+    // "pendiente de reintento" para siempre, sin nadie que la reintente. Solo se
+    // promueve desde `deferred`; los terminales y `sending` no se tocan jamas.
+    if (await seen.markUndeliverable?.(item.entry.id) === false) await seen.closeDeferred?.(item.entry.id);
     await queue.completeDelivery(item.entry.id);
   }
   async function sendItems(items: Ready[], body: string, isDeep: boolean, analysis: Awaited<ReturnType<typeof analyzeEvent>> | null) {

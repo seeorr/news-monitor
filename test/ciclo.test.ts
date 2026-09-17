@@ -47,6 +47,27 @@ const macro: NormalizedEvent = {
   official: true,
 };
 
+/** La sesion de un valor: se fecha con el dia, no con un instante. */
+const movimiento = (sessionDate: string): NormalizedEvent => ({
+  id: `yahoo:XXXX:${sessionDate}`,
+  source: "yahoo",
+  source_url: "https://finance.yahoo.com/quote/XXXX",
+  kind: "market_move",
+  title: "XXXX -6,54 % en la sesion",
+  summary: "XXXX cotiza a 612 EUR frente a un cierre anterior de 654,8.",
+  country: "🌐",
+  series_id: "XXXX",
+  observed_at: sessionDate,
+  retrieved_at: "2026-09-08T10:00:00.000Z",
+  actual: -6.54,
+  previous: null,
+  consensus: null,
+  unit: "%",
+  surprises: [],
+  stale: false,
+  official: false,
+});
+
 const ahora = new Date("2026-09-08T10:00:00.000Z");
 
 describe("frescura", () => {
@@ -65,6 +86,23 @@ describe("frescura", () => {
   // aplicado a ciegas lo tiraría siempre.
   it("NO aplica el corte por antiguedad a un dato macro", () => {
     expect(recientes([macro], { now: ahora, maxAgeHours: 72 })).toHaveLength(1);
+  });
+
+  // Un movimiento de sesion SI se fecha al publicarse, igual que una noticia:
+  // «ASML -6,54 % en la sesion» del 11-09 no informa de nada el 17-09.
+  it("aplica el corte por antiguedad a un movimiento de mercado viejo", () => {
+    expect(recientes([movimiento("2026-09-01")], { now: ahora, maxAgeHours: 72 })).toHaveLength(0);
+  });
+
+  it("el movimiento de la sesion de hoy pasa a cualquier hora, tambien tras el cierre americano", () => {
+    // La sesion se fecha con el DIA, y `Date.parse` de un dia da su medianoche.
+    // Midiendo desde ahi, un cierre estadounidense a las 20:00 UTC naceria con
+    // 20 h y un corte de 12 h lo tiraria siempre: el arreglo habria silenciado
+    // todos los movimientos en vez de solo los viejos.
+    const cierreUsa = new Date("2026-09-08T20:30:00.000Z");
+    expect(recientes([movimiento("2026-09-08")], { now: cierreUsa, maxAgeHours: 12 })).toHaveLength(1);
+    // Y la sesion de anteayer, con ese mismo corte, si se queda fuera.
+    expect(recientes([movimiento("2026-09-06")], { now: cierreUsa, maxAgeHours: 12 })).toHaveLength(0);
   });
 
   it("ordena lo mas reciente primero, que es por donde se reparte el cupo", () => {
