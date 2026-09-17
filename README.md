@@ -13,29 +13,30 @@ contextualiza y explica**, y manda una alerta a Telegram. No es un agregador.
 
 ## Estado
 
-**Actualización 14-09-2026, 11:00 Madrid:** Groq activado en producción,
-con prueba real y primer ciclo confirmado: cuatro noticias puntuadas y una
-entrega a Telegram. OpenRouter está preparado pero aún no tiene clave.
-Quedan 73 noticias pendientes. [Configuración y activación](docs/llm-gratuitos.md).
+**Actualización 17-09-2026:** todo lo que este apartado describía como «local» o
+«pendiente» lleva días en producción. Groq puntúa y analiza, con `gpt-oss-20b` de
+respaldo cuando el 120b se limita; **OpenRouter tiene clave desde el 14-09** y
+solo puntúa. [Configuración y activación](docs/llm-gratuitos.md).
 
-Los apartados siguientes conservan el historial de implementación y deben
-contrastarse con la ficha de seguimiento para conocer la activación vigente.
+Esta cabecera se desfasó cuatro veces seguidas mientras el sistema seguía
+corriendo, que es el mismo modo de fallo de siempre con el signo cambiado: el
+papel decía que no y la máquina decía que sí. **La única fuente de verdad
+operativa es la ficha del proyecto** (`../README.md`); aquí solo va lo que no
+depende del día.
 
-La ampliación de captura está implementada y comprobada en local. Requiere
-aplicar la migración de cola antes de ejecutar esta versión contra Neon.
-**No está activada en producción.** Los ocho feeds anteriores siguen siendo la
-selección predeterminada; las nuevas fuentes se habilitan por tandas.
+La ampliación de captura está **activa en producción** con sus migraciones
+aplicadas. Las fuentes nuevas se siguen habilitando por tandas.
 
-La política de **dos niveles de noticias** también está implementada en local:
+La política de **dos niveles de noticias** está **en producción** desde el 11-09:
 avisos breves, importantes con contexto, decisiones persistentes y cuotas
-separadas. Requiere además `20260910_news_control.sql` antes de desplegar monitor,
-dashboard o resumen. Ver [evaluación, configuración y procedimientos](docs/dos-niveles-noticias.md).
+separadas. Ver [evaluación, configuración y procedimientos](docs/dos-niveles-noticias.md).
 
 Entrega y procedimientos: [cola, pruebas y capacidad](docs/captura-persistente.md),
 [fuentes y condiciones](docs/fuentes-cobertura.md),
 [cadencia y disparador externo](docs/disparador-externo.md).
 
-Reloj externo implementado localmente, todavía desactivado:
+Reloj externo **en producción desde el 11-09**, con `STRATEGY=mixed`: es quien
+dispara el monitor cada diez minutos y el vigilante en el disparo de las :53.
 [Cloudflare, perfiles fast/full/process y activación progresiva](docs/cadencia-cloudflare.md).
 [Resultados de verificación de cadencia](docs/verificacion-cadencia.md).
 La migración de runs debe revisarse/aplicarse antes de habilitar su telemetría en Neon.

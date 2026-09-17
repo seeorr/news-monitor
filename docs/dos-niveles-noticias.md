@@ -125,7 +125,7 @@ cuentan noticias del destino principal, no copias al grupo ni agenda/resumen.
 | `BRIEF_QUIET_HOURS` / `NEWS_TIMEZONE` | `0-8` / `Europe/Madrid` (`none` lo apaga) |
 | `BRIEF_MAX_AGE_HOURS` | 12, medidas al llegarle el turno al breve |
 | `MAX_PENDING_HOURS` | 48 desde primera captura |
-| `AI_CALLS_PER_DAY` | 120 peticiones, incluidos reintentos |
+| `AI_CALLS_PER_DAY` | 180 peticiones, incluidos reintentos. Manda la variable de GitHub, no este número: el 14-09 alguien auditó el cupo con el valor local y leyó mal el consumo. 180 es el techo real de Groq Free —200.000 tokens/día a ~1.075 por llamada—, no una preferencia |
 | `MAX_SCORING_PER_CYCLE` / `MAX_DEEP_PER_CYCLE` | 12 / 3 |
 
 Hora: ventana móvil de 60 minutos. Día: calendario UTC. Las reservas preceden la
