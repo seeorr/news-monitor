@@ -96,9 +96,34 @@ export function relatedUpdate(a: NormalizedEvent, b: NormalizedEvent): boolean {
     !sameStory(a, b) && Math.abs(Date.parse(a.publication_at ?? a.observed_at) - Date.parse(b.publication_at ?? b.observed_at)) <= 24 * 3600_000 &&
     similitud(firma(a.title), firma(b.title)) >= 0.5;
 }
+/**
+ * Quien protagoniza el titular: lo que va delante del verbo.
+ *
+ * El sujeto es lo unico que distingue dos titulares escritos con la misma
+ * plantilla, y la prensa financiera usa plantillas todo el rato. "Apple beats
+ * quarterly earnings estimates" y "Amazon beats quarterly earnings estimates"
+ * comparten todas las palabras menos una: sin sujeto, Jaccard los funde y una de
+ * las dos empresas no llega nunca. Medido en `dedup-pares.json`, esa era la
+ * causa de tres de los cuatro falsos positivos de la muestra.
+ *
+ * La lista de verbos es cerrada a proposito —un analizador gramatical aqui seria
+ * pagar con complejidad lo que resuelven veinte palabras— y se amplio el 17-09
+ * con los verbos de ESTADO y RESULTADO, que es donde estaba el agujero: `cuts` y
+ * `reports` estaban, pero `keeps`, `holds`, `beats` y `misses` no, y son
+ * precisamente los de un banco central que NO mueve tipos y los de una empresa
+ * el dia de resultados. No se anade ningun verbo de movimiento de precio
+ * (`rises`, `falls`): ahi el sujeto suele ser el indice o el sector y no quien
+ * protagoniza el hecho, y fingir un sujeto donde no lo hay separaria noticias
+ * que si son la misma.
+ *
+ * Cuando el sujeto no se reconoce, `compatibles()` deja pasar el par y decide
+ * Jaccard: ampliar esta lista solo puede SEPARAR noticias, nunca fundir dos que
+ * antes iban aparte. Es la direccion segura, la misma del umbral 0,6: un falso
+ * duplicado se pierde para siempre y un duplicado visible solo molesta.
+ */
 export function storySubject(title: string): string | null {
   return title.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "")
-    .match(/^(.{2,65}?)\s+(?:acquires?|buys?|sells?|raises?|cuts?|reports?|signs?|wins?|files?|denies|announces?|adquiere|compra|vende|eleva|recorta|publica|firma|gana|presenta|niega|anuncia)\b/u)?.[1]
+    .match(/^(.{2,65}?)\s+(?:acquires?|buys?|sells?|raises?|cuts?|reports?|signs?|wins?|files?|denies|announces?|keeps?|holds?|beats?|miss(?:es)?|posts?|maintains?|adquiere|compra|vende|eleva|recorta|publica|firma|gana|presenta|niega|anuncia|mantiene|deja|bate|supera|incumple)\b/u)?.[1]
     ?.replace(/^the\s+/, "").replace(/federal reserve/g, "fed").trim() ?? null;
 }
 

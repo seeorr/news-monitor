@@ -161,9 +161,11 @@ const caso = (id: string): Caso => {
 const DIVERGENCIAS_CONOCIDAS: Record<string, string> = {
   mn2: "Falso negativo: la entradilla oficial no cita el nivel del tipo y la de prensa sí, así que el rasgo de cifras difiere aunque el hecho sea el mismo. Se prefiere el duplicado visible al silencio.",
   mn5: "Falso negativo, misma causa que mn2: una entradilla menciona 2,00 % y la otra no.",
-  suj1: "Falso positivo: 'keeps' no está en el extractor de sujeto, así que Fed y BCE quedan sin sujeto y el titular casi idéntico los funde. Arreglarlo toca storySubject, compartido con relevance.ts.",
-  suj4: "Falso positivo, misma causa: 'beats' no está en el extractor de sujeto (Apple y Amazon).",
-  suj5: "Falso positivo, misma causa: 'holds' no está en el extractor de sujeto (Banco de Inglaterra y Banco de Japón).",
+  // suj1, suj4 y suj5 estuvieron aquí hasta el 17-09: 'keeps', 'beats' y 'holds'
+  // no estaban en el extractor de sujeto, así que Fed y BCE —o Apple y Amazon—
+  // quedaban sin sujeto y el titular casi idéntico los fundía. Se añadieron los
+  // verbos de estado y resultado a `storySubject` y los tres pasaron a acertar,
+  // sin mover ningún otro caso de la muestra.
   act1: "Falso positivo en el límite exacto del umbral (Jaccard 0,600): la suspensión del dividendo se añade a un titular ya entregado y entra como duplicado.",
 };
 
@@ -176,7 +178,7 @@ describe("matriz de deduplicación sobre la muestra etiquetada", () => {
   // como «el test sigue en verde». Cambiarla exige explicar qué caso se movió.
   // `DEDUP_INFORME=<ruta>` vuelca el detalle par a par para volver a medir sin
   // tocar el test; sin esa variable no se escribe nada en ningún sitio.
-  it("mantiene la matriz medida: 23 pares, 4 falsos positivos y 2 falsos negativos", () => {
+  it("mantiene la matriz medida: 23 pares, 1 falso positivo y 2 falsos negativos", () => {
     if (process.env["DEDUP_INFORME"]) {
       writeFileSync(process.env["DEDUP_INFORME"], [
         `TOTAL ${filas.length} VP ${filas.length - fp.length - fn.length - filas.filter((f) => !f.caso.agrupar && !f.agrupa).length} FP ${fp.length} FN ${fn.length}`,
@@ -185,7 +187,10 @@ describe("matriz de deduplicación sobre la muestra etiquetada", () => {
       ].join("\n"), "utf8");
     }
     expect(filas).toHaveLength(23);
-    expect(fp).toEqual(["suj1", "suj4", "suj5", "act1"]);
+    // De cuatro a uno el 17-09, con los tres de sujeto arreglados y sin
+    // regresiones: los dos falsos negativos siguen siendo mn2 y mn5, por la
+    // misma causa de siempre —una entradilla cita el nivel del tipo y la otra no—.
+    expect(fp).toEqual(["act1"]);
     expect(fn).toEqual(["mn2", "mn5"]);
   });
 
