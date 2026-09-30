@@ -52,7 +52,12 @@ async function main(): Promise<number> {
 }
 
 main().then((code) => { process.exitCode = code; }).catch((error: unknown) => {
-  // El error original puede traer la cadena de conexión dentro.
-  console.error(`RETENCION_FALLIDA: ${error instanceof Error ? error.message : "error desconocido"}`);
+  // El error original puede traer la cadena de conexión dentro, así que su
+  // mensaje NO se imprime (antes sí, justo debajo de este aviso). Solo pasa el
+  // mensaje propio del corte, que es un literal de este archivo, o un código.
+  const propio = error instanceof Error && error.message.startsWith("--dias va de 7 a 365");
+  const codigo = (error as { code?: unknown })?.code;
+  console.error(`RETENCION_FALLIDA: ${propio ? (error as Error).message
+    : typeof codigo === "string" && /^[A-Z0-9_]{2,40}$/.test(codigo) ? codigo : "error no publicado (puede contener la conexión)"}`);
   process.exitCode = 1;
 });
