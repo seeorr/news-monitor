@@ -136,15 +136,26 @@ export function applyTransform(
 ): Array<{ date: string; value: number }> {
   if (spec.transform === "level") return obs;
 
-  const lag = spec.periodsPerYear;
+  // El periodo de hace un año se busca por FECHA, no por posición. Hasta el 30-09
+  // era `obs[i + periodsPerYear]`, contado después de quitar los "." de FRED: con
+  // un solo mes sin publicar dentro de la ventana —un cierre del Gobierno de EE.
+  // UU. basta—, cada interanual posterior dividía por el mes de hace TRECE meses
+  // y la alerta imprimía una inflación falsa con toda la autoridad de FRED. Sin
+  // la observación exacta de hace un año, ese periodo no tiene interanual.
+  const porFecha = new Map(obs.map((o) => [o.date, o.value]));
   const out: Array<{ date: string; value: number }> = [];
-  for (let i = 0; i + lag < obs.length; i++) {
-    const now = obs[i];
-    const yearAgo = obs[i + lag];
-    if (!now || !yearAgo || yearAgo.value === 0) continue;
-    out.push({ date: now.date, value: round((now.value / yearAgo.value - 1) * 100, 2) });
+  for (const now of obs) {
+    const yearAgo = porFecha.get(unAnoAntes(now.date));
+    if (yearAgo === undefined || yearAgo === 0) continue;
+    out.push({ date: now.date, value: round((now.value / yearAgo - 1) * 100, 2) });
   }
   return out;
+}
+
+/** `AAAA-MM-DD` del mismo día un año antes. Un 29 de febrero no tiene pareja y no se inventa. */
+function unAnoAntes(fecha: string): string {
+  const m = /^(\d{4})-(\d{2}-\d{2})$/.exec(fecha);
+  return m ? `${Number(m[1]) - 1}-${m[2]}` : "";
 }
 
 /**
