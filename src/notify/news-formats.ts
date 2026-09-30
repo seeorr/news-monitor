@@ -32,7 +32,31 @@ export function unsupportedNumbers(event: FuenteDeCifras, proposed: string): num
   for (const value of [event.actual, event.previous, event.consensus, ...event.surprises.map((x) => x.value)]) if (value !== null) input.push(value);
   // Los números estructurales admitidos en análisis no sirven como hechos:
   // un 5 % también tiene que estar realmente en la fuente del aviso.
-  return [...new Set(extractNumbers(proposed).filter((n) => !input.some((v) => Math.abs(n - v) < 0.001)))];
+  return [...new Set(extractNumbers(proposed).filter((n) => !input.some((v) => respalda(v, n))))];
+}
+
+/**
+ * ¿Es `n` una forma fiel de escribir el valor `v` de la fuente?
+ *
+ * Exacta, o `v` redondeado a 0, 1 o 2 decimales, con o sin signo. Hasta el 30-09
+ * solo valía la exacta, y un IPC de 3,21 % escrito «3,2 %» —el mismo redondeo que
+ * imprime la propia alerta con `es()`— contaba como cifra inventada: el resumen
+ * del modelo se cambiaba por el titular pelado («US CPI») y el análisis se
+ * degradaba, justo en los datos macro, que son los que más importan. El signo va
+ * aparte porque `extractNumbers` no lo ve en «cae 0,19 puntos».
+ *
+ * Lo que NO entra, a propósito: redondear hacia arriba de precisión (de 3,2 a
+ * 3,21 hay una cifra que la fuente no dice), multiplicar por cien o cualquier
+ * cálculo. Solo representaciones del mismo número.
+ */
+function respalda(v: number, n: number): boolean {
+  for (const valor of [v, Math.abs(v)]) {
+    if (Math.abs(n - valor) < 0.001) return true;
+    for (const decimales of [0, 1, 2]) {
+      if (Math.abs(n - Number(valor.toFixed(decimales))) < 1e-9) return true;
+    }
+  }
+  return false;
 }
 
 export function factualText(event: FuenteDeCifras, proposed: string): boolean {

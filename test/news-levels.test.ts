@@ -10,7 +10,7 @@ import { decideNews } from "../src/pipeline/news-policy.ts";
 import { planQueue } from "../src/pipeline/queue-plan.ts";
 import { sameStory, relatedUpdate } from "../src/pipeline/agrupar.ts";
 import { scoreEvent, analyzeEvent, type CascadeDeps, type Scoring, type Analysis } from "../src/ai/cascade.ts";
-import { formatImportant, formatInteresting } from "../src/notify/news-formats.ts";
+import { formatImportant, formatInteresting, unsupportedNumbers } from "../src/notify/news-formats.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 
 export const NOW = "2026-09-10T10:00:00.000Z";
@@ -535,5 +535,21 @@ describe("reservas persistentes independientes", () => {
     expect(await q.listPending(NOW)).toHaveLength(19);
     expect(await captureCandidates(q, entries, { now: NOW, maxAgeHours: 72 })).toMatchObject({ unique: 0, repeated: 31 });
     expect(scoring).toHaveBeenCalledTimes(12);
+  });
+});
+
+describe("respaldo de cifras: redondeos fieles sí, cifras nuevas no", () => {
+  const cpi = event("fred:CPIAUCSL:2026-08-01", "US CPI", { summary: null, actual: 3.21, previous: 3.4, consensus: null,
+    unit: "%", surprises: [{ value: -0.19, basis: "previous", unit: "%" }], kind: "macro_release", source: "fred" });
+  it("acepta el dato redondeado como lo imprime la alerta, y la sorpresa sin signo", () => {
+    expect(unsupportedNumbers(cpi, "La inflación baja al 3,2 % desde el 3,4 %.")).toEqual([]);
+    expect(unsupportedNumbers(cpi, "Cae 0,19 puntos, unos 0,2 puntos.")).toEqual([]);
+    expect(unsupportedNumbers(cpi, "La inflación se sitúa en torno al 3 %.")).toEqual([]);
+  });
+  it("sigue rechazando cifras que la fuente no dice, más precisión inventada o el ×100", () => {
+    expect(unsupportedNumbers(cpi, "La inflación baja al 3,3 %.")).toEqual([3.3]);
+    expect(unsupportedNumbers(cpi, "Se sitúa en el 3,214 %.")).toEqual([3.214]);
+    expect(unsupportedNumbers(cpi, "Un ajuste de 321 puntos básicos.")).toEqual([321]);
+    expect(unsupportedNumbers(cpi, "Apunta al 2 % de la Fed.")).toEqual([2]);
   });
 });
