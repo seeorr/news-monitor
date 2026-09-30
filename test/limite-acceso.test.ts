@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COOKIE_SESION, MENSAJE_ACCESO_DENEGADO, VARIABLE_SECRETO } from "../app/_lib/sesion.ts";
-import { POLITICA_INTENTOS, claveCliente, ipDeCabeceras } from "../app/_lib/limite.ts";
+import { POLITICA_INTENTOS, claveCliente, cuboDeIp, ipDeCabeceras } from "../app/_lib/limite.ts";
 import type { AlmacenIntentos } from "../src/db/intentos-acceso.ts";
 import type { Ejecutor } from "../src/db/cliente.ts";
 
@@ -38,7 +38,7 @@ vi.mock("../src/db/intentos-acceso.ts", async (original) => {
     almacenNeon: () => {
       const almacen = entorno.almacen as AlmacenIntentos;
       if (!entorno.roto) return almacen;
-      return { ...almacen, bloqueadoHasta: async () => { throw new Error("neon caído"); } };
+      return { ...almacen, registrarIntento: async () => { throw new Error("neon caído"); } };
     },
   };
 });
@@ -97,14 +97,33 @@ describe("límite de intentos del acceso al dashboard", () => {
     expect(entorno.cookie).toBeNull();
   });
 
-  it("mientras dura el bloqueo no se registran más fallos ni se alarga", async () => {
+  it("mientras dura el bloqueo no se cuentan más intentos ni se alarga", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
     const almacen = entorno.almacen as AlmacenIntentos;
-    const registrar = vi.spyOn(almacen, "registrarFallo");
     for (let i = 0; i < 5; i++) await intentar("no-es-la-clave");
-    expect(registrar).toHaveBeenCalledTimes(5);
-    await intentar("no-es-la-clave");
+    const hasta = await almacen.bloqueadoHasta(await claveCliente(entorno.ip, SECRETO), new Date());
+    vi.setSystemTime(new Date("2026-09-14T18:10:00Z"));
+    const denegado = await almacen.registrarIntento(await claveCliente(entorno.ip, SECRETO), new Date());
+    expect(denegado).toEqual({ permitido: false, fallos: null, bloqueadoHasta: hasta });
     await intentar(SECRETO);
-    expect(registrar).toHaveBeenCalledTimes(5);
+    expect(await almacen.bloqueadoHasta(await claveCliente(entorno.ip, SECRETO), new Date())).toEqual(hasta);
+  });
+
+  it("una ráfaga en paralelo solo evalúa cinco claves: el intento se cuenta antes de mirar la clave", async () => {
+    const lentas = entorno.almacen as AlmacenIntentos;
+    // Cada consulta cede el turno, como una base de verdad: sin contar por
+    // adelantado, las cincuenta pasaban la comprobación antes de anotar nada.
+    entorno.almacen = {
+      bloqueadoHasta: async (...a: Parameters<AlmacenIntentos["bloqueadoHasta"]>) => { await new Promise((r) => setTimeout(r, 1)); return lentas.bloqueadoHasta(...a); },
+      registrarIntento: async (...a: Parameters<AlmacenIntentos["registrarIntento"]>) => lentas.registrarIntento(...a),
+      limpiar: async (...a: Parameters<AlmacenIntentos["limpiar"]>) => lentas.limpiar(...a),
+    } satisfies AlmacenIntentos;
+    const evaluada = vi.spyOn(await import("../app/_lib/sesion.ts"), "contrasenaValida");
+    await Promise.all(Array.from({ length: 50 }, () => intentar("no-es-la-clave")));
+    expect((await intentar(SECRETO)).entra).toBe(false);
+    expect(evaluada.mock.calls).toHaveLength(5);
+    evaluada.mockRestore();
   });
 
   it("otra IP no queda bloqueada: nadie puede dejar fuera al dueño desde otra conexión", async () => {
@@ -142,6 +161,19 @@ describe("a quién se cuenta", () => {
     expect(await claveCliente("203.0.113.7", `${SECRETO}x`)).not.toBe(a);
   });
 
+  it("una IPv6 se cuenta por su /64: cambiar la dirección dentro del prefijo no da intentos nuevos", async () => {
+    expect(cuboDeIp("198.51.100.4")).toBe("198.51.100.4");
+    expect(cuboDeIp("2001:db8:1:2:aaaa:bbbb:cccc:dddd")).toBe("2001:0db8:0001:0002::/64");
+    expect(cuboDeIp("2001:DB8:1:2::1")).toBe("2001:0db8:0001:0002::/64");
+    expect(cuboDeIp("2001:db8::1")).toBe("2001:0db8:0000:0000::/64");
+    expect(cuboDeIp("::1")).toBe("0000:0000:0000:0000::/64");
+    expect(cuboDeIp("::ffff:198.51.100.4")).toBe("198.51.100.4");
+    expect(cuboDeIp("1:2:3")).toBe("desconocida");
+    expect(cuboDeIp("1::2::3")).toBe("desconocida");
+    expect(await claveCliente("2001:db8:1:2::1", SECRETO)).toBe(await claveCliente("2001:db8:1:2:ffff::9", SECRETO));
+    expect(await claveCliente("2001:db8:1:2::1", SECRETO)).not.toBe(await claveCliente("2001:db8:1:3::1", SECRETO));
+  });
+
   it("toma la primera IP de x-forwarded-for y manda la basura al cubo común", () => {
     expect(ipDeCabeceras(new Headers({ "x-forwarded-for": "198.51.100.4, 10.0.0.1" }))).toBe("198.51.100.4");
     expect(ipDeCabeceras(new Headers({ "x-forwarded-for": "2001:db8::1" }))).toBe("2001:db8::1");
@@ -157,9 +189,11 @@ describe("a quién se cuenta", () => {
       consultas.push(texto); parametros.push(valores);
       return texto.includes("insert into") ? [{ failures: 5, blocked_until: "2026-09-14T18:20:00.000Z" }] : [];
     };
-    const resultado = await almacenNeonReal(sql, POLITICA_INTENTOS).registrarFallo("clave-hmac", new Date("2026-09-14T18:05:00Z"));
-    expect(resultado).toEqual({ fallos: 5, bloqueadoHasta: new Date("2026-09-14T18:20:00.000Z") });
+    const resultado = await almacenNeonReal(sql, POLITICA_INTENTOS).registrarIntento("clave-hmac", new Date("2026-09-14T18:05:00Z"));
+    expect(resultado).toEqual({ permitido: true, fallos: 5, bloqueadoHasta: new Date("2026-09-14T18:20:00.000Z") });
     expect(consultas[1]).toMatch(/on conflict \(client_key\) do update/);
+    // Con un bloqueo vigente el upsert no toca la fila: la condición va en el propio `do update`.
+    expect(consultas[1]).toMatch(/where a\.blocked_until is null or a\.blocked_until <= /);
     expect(parametros[1]).toContain("clave-hmac");
     expect(JSON.stringify(parametros)).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
   });
