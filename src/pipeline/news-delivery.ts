@@ -188,6 +188,12 @@ export async function deliverNews(options: NewsDeliveryOptions) {
         item.decision = { ...item.decision, deliveryFormat: "brief_fallback",
           reasons: conMotivo(item.decision.reasons, "important_degraded_to_supported_brief") } as NewsDecision;
         await control.putDecision(item.entry.id, item.decision);
+      } else if (analysis && item.decision.deliveryFormat === "brief_fallback") {
+        // La guardada venía degradada de un ciclo anterior y esta vez el
+        // análisis sí sale: el registro no puede seguir diciendo lo contrario.
+        const { deliveryFormat: _formato, ...resto } = item.decision;
+        item.decision = { ...resto, reasons: item.decision.reasons.filter((r) => r !== "important_degraded_to_supported_brief") } as NewsDecision;
+        await control.putDecision(item.entry.id, item.decision);
       }
       if (item.decision.updateOf) body = `Actualización material de una noticia anterior\nAntes: ${item.decision.updateOf.previousFact}\nAhora: ${item.decision.updateOf.change}\n\n${body}`;
       await sendItems([item], body, Boolean(analysis), analysis);
