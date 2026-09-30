@@ -155,7 +155,9 @@ en todos los disparos y con quince minutos de hueco el informe habría marcado
 > antiguos (`npm run retencion`, seco por defecto), porque el dato real obligaba
 > a preverlo: 48 MB de 500 en nueve días, unos 5,4 MB/día, y el disco lleno hacia
 > diciembre. Cuando Neon se llena **fallan también los `DELETE`**, así que una
-> política escrita ese día ya no se puede ejecutar. La fila se queda entera —es
+> política escrita ese día ya no se puede ejecutar. Desde el 30-09 la ejecuta
+> `retencion.yml` dos veces por semana con `--aplicar` y 30 días; a mano sigue
+> siendo seca por defecto. La fila se queda entera —es
 > la memoria de deduplicación— con `id`, `kind`, fuente y titular; se va la
 > entradilla. Detalle y límites en `src/db/retencion.ts`.
 

@@ -1,0 +1,89 @@
+# La retención de la base, sola, dos veces por semana.
+#
+# Existía como `npm run retencion`, a mano y seco por defecto. El problema no es
+# el script, que está probado (`verify:retention:postgres`: ninguna fila borrada,
+# solo se poda la entradilla de lo ya descartado y antiguo); el problema es que
+# a mano no la ejecuta nadie. El dato medido el 17-09 eran unos 5,4 MB/día contra
+# los 500 MB del plan gratuito de Neon, con el disco lleno hacia diciembre, y
+# `docs/cadencia-cloudflare.md` lo dice: cuando Neon se llena fallan también los
+# DELETE, así que una retención que no ha corrido antes de ese día ya no puede.
+#
+# Dos disparos semanales y no uno mensual por lo mismo que el resto de crons de
+# este repositorio: GitHub descarta disparos. La poda es idempotente —solo toca
+# filas sin `podado_en`—, así que correr de más no cuesta nada y correr de menos
+# es justo el fallo que se quiere evitar.
+#
+# La salida es el JSON de recuentos del script: sin titulares, ids ni SQL.
+name: Retención
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+    - cron: "13 5 * * 3"
+  workflow_dispatch:
+    inputs:
+      aplicar:
+        description: "Podar de verdad; sin marcar es un simulacro que no escribe"
+        type: boolean
+        default: true
+      dias:
+        description: "Antigüedad mínima en días (7 a 365)"
+        type: string
+        default: "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retencion
+  cancel-in-progress: false
+
+jobs:
+  retencion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # Los inputs pasan por el entorno y se validan aquí, nunca interpolados en
+      # el script: un `dias` libre dentro de `run:` sería inyección de shell.
+      - name: Podar lo que ya nadie lee
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APLICAR: ${{ github.event_name == 'schedule' || inputs.aplicar }}
+          DIAS: ${{ inputs.dias || '30' }}
+        run: |
+          if ! [[ "$DIAS" =~ ^[0-9]{1,3}$ ]]; then
+            echo "DIAS debe ser un entero entre 7 y 365."
+            exit 1
+          fi
+          if [ "$APLICAR" = "true" ]; then
+            npm run --silent retencion -- --dias "$DIAS" --aplicar
+          else
+            npm run --silent retencion -- --dias "$DIAS"
+          fi
+
+      - name: Avisar del fallo por Telegram
+        if: ${{ failure() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Sin credenciales de Telegram: no se puede avisar del fallo."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=News Monitor: la retención de la base ha fallado; si Neon se llena, ya no podrá correr. $RUN_URL" \
+            --data "disable_web_page_preview=true" > /dev/null

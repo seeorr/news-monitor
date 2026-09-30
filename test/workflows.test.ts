@@ -63,3 +63,17 @@ describe("resumen: ventana y origen del fallback", () => {
     })).toBe(true);
   });
 });
+
+describe("retención programada", () => {
+  const retencion = readFileSync(new URL("../.github/workflows/retencion.yml", import.meta.url), "utf8");
+  it("corre sola con --aplicar, en solo lectura de repositorio y sin interpolar inputs en el script", () => {
+    expect(retencion.match(/- cron: "/g)).toHaveLength(2);
+    expect(retencion).toMatch(/^permissions:\n  contents: read$/m);
+    expect(retencion).toContain("persist-credentials: false");
+    expect(retencion).toContain("APLICAR: ${{ github.event_name == 'schedule' || inputs.aplicar }}");
+    expect(retencion).toContain('npm run --silent retencion -- --dias "$DIAS" --aplicar');
+    // Ningún `${{ inputs.* }}` dentro de un bloque `run:`: solo por el entorno.
+    const bloquesRun = retencion.split(/\n\s+run: \|/).slice(1).map((b) => b.split(/\n\s+- (?:name|uses):/)[0]);
+    for (const bloque of bloquesRun) expect(bloque).not.toMatch(/\$\{\{\s*inputs\./);
+  });
+});

@@ -7,8 +7,11 @@
  *
  * **Seco por defecto y a propósito.** Es una escritura sobre producción que
  * nadie va a revisar después, así que la única forma de ejecutarla es pedirlo
- * explícitamente. Lo que hace y lo que conserva está explicado en
- * `src/db/retencion.ts`; aquí solo se decide cuándo y con qué corte.
+ * explícitamente. Quien lo pide de forma programada es `retencion.yml`, dos
+ * veces por semana: a mano no la ejecutaba nadie y el disco se llenaba.
+ *
+ * Lo que hace y lo que conserva está explicado en `src/db/retencion.ts`; aquí
+ * solo se decide cuándo y con qué corte.
  */
 import { loadConfig, loadDotEnv } from "../src/config.ts";
 import { cliente } from "../src/db/lectura.ts";
