@@ -45,6 +45,12 @@ export async function anadirTicker(_previo: Estado, datos: FormData): Promise<Es
   }
 
   const simbolo = String(datos.get("simbolo") ?? "").trim().toUpperCase() || null;
+  // El símbolo de Yahoo admite más que un ticker (`^GSPC`, `EURUSD=X`, `BTC-USD`,
+  // `GLOBX.DE`), pero no cualquier cosa: se guarda, viaja en cada ciclo a una URL
+  // y aparece en el dashboard.
+  if (simbolo !== null && !/^[A-Z0-9.\-=^]{1,20}$/.test(simbolo)) {
+    return fallo("El símbolo de Yahoo son letras, cifras y . - = ^, hasta 20. Por ejemplo GLOBX.DE o EURUSD=X.", ticker);
+  }
   const umbralTexto = String(datos.get("umbral") ?? "").trim().replace(",", ".");
   const umbral = umbralTexto === "" ? undefined : Number(umbralTexto);
   if (umbral !== undefined && (!Number.isFinite(umbral) || umbral < 0.5 || umbral > 20)) {
@@ -58,6 +64,12 @@ export async function anadirTicker(_previo: Estado, datos: FormData): Promise<Es
   const contacto = process.env["SEC_USER_AGENT"] ?? null;
   let cik: string | null = null;
   let nombre = String(datos.get("nombre") ?? "").trim() || null;
+  // El nombre acaba en la entradilla de los movimientos de precio: la lee el
+  // modelo, sale en Telegram y en el dashboard. Una línea razonable, sin
+  // caracteres de control.
+  if (nombre !== null && (nombre.length > 120 || /[\u0000-\u001f\u007f]/.test(nombre))) {
+    return fallo("El nombre es una línea de hasta 120 caracteres.", ticker);
+  }
 
   if (contacto) {
     try {
