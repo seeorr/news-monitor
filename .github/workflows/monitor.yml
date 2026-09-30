@@ -55,10 +55,15 @@ run-name: Monitor (${{ inputs.mode != 'auto' && inputs.mode || vars.MONITOR_MODE
 
 on:
   schedule:
-    # Cada media hora en teoria, en minutos poco concurridos y repartidos entre
-    # dos definiciones. En la practica, los que GitHub decida entregar.
-    - cron: "7 * * * *"
-    - cron: "37 * * * *"
+    # Respaldo del reloj de Cloudflare, dos minutos DETRAS de sus `full` de las
+    # :03 y las :33. Estuvo en :07 y :37, y cuando GitHub entregaba ese disparo
+    # caia justo cuando Neon iba a suspenderse (cinco minutos de inactividad) y
+    # la tenia despierta otro ciclo entero: el consumo que el reloj bajo a cuatro
+    # disparos por hora el 17-09 volvia a subir por aqui. A las :05 y :35 el
+    # respaldo cae dentro de la ventana en que la base ya esta despierta, y el
+    # grupo `monitor` lo pone en cola detras del ciclo del reloj si coinciden.
+    - cron: "5 * * * *"
+    - cron: "35 * * * *"
   workflow_dispatch:
     inputs:
       profile:
@@ -83,6 +88,11 @@ concurrency:
   group: monitor
   cancel-in-progress: false
 
+# El ciclo recibe todos los secretos y ejecuta `npm ci`: el token de Actions no
+# necesita escribir nada en el repositorio.
+permissions:
+  contents: read
+
 jobs:
   ciclo:
     runs-on: ubuntu-latest
@@ -98,6 +108,8 @@ jobs:
       # con el aviso. v5 pide runner >= 2.327.1, que el runner alojado supera de
       # sobra, y no cambia nada de lo que aqui se usa.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Validar perfil antes de dependencias y secretos
         id: profile

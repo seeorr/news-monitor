@@ -122,7 +122,7 @@ Todas con `-R seeorr/news-monitor`. Ninguna necesita migración.
   settings → Fine-grained tokens. Un job ya arrancado sigue con su token
   efímero de Actions y termina.
 - **Con el reloj parado sigue el respaldo de GitHub**: el `schedule` de
-  `monitor.yml` (`:07` y `:37`) y el de `salud.yml`. Para parar también eso,
+  `monitor.yml` (`:05` y `:35`) y el de `salud.yml`. Para parar también eso,
   nivel 6.
 
 **Comprobar:** no aparecen ejecuciones nuevas de Monitor con evento

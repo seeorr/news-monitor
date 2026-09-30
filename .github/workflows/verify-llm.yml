@@ -12,8 +12,6 @@ on:
         type: choice
         options: [openai/gpt-oss-120b, openai/gpt-oss-20b]
         default: openai/gpt-oss-120b
-  push:
-    branches: [codex/activar-llm-gratuitos, codex/salud-cuotas-durables]
 permissions:
   contents: read
 jobs:
