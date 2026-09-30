@@ -2,6 +2,8 @@ import { neon } from "@neondatabase/serverless";
 import type { Ejecutor } from "./cliente.ts";
 import { validateReservation, type ControlStore, type ReservationResult, type Resource } from "../pipeline/control.ts";
 import type { NewsDecision } from "../pipeline/news-policy.ts";
+/** Decisiones por sentencia: acota el tamaño del JSON que viaja en una sola petición. */
+const DECISION_BATCH = 500;
 export function neonControlStore(url: string, sql: Ejecutor = neon(url)): ControlStore {
   return {
     async providerRetryAt(provider, now, model) {
@@ -17,6 +19,23 @@ export function neonControlStore(url: string, sql: Ejecutor = neon(url)): Contro
       await sql`insert into news_decisions(event_id,decision,assigned_at,expires_at,level)
         values(${id},${JSON.stringify(decision)}::jsonb,${decision.assignedAt}::timestamptz,${decision.expiresAt}::timestamptz,${decision.level})
         on conflict(event_id) do update set decision=excluded.decision,assigned_at=excluded.assigned_at,expires_at=excluded.expires_at,level=excluded.level`;
+    },
+    async putDecisionsIfAbsent(items) {
+      // Una sentencia por lote y no una por titular. Se deduplica antes: el
+      // primero de cada id manda, igual que en los almacenes de archivo y memoria.
+      const ids = new Set<string>();
+      const unique = items.filter((item) => !ids.has(item.id) && Boolean(ids.add(item.id)));
+      let written = 0;
+      for (let start = 0; start < unique.length; start += DECISION_BATCH) {
+        const batch = unique.slice(start, start + DECISION_BATCH).map(({ id, decision }) => ({ id, decision }));
+        const rows = await sql`insert into news_decisions(event_id,decision,assigned_at,expires_at,level)
+          select i.id, i.decision, (i.decision->>'assignedAt')::timestamptz, (i.decision->>'expiresAt')::timestamptz, i.decision->>'level'
+          from jsonb_to_recordset(${JSON.stringify(batch)}::jsonb) as i(id text, decision jsonb)
+          on conflict(event_id) do nothing
+          returning event_id` as unknown[];
+        written += rows.length;
+      }
+      return written;
     },
     async getDecision(id) {
       const rows = await sql`select decision from news_decisions where event_id=${id}` as {decision:NewsDecision}[];

@@ -41,6 +41,13 @@ export type AiRecord = { provider: string; model: string; resolvedModel?: string
 export interface ControlStore {
   putDecision(id: string, decision: NewsDecision): Promise<void>;
   getDecision(id: string): Promise<NewsDecision | null>;
+  /**
+   * Guarda de una vez las decisiones que todavía no existen y deja intactas las
+   * que sí: una recaptura no pisa una decisión ya puntuada. Devuelve cuántas
+   * escribió. Existe por la captura, que antes hacía una lectura y una escritura
+   * por titular —cientos de viajes a Neon por ciclo, cuatro ciclos por hora—.
+   */
+  putDecisionsIfAbsent(items: readonly { id: string; decision: NewsDecision }[]): Promise<number>;
   reserve(request: Reservation): Promise<ReservationResult>;
   recordAi(id: string, record: AiRecord): Promise<void>;
   /** Espera vigente del proveedor. Con `model`, también la de ese modelo (`retryScope: "model"`). */
@@ -65,6 +72,14 @@ function makeStore(access: <T>(fn: (state: State) => T, write: boolean) => Promi
       .map((row) => row.ai!.retryAt!).sort().at(-1) ?? null, false),
     putDecision: (id, decision) => access((s) => { s.decisions[id] = structuredClone(decision); }, true),
     getDecision: (id) => access((s) => structuredClone(s.decisions[id] ?? null), false),
+    putDecisionsIfAbsent: (items) => access((s) => {
+      let written = 0;
+      for (const { id, decision } of items) {
+        if (s.decisions[id]) continue;
+        s.decisions[id] = structuredClone(decision); written++;
+      }
+      return written;
+    }, true),
     reserve: (r) => {
       validateReservation(r);
       r = { ...r, now: new Date(r.now).toISOString() };

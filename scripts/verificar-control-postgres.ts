@@ -34,6 +34,20 @@ try {
   const decision={policyVersion:"test",assignedAt:now,expiresAt:"2026-09-12T10:00:00Z",level:"digest",eligible:{capture:true,process:true,dashboard:true,telegramBrief:false,morningBrief:true,importantAlert:false},reasons:["test"],relevance:{admit:true,factuality:"fact",evidence:"sufficient",topic:"macro",factType:"macro",watchlistRelation:"none",reasons:[],entities:[]}} as NewsDecision;
   await c.putDecision("kept",decision);
   assert.equal((await neonControlStore("reopened",sql).getDecision("kept"))!.level,"digest"); checks.push("decision_reabierta_independiente_de_entrega");
+  // Captura en lote: solo escribe las que faltan, no pisa una decisión ya puesta
+  // y el primero de un id repetido manda.
+  assert.equal(await c.putDecisionsIfAbsent([
+    { id: "kept", decision: { ...decision, level: "none" } },
+    { id: "lote-a", decision: { ...decision, level: "brief" } },
+    { id: "lote-a", decision: { ...decision, level: "none" } },
+    { id: "lote-b", decision },
+  ]), 2);
+  assert.equal((await c.getDecision("kept"))!.level, "digest");
+  assert.equal((await c.getDecision("lote-a"))!.level, "brief");
+  assert.equal((await db.query("select expires_at from news_decisions where event_id='lote-b'")).rows[0].expires_at.toISOString(), "2026-09-12T10:00:00.000Z");
+  assert.equal(await c.putDecisionsIfAbsent([]), 0);
+  await db.query("delete from news_decisions where event_id in ('lote-a','lote-b')");
+  checks.push("decisiones_de_captura_en_lote_sin_pisar");
   for (const statement of splitStatements(`create table events(id text primary key,source text,source_url text,kind text,title text,one_liner text,observed_at text,first_seen_at timestamptz,stale boolean,importance_score int);
     create table alerts(event_id text,importance_score int);
     create table alert_deliveries(event_id text primary key,state text);`)) await db.query(statement);

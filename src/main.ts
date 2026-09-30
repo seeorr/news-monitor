@@ -98,11 +98,10 @@ async function main(): Promise<number> {
         const counts = await captureCandidates(queue, events, { now: new Date().toISOString(),
           maxAgeHours: config.maxItemAgeHours, watchlist: source.vigilados });
         run.captured += counts.captured; run.unique += counts.unique;
-        if (levels && !dry) for (const event of events) {
-          // No sobrescribir una decisión ya puntuada por una mera recaptura.
-          if (!await control.getDecision(event.id)) await control.putDecision(event.id,
-            decideNews(event, null, { now: retrievedAt, watchlist: source.vigilados, maxPendingHours: config.maxPendingHours, maxItemAgeHours: config.maxItemAgeHours }));
-        }
+        // No sobrescribir una decisión ya puntuada por una mera recaptura. En un
+        // solo lote: antes eran una lectura y una escritura por titular.
+        if (levels && !dry) await control.putDecisionsIfAbsent(events.map((event) => ({ id: event.id,
+          decision: decideNews(event, null, { now: retrievedAt, watchlist: source.vigilados, maxPendingHours: config.maxPendingHours, maxItemAgeHours: config.maxItemAgeHours }) })));
         log("QUEUE_CAPTURE", { stage: "persist", source: source.source, feed: source.feed,
           captured: counts.captured, unique: counts.unique });
       },

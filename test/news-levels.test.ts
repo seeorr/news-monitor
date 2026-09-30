@@ -492,6 +492,12 @@ describe("reservas persistentes independientes", () => {
     expect(results.filter((r) => r.allowed)).toHaveLength(3);
     await stores[0]!.putDecision("x", decideNews(event("x"), score(), { now: NOW }));
     expect(await fileControlStore(dir).getDecision("x")).toMatchObject({ level: "brief" });
+    // El lote de captura no pisa lo que ya hay y el primero de un id repetido manda.
+    const nula = decideNews(event("y"), null, { now: NOW });
+    expect(await fileControlStore(dir).putDecisionsIfAbsent([{ id: "x", decision: nula }, { id: "y", decision: nula },
+      { id: "y", decision: decideNews(event("y"), score(), { now: NOW }) }])).toBe(1);
+    expect(await fileControlStore(dir).getDecision("x")).toMatchObject({ level: "brief" });
+    expect(await fileControlStore(dir).getDecision("y")).toEqual(nula);
     expect(await fileControlStore(dir).reserve({ id: "important", resource: "important", units: 1, now: NOW, dayLimit: 1 })).toMatchObject({ allowed: true });
     expect(await fileControlStore(dir).reserve({ id: "tomorrow", resource: "brief", units: 1, now: "2026-09-11T10:00:00Z", dayLimit: 3 })).toMatchObject({ allowed: true });
   });
