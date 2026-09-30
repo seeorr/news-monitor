@@ -158,9 +158,9 @@ function Detalle({ evento }: { evento: FilaEvento }) {
         ) : <p className="mt-3 text-meta text-txt-3">{RESUMEN_RETIRADO}</p>
       ) : null}
 
-      {evento.source_url ? (
+      {enlaceSeguro(evento.source_url) ? (
         <a
-          href={evento.source_url}
+          href={enlaceSeguro(evento.source_url)!}
           target="_blank"
           rel="noreferrer noopener"
           className="mt-3 inline-flex items-center gap-1 text-secundario text-accent-text underline underline-offset-2"
@@ -241,4 +241,18 @@ function Lista({ titulo, items }: { titulo: string; items: string[] }) {
 
 function Titulillo({ children }: { children: React.ReactNode }) {
   return <h4 className="text-meta font-medium text-txt-3">{children}</h4>;
+}
+
+/**
+ * Solo http(s) llega a un `href`. Las filas guardadas antes de que la captura
+ * filtrara el enlace (`enlaceDeFuente`) pueden traer cualquier esquema que
+ * `z.url()` aceptara, y React solo bloquea `javascript:`, no `data:` ni el resto.
+ */
+function enlaceSeguro(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
+  } catch {
+    return null;
+  }
 }

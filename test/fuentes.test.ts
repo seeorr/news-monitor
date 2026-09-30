@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseFeed } from "../src/lib/feed.ts";
-import { FEEDS, toEvents as feedEvents } from "../src/sources/rss.ts";
+import { FEEDS, enlaceDeFuente, toEvents as feedEvents } from "../src/sources/rss.ts";
+import { prepareQueueCaptures } from "../src/pipeline/queue.ts";
 import {
   companyName,
   etiqueta,
@@ -164,5 +165,32 @@ describe("SEC EDGAR", () => {
 
   it("fecha el evento con el instante en que la SEC lo aceptó", () => {
     expect(eventos[0]?.observed_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("enlaces de feed", () => {
+  const item = (link: string | null, guid: string) => ({ title: "Federal Reserve issues statement", link, guid,
+    date: "2026-09-10T10:00:00Z", publicationDate: "2026-09-10T10:00:00Z", updatedDate: null, summary: null, raw: "<item/>" });
+
+  it("resuelve los relativos contra el feed y deja sin enlace lo que no es http(s)", () => {
+    expect(enlaceDeFuente("/newsevents/pressreleases/x.htm", "https://www.federalreserve.gov/feeds/press_all.xml"))
+      .toBe("https://www.federalreserve.gov/newsevents/pressreleases/x.htm");
+    expect(enlaceDeFuente(" https://example.org/a ", "https://example.org/feed")).toBe("https://example.org/a");
+    expect(enlaceDeFuente("javascript:alert(1)", "https://example.org/feed")).toBeNull();
+    expect(enlaceDeFuente("data:text/html,x", "https://example.org/feed")).toBeNull();
+    expect(enlaceDeFuente("https://user:pw@example.org/a", "https://example.org/feed")).toBeNull();
+    expect(enlaceDeFuente(null, "https://example.org/feed")).toBeNull();
+    expect(enlaceDeFuente("   ", "https://example.org/feed")).toBeNull();
+  });
+
+  it("un elemento con enlace relativo o peligroso no tumba la captura del feed entero", () => {
+    const eventos = feedEvents([item("/relativo", "a"), item("javascript:alert(1)", "b"), item("https://example.org/c", "c")],
+      spec, { retrievedAt: "2026-09-10T10:05:00Z" });
+    expect(eventos.map((e) => e.source_url)).toEqual([
+      new URL("/relativo", spec.url).href, null, "https://example.org/c"]);
+    // Antes lanzaba aquí, al capturar, y se perdían las tres.
+    expect(prepareQueueCaptures(eventos.map((event) => ({ event, publisher: spec.publisher })), "2026-09-10T10:05:00Z")).toHaveLength(3);
+    // El identificador sigue saliendo del enlace crudo: no cambia al sanearlo.
+    expect(eventos[1]!.id).toBe(feedEvents([item("javascript:alert(1)", "b")], spec, { retrievedAt: "2026-09-10T10:05:00Z" })[0]!.id);
   });
 });

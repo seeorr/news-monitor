@@ -67,3 +67,14 @@ describe("la tarjeta del dashboard no enseña cifras que la fuente no dice", () 
     expect(html).toContain("Texto literal enviado");
   });
 });
+
+describe("el enlace a la fuente", () => {
+  it("solo pinta http(s): una fila guardada con otro esquema se queda sin enlace", () => {
+    expect(pintar(base)).toContain('href="https://example.test/cobre"');
+    for (const url of ["data:text/html,<b>x</b>", "javascript:alert(1)", "ftp://example.test/x"]) {
+      const html = pintar({ ...base, source_url: url });
+      expect(html).not.toContain("Ver la fuente");
+      expect(html).not.toContain(url.slice(0, 5));
+    }
+  });
+});
