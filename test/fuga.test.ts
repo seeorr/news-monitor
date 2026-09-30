@@ -302,6 +302,8 @@ describe("consola del main real", () => {
     expect(mocks.seen.finishAlert.mock.invocationCallOrder[0]).toBeLessThan(mocks.send.mock.invocationCallOrder[1]!);
     const event = mocks.score.mock.calls[0]![0];
     expect(await mocks.control.mock.results[0]!.value.getDecision(event.id)).toMatchObject({ level: "brief" });
+    // La copia al grupo deja su desenlace en la decisión: antes main.ts no lo devolvía.
+    expect((await mocks.control.mock.results[0]!.value.getDecision(event.id))?.reasons).toContain("group_copy_sent");
   });
   it("cupo de IA agotado: el ciclo no falla, conserva la noticia y avisa una vez por el privado", async () => {
     mocks.config.mockReturnValue({ ...config(), newsDeliveryMode: "two-level", feeds: ["cnbc-markets"] });

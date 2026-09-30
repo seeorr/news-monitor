@@ -23,7 +23,7 @@ import { captureCandidates, capturedEvent, processQueue, deliverQueue } from "./
 import { createLogger, type LogFields, type LogStage } from "./lib/log.ts";
 import { applyRules, mereceAlerta } from "./pipeline/rules.ts";
 import {
-  fileSeenStore, type EstadoEntrega, type Puntuacion, type SeenStore,
+  fileSeenStore, type EstadoEntrega, type Puntuacion, type ResultadoEnvio, type SeenStore,
 } from "./pipeline/seen.ts";
 
 import { formatAlert, sendTelegram } from "./notify/telegram.ts";
@@ -210,7 +210,9 @@ async function main(): Promise<number> {
       return result;
     }, afterSent: async (body, event) => {
       log("ALERT_SENT", { stage: "persist", source: event.source });
-      await copiarAlGrupo(config, event, body);
+      // El desenlace del grupo vuelve a `deliverNews`, que lo anota en la
+      // decisión (`group_copy_*`). Sin devolverlo, esa anotación no existía.
+      return copiarAlGrupo(config, event, body);
     }, onFailure: (error) => log("EVENT_FAILED", { stage: "telegram", error }),
     // Qué contestó Telegram cuando no quedó `sent`: estado HTTP o forma del error, nunca su texto.
     onDeliveryOutcome: (outcome) => log(outcome.state === "blocked" ? "ALERT_BLOCKED" : outcome.state === "rejected" ? "ALERT_REJECTED" : "ALERT_UNCERTAIN",
@@ -493,13 +495,16 @@ async function procesar(
  * registro de vistos ya lo tiene—, así que un rechazo del grupo es una alerta
  * perdida **para el grupo** y hay que poder verlo en el log.
  */
-async function copiarAlGrupo(config: Config, event: NormalizedEvent, text: string): Promise<void> {
-  if (!config.telegramGroupChatId || !config.telegramBotToken) return;
+async function copiarAlGrupo(config: Config, event: NormalizedEvent, text: string): Promise<ResultadoEnvio | undefined> {
+  if (!config.telegramGroupChatId || !config.telegramBotToken) return undefined;
   try {
     const copia = await sendTelegram(config.telegramBotToken, config.telegramGroupChatId, text);
     log(copia.ok ? "GROUP_SENT" : "GROUP_REJECTED", { stage: "telegram", source: event.source });
+    return copia;
   } catch (err) {
     log("GROUP_FAILED", { stage: "telegram", source: event.source, error: err });
+    // Timeout o red caída: pudo llegar al grupo o no. Se dice así, no se finge.
+    return { state: "uncertain" };
   }
 }
 
