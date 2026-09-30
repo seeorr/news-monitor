@@ -37,6 +37,12 @@ export function neonControlStore(url: string, sql: Ejecutor = neon(url)): Contro
       }
       return written;
     },
+    async getDecisions(ids) {
+      if (ids.length === 0) return new Map();
+      const rows = await sql`select event_id, decision from news_decisions
+        where event_id in (select jsonb_array_elements_text(${JSON.stringify([...new Set(ids)])}::jsonb))` as { event_id: string; decision: NewsDecision }[];
+      return new Map(rows.map((row) => [row.event_id, row.decision]));
+    },
     async getDecision(id) {
       const rows = await sql`select decision from news_decisions where event_id=${id}` as {decision:NewsDecision}[];
       return rows[0]?.decision ?? null;

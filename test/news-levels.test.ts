@@ -131,6 +131,23 @@ describe("dos niveles, con transportes simulados", () => {
     await deliverNews({ ...o, now: "2026-09-10T11:01:00.000Z" });
     expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
   });
+  it("una noticia que sigue esperando no reescribe su decisión ni su nota en cada ciclo", async () => {
+    const noche = "2026-09-10T23:30:00.000Z"; // 01:30 en Madrid
+    const o = options({ now: noche, briefQuietHours: { desde: 0, hasta: 8, zona: "Europe/Madrid" } });
+    await prepare(o, event("breve"), score(5), noche);
+    await deliverNews(o);
+    const guardada = await o.control.getDecision("breve");
+    expect(guardada?.reasons).toContain("deferred_quiet_hours");
+    const escribe = vi.spyOn(o.control, "putDecision"), marca = vi.spyOn(o.seen, "mark");
+    for (const ahora of ["2026-09-10T23:45:00.000Z", "2026-09-11T00:00:00.000Z"]) await deliverNews({ ...o, now: ahora });
+    expect(escribe).not.toHaveBeenCalled();
+    expect(marca).not.toHaveBeenCalled();
+    expect(await o.control.getDecision("breve")).toEqual(guardada);
+    // Cuando la decisión cambia de verdad —aquí, caduca el interés— se escribe.
+    await deliverNews({ ...o, now: "2026-09-12T23:45:00.000Z" });
+    expect(escribe).toHaveBeenCalled();
+    expect((await o.control.getDecision("breve"))?.reasons).toContain("expired_interest");
+  });
   it("de noche el breve espera sin gastar cupo y el importante sale igual", async () => {
     const noche = "2026-09-10T23:30:00.000Z"; // 01:30 en Madrid
     const o = options({ now: noche, briefQuietHours: { desde: 0, hasta: 8, zona: "Europe/Madrid" } });

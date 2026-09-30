@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { analyzeEvent, type CascadeDeps, type Scoring } from "../ai/cascade.ts";
 import { formatImportant, formatInteresting, formatNewsBatch } from "../notify/news-formats.ts";
 import { RETRY_AFTER_POR_DEFECTO_MS } from "../notify/telegram.ts";
@@ -64,9 +65,15 @@ export async function deliverNews(options: NewsDeliveryOptions) {
   // `sent: 0` y la unica huella quedo en `news_decisions`: por fuera eso se ve
   // como "hoy me han llegado menos mensajes" y nada mas.
   let sent = 0, failed = 0, deep = 0, groupSent = 0, groupFailed = 0, staleClosed = 0, telegramUnconfigured = false;
+  // Lo ya guardado, en una sola lectura. Una noticia que espera —horas de
+  // silencio, cuota, un 429— vuelve aquí en cada ciclo, y reescribir su
+  // decisión y su nota cada vez eran dos escrituras por noticia y ciclo sobre
+  // una cola de hasta `maxItems`, para dejar la base exactamente igual.
+  const guardadas = options.dry || candidates.length === 0 ? new Map<string, NewsDecision>()
+    : await control.getDecisions(candidates.map((entry) => entry.id));
   for (const entry of candidates) {
     const event = capturedEvent(entry), scoring = entry.score as Scoring;
-    const decision: NewsDecision = decideNews(event, scoring, options);
+    let decision: NewsDecision = decideNews(event, scoring, options);
     if (decision.level === "important") {
       const previous = (await queue.storyContext(event)).filter((row) => row.id !== entry.id && row.state === "scored" && relatedUpdate(row.event, event));
       for (const row of previous) {
@@ -77,9 +84,17 @@ export async function deliverNews(options: NewsDeliveryOptions) {
         }
       }
     }
-    if (!options.dry) {
-      await control.putDecision(entry.id, decision);
+    const guardada = guardadas.get(entry.id);
+    if (guardada && prolonga(guardada, decision)) {
+      // Misma decisión que la guardada, con las anotaciones de ciclos
+      // anteriores encima: se conserva la guardada y no se escribe nada. La nota
+      // ya se proyectó cuando se escribió esa decisión (abajo, `mark` va antes).
+      decision = guardada;
+    } else if (!options.dry) {
+      // `mark` antes que la decisión: si el proceso muere entre las dos, la
+      // vuelta siguiente no encuentra la decisión y repite las dos.
       await seen.mark(event, points(scoring));
+      await control.putDecision(entry.id, decision);
     }
     if (!decision.eligible.telegramBrief && !decision.eligible.importantAlert) {
       if (!options.dry) await queue.completeDelivery(entry.id);
@@ -167,11 +182,11 @@ export async function deliverNews(options: NewsDeliveryOptions) {
       let body: string;
       try { body = analysis ? formatImportant(event, item.scoring, analysis) : formatInteresting(event, item.scoring); }
       catch { analysis = null; body = formatInteresting(event, item.scoring); }
-      if (!analysis) {
-        item.decision.reasons.push("important_degraded_to_supported_brief");
+      if (!analysis && item.decision.deliveryFormat !== "brief_fallback") {
         // Se guarda en el propio item: lo que se persista despues —un
         // aplazamiento, el desenlace del grupo— no puede borrar este formato.
-        item.decision = { ...item.decision, deliveryFormat: "brief_fallback" } as NewsDecision;
+        item.decision = { ...item.decision, deliveryFormat: "brief_fallback",
+          reasons: conMotivo(item.decision.reasons, "important_degraded_to_supported_brief") } as NewsDecision;
         await control.putDecision(item.entry.id, item.decision);
       }
       if (item.decision.updateOf) body = `Actualización material de una noticia anterior\nAntes: ${item.decision.updateOf.previousFact}\nAhora: ${item.decision.updateOf.change}\n\n${body}`;
@@ -231,7 +246,11 @@ export async function deliverNews(options: NewsDeliveryOptions) {
   /** Deja escrito por que no salio, sin cerrar nada. `razon` ya viene con su prefijo. */
   async function anotar(item: Ready, razon: string, nextAt: string | null) {
     if (options.dry) return;
-    item.decision = { ...item.decision, reasons: [...item.decision.reasons, razon], nextAt } as NewsDecision;
+    // Un motivo ya anotado no se repite: la decisión guardada se conserva de un
+    // ciclo a otro, y la misma espera anotada cada quince minutos haría crecer
+    // la lista sin decir nada nuevo. Si nada cambia, no se escribe.
+    if (item.decision.reasons.includes(razon) && (item.decision.nextAt ?? null) === nextAt) return;
+    item.decision = { ...item.decision, reasons: conMotivo(item.decision.reasons, razon), nextAt } as NewsDecision;
     await control.putDecision(item.entry.id, item.decision);
   }
 
@@ -320,6 +339,28 @@ export async function deliverNews(options: NewsDeliveryOptions) {
     for (const { item } of owned) await anotar(item, etiqueta, null);
   }
 }
+function conMotivo(reasons: readonly string[], razon: string): string[] {
+  return reasons.includes(razon) ? [...reasons] : [...reasons, razon];
+}
+
+/**
+ * ¿Es `guardada` la misma decisión que `nueva`, con anotaciones de entrega encima?
+ *
+ * Todo igual salvo el instante de asignación, el plazo de reintento y el formato
+ * degradado, y con los motivos de `nueva` al principio de los de `guardada`
+ * —las anotaciones siempre se añaden al final—. Se compara tras pasar las dos
+ * por JSON porque la guardada ya viene de un `jsonb`: sin claves `undefined` y
+ * con otro orden de claves.
+ */
+function prolonga(guardada: NewsDecision, nueva: NewsDecision): boolean {
+  const base = (d: NewsDecision) => {
+    const { assignedAt: _a, nextAt: _n, deliveryFormat: _f, reasons: _r, ...resto } = JSON.parse(JSON.stringify(d)) as NewsDecision;
+    return resto;
+  };
+  return isDeepStrictEqual(base(guardada), base(nueva)) &&
+    nueva.reasons.every((razon, i) => guardada.reasons[i] === razon);
+}
+
 function points(scoring: Scoring): Puntuacion {
   return { importance: scoring.importance_score, impact: scoring.market_impact_score, sentiment: scoring.sentiment, oneLiner: scoring.one_liner };
 }

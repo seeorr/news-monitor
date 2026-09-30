@@ -48,6 +48,8 @@ export interface ControlStore {
    * por titular —cientos de viajes a Neon por ciclo, cuatro ciclos por hora—.
    */
   putDecisionsIfAbsent(items: readonly { id: string; decision: NewsDecision }[]): Promise<number>;
+  /** Las decisiones guardadas de esos ids, en una sola lectura. Los que no tienen no aparecen. */
+  getDecisions(ids: readonly string[]): Promise<Map<string, NewsDecision>>;
   reserve(request: Reservation): Promise<ReservationResult>;
   recordAi(id: string, record: AiRecord): Promise<void>;
   /** Espera vigente del proveedor. Con `model`, también la de ese modelo (`retryScope: "model"`). */
@@ -72,6 +74,8 @@ function makeStore(access: <T>(fn: (state: State) => T, write: boolean) => Promi
       .map((row) => row.ai!.retryAt!).sort().at(-1) ?? null, false),
     putDecision: (id, decision) => access((s) => { s.decisions[id] = structuredClone(decision); }, true),
     getDecision: (id) => access((s) => structuredClone(s.decisions[id] ?? null), false),
+    getDecisions: (ids) => access((s) => new Map(ids.filter((id) => s.decisions[id])
+      .map((id) => [id, structuredClone(s.decisions[id]!)] as const)), false),
     putDecisionsIfAbsent: (items) => access((s) => {
       let written = 0;
       for (const { id, decision } of items) {
