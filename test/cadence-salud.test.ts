@@ -41,13 +41,29 @@ describe("diagnóstico: captura, procesamiento, entrega y disparador por separad
 
   it("3 · fuentes parcialmente caídas, sin confundirlas con retraso de captura", () => {
     const sana = record({ startedAt: "2026-09-10T12:20:00.000Z", captureCompletedAt: "2026-09-10T12:20:20.000Z" });
+    const primera = record({ startedAt: "2026-09-10T12:23:00.000Z", captureCompletedAt: "2026-09-10T12:23:20.000Z",
+      status: "partial", sourcesFailed: 1, criticalOk: ["ecb-press", "fed-press"], criticalFailed: ["boj-news"] });
     const parcial = record({ startedAt: "2026-09-10T12:26:00.000Z", captureCompletedAt: "2026-09-10T12:26:20.000Z",
       status: "partial", sourcesFailed: 1, criticalOk: ["ecb-press", "fed-press"], criticalFailed: ["boj-news"] });
-    const report = evaluateHealth([sana, parcial], { now });
+    const report = evaluateHealth([sana, primera, parcial], { now });
     expect(report.states).toEqual(["critical_source_failed", "execution_partial"]);
     expect(report.criticalFailed).toEqual(["boj-news"]);
     expect(report.criticalStale).toEqual([]);
     expect(report.capture.state).toBe("current");
+  });
+
+  it("3b · un fallo suelto de una fuente crítica no es una caída: se publica y no avisa", () => {
+    // El caso del 01-10: la Fed contesta un 404 una vez y el ciclo siguiente lee bien.
+    const fallo = record({ startedAt: "2026-09-10T12:20:00.000Z", captureCompletedAt: "2026-09-10T12:20:20.000Z",
+      status: "partial", sourcesFailed: 1, criticalOk: ["ecb-press"], criticalFailed: ["fed-press"] });
+    const report = evaluateHealth([record({ startedAt: "2026-09-10T12:05:00.000Z", captureCompletedAt: "2026-09-10T12:05:20.000Z" }), fallo], { now });
+    expect(report.states).not.toContain("critical_source_failed");
+    expect(report.criticalFailed).toEqual([]);
+    expect(report.criticalTransient).toEqual(["fed-press"]);
+    // Y si al ciclo siguiente vuelve a leer, ni eso.
+    const recuperada = evaluateHealth([fallo, record()], { now });
+    expect(recuperada.criticalTransient).toEqual([]);
+    expect(recuperada.states).not.toContain("critical_source_failed");
   });
 
   it("4 · presupuesto agotado se ve y se cuenta", () => {

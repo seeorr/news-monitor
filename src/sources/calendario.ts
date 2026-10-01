@@ -66,22 +66,46 @@ interface ReleaseDate {
 }
 interface AgendaResponse {
   release_dates?: ReleaseDate[];
+  /** Total de filas de la consulta, no de esta página. */
+  count?: number;
 }
+
+/** Filas por página: el máximo que acepta FRED. */
+const PAGINA = 1000;
+/** Techo de páginas: una respuesta que no converge no puede colgar la agenda. */
+const MAX_PAGINAS = 10;
 
 /** Citas de los próximos días. `desde` en AAAA-MM-DD. */
 export async function fetchAgenda(
   apiKey: string,
   opts: { desde: string; dias: number },
+  traer: (url: string) => Promise<AgendaResponse> = (url) => fetchJson<AgendaResponse>(url, { timeoutMs: 45_000 }),
 ): Promise<Cita[]> {
   const hasta = sumarDias(opts.desde, opts.dias);
-  const url =
+  const base =
     `${BASE}/releases/dates?api_key=${encodeURIComponent(apiKey)}&file_type=json` +
     `&realtime_start=${opts.desde}&realtime_end=${hasta}` +
-    "&include_release_dates_with_no_data=true&sort_order=asc&limit=1000";
+    `&include_release_dates_with_no_data=true&sort_order=asc&limit=${PAGINA}`;
 
   // La respuesta de una ventana de dos semanas ronda los 50 KB y el servidor se
-  // toma su tiempo: el timeout por defecto de 15 s se queda corto.
-  return parseAgenda(await fetchJson<AgendaResponse>(url, { timeoutMs: 45_000 }), opts);
+  // toma su tiempo: el timeout por defecto de 15 s se queda corto (ver `traer`).
+  //
+  // Paginada. FRED devuelve TODAS las publicaciones —más de novecientas—, no
+  // solo las de `RELEASES`, y en orden ascendente: con una sola página de 1000,
+  // una ventana larga perdía sus últimos días sin avisar, justo donde suele caer
+  // el informe de empleo del viernes. Y el filtro de `CASI_DIARIO` contaba días
+  // sobre una ventana cortada.
+  const release_dates: ReleaseDate[] = [];
+  for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+    const body = await traer(`${base}&offset=${pagina * PAGINA}`);
+    const filas = body.release_dates ?? [];
+    release_dates.push(...filas);
+    const total = typeof body.count === "number" ? body.count : 0;
+    if (filas.length < PAGINA || release_dates.length >= total) return parseAgenda({ release_dates }, opts);
+  }
+  // Más de diez mil filas en una ventana de días no es una agenda: algo ha
+  // cambiado en la API. Mejor fallar visible que enviar una agenda cortada.
+  throw new Error("agenda_incompleta");
 }
 
 /** Función pura, para poder probar la forma real de la respuesta sin red. */

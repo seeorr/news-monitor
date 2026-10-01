@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixture from "./fixtures/fred-agenda.json" with { type: "json" };
 import {
+  fetchAgenda,
   agendaEvent,
   formatAgenda,
   parseAgenda,
@@ -194,6 +195,26 @@ describe("entrega de la agenda", () => {
     expect(e.lineas.join("\n")).toContain("rejected");
   });
 
+  it("un 429 aplaza la agenda: no se pierde el día y sale en el siguiente intento vencido el plazo", async () => {
+    const seen = memorySeenStore();
+    const respuestas = [{ state: "rejected" as const, rejection: "recoverable" as const, retryAfterMs: 120_000 },
+      { state: "sent" as const }];
+    const envios: string[] = [];
+    const correr = (now: Date) => runAgendaCli([], {
+      dias: 7, citas: async () => citas, seen, now, token: () => `t${envios.length}-${now.getTime()}`, log: () => {},
+      send: async (body) => { envios.push(body); return respuestas[envios.length - 1]!; },
+    });
+    expect(await correr(ahora)).toBe(1);
+    expect(seen.entregas.get(idDeHoy)?.estado).toBe("deferred");
+    // Antes del plazo, el cron siguiente no reintenta.
+    expect(await correr(new Date(ahora.getTime() + 60_000))).toBe(1);
+    expect(envios).toHaveLength(1);
+    // Vencido el plazo, se reclama y sale.
+    expect(await correr(new Date(ahora.getTime() + 180_000))).toBe(0);
+    expect(envios).toHaveLength(2);
+    expect(seen.entregas.get(idDeHoy)?.estado).toBe("sent");
+  });
+
   it("--force reenvía cuando una persona lo decide", async () => {
     const e = escenario();
     expect(await e.correr()).toBe(0);
@@ -247,5 +268,32 @@ describe("entrega de la agenda", () => {
   it("una bandera que no existe no se traga en silencio", () => {
     expect(() => parseAgendaArgs(["--send"])).toThrow("invalid_flags");
     expect(parseAgendaArgs(["--dry", "--force"])).toEqual({ dry: true, force: true });
+  });
+});
+
+describe("agenda paginada", () => {
+  it("pide todas las páginas: el informe del último día no se pierde tras las 1000 primeras filas", async () => {
+    const relleno = Array.from({ length: 1000 }, (_, i) => ({ release_id: 9000 + i, release_name: "nicho", date: "2026-09-14" }));
+    const urls: string[] = [];
+    const citas = await fetchAgenda("clave", { desde: "2026-09-14", dias: 7 }, async (url) => {
+      urls.push(url);
+      return url.endsWith("offset=0")
+        ? { count: 1001, release_dates: relleno }
+        : { count: 1001, release_dates: [{ release_id: 50, release_name: "Employment Situation", date: "2026-09-18" }] };
+    });
+    expect(urls.map((u) => new URL(u).searchParams.get("offset"))).toEqual(["0", "1000"]);
+    expect(citas).toEqual([{ date: "2026-09-18", releaseId: 50, title: "Informe de empleo", country: "🇺🇸" }]);
+  });
+
+  it("una respuesta corta se lee en una sola petición", async () => {
+    let llamadas = 0;
+    await fetchAgenda("clave", { desde: "2026-09-14", dias: 7 }, async () => { llamadas++; return { count: 3, release_dates: [] }; });
+    expect(llamadas).toBe(1);
+  });
+
+  it("una paginación que no termina falla visible en vez de enviar una agenda cortada", async () => {
+    const lleno = Array.from({ length: 1000 }, () => ({ release_id: 1, release_name: "x", date: "2026-09-14" }));
+    await expect(fetchAgenda("clave", { desde: "2026-09-14", dias: 7 }, async () => ({ count: 999_999, release_dates: lleno })))
+      .rejects.toThrow("agenda_incompleta");
   });
 });

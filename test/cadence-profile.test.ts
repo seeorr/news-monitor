@@ -22,11 +22,18 @@ describe("validación de perfiles sin red", () => {
     expect(() => executionProfile({ MONITOR_PROFILE: "process", MONITOR_MODE: "capture-only" })).toThrow();
   });
   it("cron de respaldo independiente, grupo común, no cancela envíos", () => {
-    expect(workflow).toContain('cron: "7 * * * *"'); expect(workflow).toContain('cron: "37 * * * *"');
+    expect(workflow).toContain('cron: "5 * * * *"'); expect(workflow).toContain('cron: "35 * * * *"');
     expect(workflow).toContain("group: monitor"); expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("github.event_name == 'schedule' && 'full'");
     expect(workflow.indexOf("node scripts/validate-profile.mjs")).toBeLessThan(workflow.indexOf("run: npm ci"));
     expect(workflow).toContain("steps.profile.outputs.valid == 'true'");
     expect(workflow).not.toMatch(/\bsleep\s+\d/);
+  });
+  it("monitor y agenda llevan el token de Actions en solo lectura y sin guardarlo en .git", () => {
+    const agenda = readFileSync(new URL("../.github/workflows/agenda.yml", import.meta.url), "utf8");
+    for (const texto of [workflow, agenda]) {
+      expect(texto).toMatch(/^permissions:\n  contents: read$/m);
+      expect(texto).toContain("persist-credentials: false");
+    }
   });
 });

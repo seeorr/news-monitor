@@ -121,13 +121,26 @@ export function esSesionUs(date: string): boolean {
   return !holidays.has(date);
 }
 
+/**
+ * Sesiones de calendario que pueden faltar sin invalidar la SMA200.
+ *
+ * Era cero, y un solo hueco —un cierre extraordinario que el calendario no
+ * conoce (el duelo nacional del 9-01-2025) o un día que FRED dejó en "."—
+ * dejaba la tendencia sin voto, y el régimen en `insufficient_data`, durante
+ * las ~200 sesiones que tarda en salir de la ventana: unos diez meses. Con dos
+ * de margen la media sigue siendo de 200 precios reales y distintos, repartidos
+ * en 202 sesiones como mucho; tres o más huecos sí son historia discontinua.
+ */
+const SESIONES_AUSENTES_TOLERADAS = 2;
+
 function faltanSesiones(ventana: Observacion[]): boolean {
   const inicio = ventana.at(-1)?.date, fin = ventana[0]?.date;
   if (!inicio || !fin) return true;
   const fechas = new Set(ventana.map(o => o.date));
+  let ausentes = 0;
   for (let d = new Date(`${inicio}T00:00:00Z`); d.toISOString().slice(0, 10) <= fin; d.setUTCDate(d.getUTCDate() + 1)) {
     const fecha = d.toISOString().slice(0, 10);
-    if (esSesionUs(fecha) && !fechas.has(fecha)) return true;
+    if (esSesionUs(fecha) && !fechas.has(fecha) && ++ausentes > SESIONES_AUSENTES_TOLERADAS) return true;
   }
   return false;
 }

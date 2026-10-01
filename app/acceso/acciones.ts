@@ -60,13 +60,13 @@ export async function entrar(_previo: EstadoAcceso, datos: FormData): Promise<Es
   const intentos = almacenNeon(cliente(url), POLITICA_INTENTOS);
   const clave = await claveCliente(ipDeCabeceras(await headers()), secreto);
   try {
-    // Bloqueada: no se mira la clave. Mirarla diría, por el tiempo o por el
-    // resultado, si la de este intento era buena, y alargaría nada.
-    if (await intentos.bloqueadoHasta(clave, new Date())) return DENEGADO;
-    if (!(await contrasenaValida(String(datos.get("clave") ?? ""), secreto))) {
-      await intentos.registrarFallo(clave, new Date());
-      return DENEGADO;
-    }
+    // El intento se cuenta ANTES de mirar la clave, en una sola sentencia. Al
+    // revés —consultar el bloqueo, probar y anotar el fallo— una ráfaga en
+    // paralelo pasaba entera la consulta antes de que se anotara ningún fallo.
+    // Sin permiso no se mira la clave: mirarla diría, por el tiempo o por el
+    // resultado, si la de este intento era buena.
+    if (!(await intentos.registrarIntento(clave, new Date())).permitido) return DENEGADO;
+    if (!(await contrasenaValida(String(datos.get("clave") ?? ""), secreto))) return DENEGADO;
     await intentos.limpiar(clave);
   } catch {
     return DENEGADO;

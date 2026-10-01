@@ -17,9 +17,11 @@ describe("salud medible y aviso privado desactivado", () => {
     expect(evaluateHealth([], { now }).states).toEqual(["no_recent_execution"]);
   });
   it("process-only verde no sana la captura ni una fuente crítica fallida", () => {
+    const anterior = record({ status: "partial", startedAt: "2026-09-10T12:10:00Z", captureCompletedAt: "2026-09-10T12:10:20Z",
+      criticalOk: ["fed-press"], criticalFailed: ["ecb-press"], sourcesFailed: 1 });
     const failure = record({ status: "partial", criticalOk: ["fed-press"], criticalFailed: ["ecb-press"], sourcesFailed: 1 });
     const processed = record({ profile: "process", startedAt: "2026-09-10T12:29:00Z", captureCompletedAt: null, criticalOk: [] });
-    const report = evaluateHealth([failure, processed], { now, oldestPendingAt: "2026-09-10T09:00:00Z", blockedDeliveries: 1 });
+    const report = evaluateHealth([anterior, failure, processed], { now, oldestPendingAt: "2026-09-10T09:00:00Z", blockedDeliveries: 1 });
     expect(report.states).toEqual(["delayed", "critical_source_failed", "aged_queue", "delivery_blocked"]);
     expect(report.criticalFailed).toEqual(["ecb-press"]);
   });

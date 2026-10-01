@@ -229,6 +229,31 @@ export async function fetchFeed(spec: FeedSpec, opts: RetryOptions = {}): Promis
 }
 
 /**
+ * El enlace del elemento, tal y como se puede enseñar y validar.
+ *
+ * El esquema del evento exige una URL absoluta, y hasta el 30-09 el enlace iba
+ * crudo: un solo elemento con un enlace relativo (`/news/123`, que RSS no
+ * prohíbe) hacía lanzar a `NormalizedEvent.parse` y se perdía la captura
+ * **entera** de ese feed, en ese ciclo y en todos mientras el elemento siguiera
+ * publicado. Y `z.url()` acepta cualquier esquema, así que un
+ * `javascript:` o un `data:` llegaba hasta el `href` del dashboard.
+ *
+ * Se resuelve contra la URL del feed y solo pasa http(s) sin credenciales; lo
+ * demás se queda sin enlace, que es algo que el resto del sistema ya sabe
+ * contar. El identificador no cambia: se sigue calculando con el enlace crudo.
+ */
+export function enlaceDeFuente(link: string | null, base: string): string | null {
+  if (!link?.trim()) return null;
+  try {
+    const url = new URL(link.trim(), base);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Elementos del feed a eventos normalizados.
  *
  * Se descarta el elemento **sin fecha interpretable**. No es purismo: la frescura
@@ -256,7 +281,7 @@ export function toEvents(
     eventos.push({
       id: itemId("rss", spec.id, spec.identity === "guid-and-publication" ? `${guid}|${observedAt}` : guid),
       source: "rss",
-      source_url: item.link,
+      source_url: enlaceDeFuente(item.link, spec.url),
       kind: "news",
       title: item.title,
       summary: recortar(item.summary ?? atomContent(item), 600),

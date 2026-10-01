@@ -66,12 +66,24 @@ describe("régimen trazable", () => {
     expect(esSesionUs("2026-09-08")).toBe(true);
     expect(esSesionUs("2021-12-31")).toBe(true);
   });
-  it("una sesión intermedia ausente invalida la media aunque se conserven 200 precios", () => {
-    const d = datos();
-    d.SP500 = d.SP500!.filter(o => o.date !== "2026-09-02");
-    d.SP500.push({date: "2025-12-02",value:100});
-    expect(d.SP500).toHaveLength(200);
-    expect(calcularRegimen(d, now).state).toBe("insufficient_data");
+  it("hasta dos sesiones ausentes no dejan la tendencia sin voto diez meses; tres sí la invalidan", () => {
+    // Una sesión que el calendario cree abierta y no tiene dato: un cierre
+    // extraordinario o un "." de FRED. Se reponen precios al fondo para seguir
+    // teniendo 200 observaciones distintas.
+    const conHuecos = (huecos: string[]) => {
+      const d = datos();
+      d.SP500 = d.SP500!.filter(o => !huecos.includes(o.date));
+      let fondo = new Date(`${d.SP500.at(-1)!.date}T00:00:00Z`);
+      while (d.SP500.length < 200) {
+        fondo.setUTCDate(fondo.getUTCDate() - 1);
+        const fecha = fondo.toISOString().slice(0, 10);
+        if (esSesionUs(fecha)) d.SP500.push({ date: fecha, value: 100 });
+      }
+      return calcularRegimen(d, now);
+    };
+    expect(conHuecos(["2026-09-02"]).state).toBe("risk_on");
+    expect(conHuecos(["2026-09-02", "2026-06-10"]).state).toBe("risk_on");
+    expect(conHuecos(["2026-09-02", "2026-06-10", "2026-03-11"]).state).toBe("insufficient_data");
   });
   it("fechas futuras, duplicadas y valores no finitos no cambian el cálculo", () => {
     const d = datos();

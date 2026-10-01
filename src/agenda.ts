@@ -21,9 +21,9 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { loadConfig, loadDotEnv, type Config } from "./config.ts";
 import { neonSeenStore } from "./db/neon.ts";
-import { fileSeenStore, type EstadoEntrega, type SeenStore } from "./pipeline/seen.ts";
+import { fileSeenStore, type EstadoEntrega, type ResultadoEnvio, type SeenStore } from "./pipeline/seen.ts";
 import { agendaEvent, fetchAgenda, formatAgenda, type Cita } from "./sources/calendario.ts";
-import { sendTelegram } from "./notify/telegram.ts";
+import { RETRY_AFTER_POR_DEFECTO_MS, sendTelegram } from "./notify/telegram.ts";
 
 export interface AgendaFlags { dry: boolean; force: boolean }
 
@@ -38,8 +38,12 @@ export interface AgendaDependencies {
   /** Ausente = sin `FRED_API_KEY`, que es de donde salen las fechas. */
   citas?: (opts: { desde: string; dias: number }) => Promise<Cita[]>;
   seen: SeenStore;
-  /** Ausente = sin credenciales de Telegram: se compone y no se manda. */
-  send?: (body: string) => Promise<EstadoEntrega>;
+  /**
+   * Ausente = sin credenciales de Telegram: se compone y no se manda. El estado
+   * a secas sigue valiendo; con `ResultadoEnvio` se distingue un 429, que se
+   * aplaza, de un rechazo que no volverá.
+   */
+  send?: (body: string) => Promise<EstadoEntrega | ResultadoEnvio>;
   now: Date;
   token: () => string;
   log: (line: string) => void;
@@ -79,7 +83,8 @@ export async function runAgendaCli(args: string[], deps: AgendaDependencies): Pr
   }
 
   const token = deps.token();
-  const reclamada = await deps.seen.claimAlert(event.id, { token, force: flags.force });
+  // `now` deja reclamar una entrega que un 429 aplazó y cuyo plazo ya venció.
+  const reclamada = await deps.seen.claimAlert(event.id, { token, force: flags.force, now: deps.now.toISOString() });
   if (!reclamada) {
     // La entrega de hoy tiene dueño, o se cerró sin entregarse. Ninguna de las
     // dos se reintenta sola: un `uncertain` quiere decir que pudo llegar.
@@ -88,13 +93,21 @@ export async function runAgendaCli(args: string[], deps: AgendaDependencies): Pr
     return 1;
   }
 
-  let estado: EstadoEntrega;
+  let resultado: ResultadoEnvio;
   try {
-    estado = await deps.send(texto);
+    const respuesta = await deps.send(texto);
+    resultado = typeof respuesta === "string" ? { state: respuesta } : respuesta;
   } catch {
     // Timeout, DNS, socket cortado. Pudo llegar: no se sabe y no se finge saber.
-    estado = "uncertain";
+    resultado = { state: "uncertain" };
   }
+  const estado = resultado.state;
+  // Un 429 es lo único que se aplaza: Telegram ha dicho por escrito que no
+  // aceptó nada, así que reintentar no puede duplicar. Cerrarlo como rechazo
+  // dejaba la agenda del día perdida aunque quedaran dos crons por delante.
+  const aplazada = estado === "rejected" && resultado.rejection === "recoverable";
+  const reintento = aplazada
+    ? new Date(deps.now.getTime() + (resultado.retryAfterMs ?? RETRY_AFTER_POR_DEFECTO_MS)).toISOString() : null;
 
   try {
     // La agenda no pasa por la cascada —no hay nada que interpretar en una lista
@@ -115,7 +128,7 @@ export async function runAgendaCli(args: string[], deps: AgendaDependencies): Pr
         body: texto,
       });
     }
-    await deps.seen.finishAlert(event.id, token, estado);
+    await deps.seen.finishAlert(event.id, token, aplazada ? "deferred" : estado, reintento);
   } catch {
     // Se perdió el acuse de Neon. La entrega se queda en `sending` y nadie la
     // libera: preferible una agenda sin cerrar a una agenda repetida.
@@ -123,6 +136,10 @@ export async function runAgendaCli(args: string[], deps: AgendaDependencies): Pr
     return 1;
   }
 
+  if (aplazada) {
+    deps.log(`· Telegram pide esperar (429). La agenda queda aplazada y el siguiente intento la reclama desde ${reintento}.`);
+    return 1;
+  }
   if (estado !== "sent") {
     // Sin la descripción que devuelve Telegram: los registros de Actions de un
     // repositorio público los lee cualquiera, y el estado ya dice lo que hay.
@@ -143,7 +160,7 @@ export function agendaDependencies(config: Config, now: Date): AgendaDependencie
     dias: config.agendaDias,
     citas: config.fredApiKey ? (opts) => fetchAgenda(config.fredApiKey!, opts) : undefined,
     seen,
-    send: token && chat ? async (body) => (await sendTelegram(token, chat, body)).state : undefined,
+    send: token && chat ? (body) => sendTelegram(token, chat, body) : undefined,
     now,
     token: () => randomUUID(),
     log: (line) => console.log(line),

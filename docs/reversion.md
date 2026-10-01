@@ -122,7 +122,7 @@ Todas con `-R seeorr/news-monitor`. Ninguna necesita migración.
   settings → Fine-grained tokens. Un job ya arrancado sigue con su token
   efímero de Actions y termina.
 - **Con el reloj parado sigue el respaldo de GitHub**: el `schedule` de
-  `monitor.yml` (`:07` y `:37`) y el de `salud.yml`. Para parar también eso,
+  `monitor.yml` (`:05` y `:35`) y el de `salud.yml`. Para parar también eso,
   nivel 6.
 
 **Comprobar:** no aparecen ejecuciones nuevas de Monitor con evento
@@ -183,7 +183,8 @@ npx wrangler rollback <version-id> -m "motivo"
 
 1. Nivel 1 (`capture-only`).
 2. Nivel 3 (reloj parado o token revocado).
-3. `gh workflow disable monitor.yml`, `agenda.yml`, `brief.yml` y `salud.yml`.
+3. `gh workflow disable monitor.yml`, `agenda.yml`, `brief.yml`, `salud.yml` y
+   `retencion.yml` (esta última escribe en Neon: poda entradillas antiguas).
    `keepalive.yml` se deja: evita que GitHub apague los crons por inactividad.
    `comprobaciones.yml` se deja: no toca producción.
 4. Esperar a que terminen los jobs en curso (`gh run list`) y comprobar su

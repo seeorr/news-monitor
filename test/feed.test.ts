@@ -103,3 +103,20 @@ describe("fechas", () => {
     expect(toIso(null)).toBeNull();
   });
 });
+
+describe("entidades del feed", () => {
+  it("decodifica las tipográficas de los titulares y no descodifica dos veces", () => {
+    expect(decodeEntities("Fed&rsquo;s Powell &mdash; rates &hellip;")).toBe("Fed’s Powell — rates …");
+    expect(decodeEntities("&amp;rsquo; &amp;amp;")).toBe("&rsquo; &amp;");
+    expect(decodeEntities("&desconocida; &#8217;")).toBe("&desconocida; ’");
+  });
+
+  it("una entidad numérica imposible no tumba el feed: se queda tal cual", () => {
+    expect(decodeEntities("A &#99999999; B &#x110000; C")).toBe("A &#99999999; B &#x110000; C");
+    const xml = `<rss><channel>
+      <item><title>Roto &#99999999;</title><link>https://example.org/a</link><pubDate>Thu, 10 Sep 2026 10:00:00 GMT</pubDate></item>
+      <item><title>Sano</title><link>https://example.org/b</link><pubDate>Thu, 10 Sep 2026 10:00:00 GMT</pubDate></item>
+    </channel></rss>`;
+    expect(parseFeed(xml).map((i) => i.title)).toEqual(["Roto &#99999999;", "Sano"]);
+  });
+});

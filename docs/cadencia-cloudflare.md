@@ -22,7 +22,7 @@ Antes del cambio ya existían: captura durable por fuente antes del cupo; estado
 ```mermaid
 flowchart TD
   CF[Cloudflare Cron UTC] -->|workflow_dispatch| GH[Monitor en GitHub Actions]
-  BK[Schedule GitHub :07 y :37] --> GH
+  BK[Schedule GitHub :05 y :35] --> GH
   MAN[Manual: fast / full / process] --> GH
   GH --> V[Validación sin secretos]
   V --> LOCK[Concurrency monitor: un job activo]
@@ -155,7 +155,9 @@ en todos los disparos y con quince minutos de hueco el informe habría marcado
 > antiguos (`npm run retencion`, seco por defecto), porque el dato real obligaba
 > a preverlo: 48 MB de 500 en nueve días, unos 5,4 MB/día, y el disco lleno hacia
 > diciembre. Cuando Neon se llena **fallan también los `DELETE`**, así que una
-> política escrita ese día ya no se puede ejecutar. La fila se queda entera —es
+> política escrita ese día ya no se puede ejecutar. Desde el 30-09 la ejecuta
+> `retencion.yml` dos veces por semana con `--aplicar` y 30 días; a mano sigue
+> siendo seca por defecto. La fila se queda entera —es
 > la memoria de deduplicación— con `id`, `kind`, fuente y titular; se va la
 > entradilla. Detalle y límites en `src/db/retencion.ts`.
 
@@ -205,7 +207,7 @@ Rotación futura: crear sustituto con el mismo alcance/caducidad; actualizar **s
 
 Detener primero nuevas solicitudes: revocar el token en GitHub si la parada es urgente; poner `ENABLED=false` en el Worker; retirar su Cron Trigger si se quiere retirar Cloudflare por completo. Los cambios de cron pueden tardar en propagarse. Un job ya iniciado sigue con su token efímero de Actions: revocar el PAT no lo cancela. No cancelar a ciegas un job que pueda estar enviando; dejar que cierre el reclamo o revisar su estado.
 
-GitHub `:07/:37` sigue siendo el respaldo full. Para detener **todo** procesamiento, usar `MONITOR_MODE=capture-only` en Actions además de retirar el reloj externo, y revisar otros workflows. Para volver al software anterior, conservar `capture_queue`, `news_usage`, `news_decisions` y `alert_deliveries`; no restaurar una base antigua encima ni limpiar incertidumbres. `RUN_TELEMETRY=false` permite deshabilitar la nueva escritura de runs. La migración incluye el DDL inverso opcional; solo usarlo con consumidores parados y exportación verificada. La reversión operativa recomendada deja los datos de auditoría.
+GitHub `:05/:35` (antes `:07/:37`) sigue siendo el respaldo full. Para detener **todo** procesamiento, usar `MONITOR_MODE=capture-only` en Actions además de retirar el reloj externo, y revisar otros workflows. Para volver al software anterior, conservar `capture_queue`, `news_usage`, `news_decisions` y `alert_deliveries`; no restaurar una base antigua encima ni limpiar incertidumbres. `RUN_TELEMETRY=false` permite deshabilitar la nueva escritura de runs. La migración incluye el DDL inverso opcional; solo usarlo con consumidores parados y exportación verificada. La reversión operativa recomendada deja los datos de auditoría.
 
 ## Verificación local y mapa de cambios
 

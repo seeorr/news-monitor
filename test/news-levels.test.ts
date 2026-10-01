@@ -10,7 +10,7 @@ import { decideNews } from "../src/pipeline/news-policy.ts";
 import { planQueue } from "../src/pipeline/queue-plan.ts";
 import { sameStory, relatedUpdate } from "../src/pipeline/agrupar.ts";
 import { scoreEvent, analyzeEvent, type CascadeDeps, type Scoring, type Analysis } from "../src/ai/cascade.ts";
-import { formatImportant, formatInteresting } from "../src/notify/news-formats.ts";
+import { formatImportant, formatInteresting, unsupportedNumbers } from "../src/notify/news-formats.ts";
 import type { NormalizedEvent } from "../src/schema/event.ts";
 
 export const NOW = "2026-09-10T10:00:00.000Z";
@@ -130,6 +130,23 @@ describe("dos niveles, con transportes simulados", () => {
     expect((await o.control.getDecision("b"))?.reasons).toContain("deferred_quota_hour_limit");
     await deliverNews({ ...o, now: "2026-09-10T11:01:00.000Z" });
     expect(o.send).toHaveBeenCalledTimes(2); expect(await o.queue.listDeliveryPending()).toHaveLength(0);
+  });
+  it("una noticia que sigue esperando no reescribe su decisión ni su nota en cada ciclo", async () => {
+    const noche = "2026-09-10T23:30:00.000Z"; // 01:30 en Madrid
+    const o = options({ now: noche, briefQuietHours: { desde: 0, hasta: 8, zona: "Europe/Madrid" } });
+    await prepare(o, event("breve"), score(5), noche);
+    await deliverNews(o);
+    const guardada = await o.control.getDecision("breve");
+    expect(guardada?.reasons).toContain("deferred_quiet_hours");
+    const escribe = vi.spyOn(o.control, "putDecision"), marca = vi.spyOn(o.seen, "mark");
+    for (const ahora of ["2026-09-10T23:45:00.000Z", "2026-09-11T00:00:00.000Z"]) await deliverNews({ ...o, now: ahora });
+    expect(escribe).not.toHaveBeenCalled();
+    expect(marca).not.toHaveBeenCalled();
+    expect(await o.control.getDecision("breve")).toEqual(guardada);
+    // Cuando la decisión cambia de verdad —aquí, caduca el interés— se escribe.
+    await deliverNews({ ...o, now: "2026-09-12T23:45:00.000Z" });
+    expect(escribe).toHaveBeenCalled();
+    expect((await o.control.getDecision("breve"))?.reasons).toContain("expired_interest");
   });
   it("de noche el breve espera sin gastar cupo y el importante sale igual", async () => {
     const noche = "2026-09-10T23:30:00.000Z"; // 01:30 en Madrid
@@ -492,6 +509,12 @@ describe("reservas persistentes independientes", () => {
     expect(results.filter((r) => r.allowed)).toHaveLength(3);
     await stores[0]!.putDecision("x", decideNews(event("x"), score(), { now: NOW }));
     expect(await fileControlStore(dir).getDecision("x")).toMatchObject({ level: "brief" });
+    // El lote de captura no pisa lo que ya hay y el primero de un id repetido manda.
+    const nula = decideNews(event("y"), null, { now: NOW });
+    expect(await fileControlStore(dir).putDecisionsIfAbsent([{ id: "x", decision: nula }, { id: "y", decision: nula },
+      { id: "y", decision: decideNews(event("y"), score(), { now: NOW }) }])).toBe(1);
+    expect(await fileControlStore(dir).getDecision("x")).toMatchObject({ level: "brief" });
+    expect(await fileControlStore(dir).getDecision("y")).toEqual(nula);
     expect(await fileControlStore(dir).reserve({ id: "important", resource: "important", units: 1, now: NOW, dayLimit: 1 })).toMatchObject({ allowed: true });
     expect(await fileControlStore(dir).reserve({ id: "tomorrow", resource: "brief", units: 1, now: "2026-09-11T10:00:00Z", dayLimit: 3 })).toMatchObject({ allowed: true });
   });
@@ -512,5 +535,21 @@ describe("reservas persistentes independientes", () => {
     expect(await q.listPending(NOW)).toHaveLength(19);
     expect(await captureCandidates(q, entries, { now: NOW, maxAgeHours: 72 })).toMatchObject({ unique: 0, repeated: 31 });
     expect(scoring).toHaveBeenCalledTimes(12);
+  });
+});
+
+describe("respaldo de cifras: redondeos fieles sí, cifras nuevas no", () => {
+  const cpi = event("fred:CPIAUCSL:2026-08-01", "US CPI", { summary: null, actual: 3.21, previous: 3.4, consensus: null,
+    unit: "%", surprises: [{ value: -0.19, basis: "previous", unit: "%" }], kind: "macro_release", source: "fred" });
+  it("acepta el dato redondeado como lo imprime la alerta, y la sorpresa sin signo", () => {
+    expect(unsupportedNumbers(cpi, "La inflación baja al 3,2 % desde el 3,4 %.")).toEqual([]);
+    expect(unsupportedNumbers(cpi, "Cae 0,19 puntos, unos 0,2 puntos.")).toEqual([]);
+    expect(unsupportedNumbers(cpi, "La inflación se sitúa en torno al 3 %.")).toEqual([]);
+  });
+  it("sigue rechazando cifras que la fuente no dice, más precisión inventada o el ×100", () => {
+    expect(unsupportedNumbers(cpi, "La inflación baja al 3,3 %.")).toEqual([3.3]);
+    expect(unsupportedNumbers(cpi, "Se sitúa en el 3,214 %.")).toEqual([3.214]);
+    expect(unsupportedNumbers(cpi, "Un ajuste de 321 puntos básicos.")).toEqual([321]);
+    expect(unsupportedNumbers(cpi, "Apunta al 2 % de la Fed.")).toEqual([2]);
   });
 });

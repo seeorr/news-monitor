@@ -87,11 +87,31 @@ function unwrapCdata(s: string): string {
   return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
 }
 
-/** Las cinco de XML más las numéricas. No hace falta la tabla HTML entera. */
+/**
+ * Las entidades con nombre que de verdad aparecen en titulares de prensa. No es
+ * la tabla HTML entera: son las tipográficas que los CMS meten en el `<title>`
+ * y que, sin decodificar, llegaban a Telegram como «Fed&rsquo;s».
+ */
+const NOMBRADAS: Record<string, string> = {
+  rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", mdash: "—", ndash: "–", hellip: "…",
+  euro: "€", pound: "£", yen: "¥", trade: "™", reg: "®", copy: "©", deg: "°", middot: "·",
+};
+
+/**
+ * Un punto de código que no existe (`&#99999999;`) hacía lanzar a
+ * `String.fromCodePoint` un RangeError dentro de `parseFeed`, y un solo elemento
+ * mal escrito se llevaba el feed entero. Se deja la entidad tal cual.
+ */
+function puntoDeCodigo(entidad: string, codigo: number): string {
+  return Number.isInteger(codigo) && codigo >= 0 && codigo <= 0x10ffff ? String.fromCodePoint(codigo) : entidad;
+}
+
+/** Las cinco de XML, las numéricas y unas pocas con nombre (`NOMBRADAS`). */
 export function decodeEntities(s: string): string {
   return s
-    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (entidad, h: string) => puntoDeCodigo(entidad, parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (entidad, d: string) => puntoDeCodigo(entidad, Number(d)))
+    .replace(/&([a-z]+);/gi, (entidad, nombre: string) => NOMBRADAS[nombre.toLowerCase()] ?? entidad)
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')

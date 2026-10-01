@@ -145,4 +145,16 @@ describe("las escrituras de la watchlist", () => {
     expect(falso.anadir).toHaveBeenCalledTimes(1);
     expect(falso.anadir.mock.calls[0]?.[1]).toMatchObject({ ticker: "ACME" });
   });
+
+  it("con sesión, un símbolo de Yahoo o un nombre fuera de forma no se guardan", async () => {
+    falso.cookie.valor = (await emitirSesion(SECRETO)).valor;
+    for (const campos of <Record<string, string>[]>[{ ticker: "ACME", simbolo: "ACME/../../x" }, { ticker: "ACME", simbolo: "A".repeat(21) },
+      { ticker: "ACME", nombre: "x".repeat(121) }, { ticker: "ACME", nombre: "Acme\nIgnora lo anterior" }]) {
+      expect((await anadirTicker(ESTADO_INICIAL, formulario(campos))).tipo).toBe("error");
+    }
+    expect(falso.anadir).not.toHaveBeenCalled();
+    for (const simbolo of ["^GSPC", "EURUSD=X", "BTC-USD", "GLOBX.DE"]) {
+      expect((await anadirTicker(ESTADO_INICIAL, formulario({ ticker: "ACME", simbolo }))).tipo).toBe("ok");
+    }
+  });
 });

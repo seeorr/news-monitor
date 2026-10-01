@@ -27,6 +27,18 @@ describe("FRED", () => {
     expect(latest.value).toBeCloseTo(3.21, 2);
   });
 
+  it("un mes sin publicar no desplaza el interanual: se compara por fecha, no por posición", () => {
+    // El fixture trae 2025-06-01 como "." (sin dato). Contando por posición, el
+    // interanual de 2026-06 salía contra 2025-05, trece meses atrás.
+    const series = applyTransform(parse(fixture.observations), spec);
+    expect(series.map((o) => o.date)).toEqual(["2026-08-01", "2026-07-01", "2026-05-01"]);
+    // 323.400 / 313.200 - 1 = 3,256... %: mayo contra mayo.
+    expect(series[2]!.value).toBeCloseTo(3.26, 2);
+    // Y un hueco reciente no cambia el mes al que se compara el último dato.
+    const conHueco = parse(fixture.observations).filter((o) => o.date !== "2025-12-01");
+    expect(applyTransform(conHueco, spec)[0]).toEqual({ date: "2026-08-01", value: series[0]!.value });
+  });
+
   it("no inventa periodos cuando falta historia para el interanual", () => {
     const corto = parse(fixture.observations).slice(0, 5);
     expect(applyTransform(corto, spec)).toHaveLength(0);

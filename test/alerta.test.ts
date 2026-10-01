@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAlert, sorpresa, sorpresas } from "../src/notify/telegram.ts";
+import { MAXIMO_ALERTA, formatAlert, sorpresa, sorpresas } from "../src/notify/telegram.ts";
 import { cifras } from "../app/_lib/formato.ts";
 import type { FilaEvento } from "../src/db/lectura.ts";
 import type { Analysis, Scoring } from "../src/ai/cascade.ts";
@@ -43,6 +43,28 @@ const analysis: Analysis = {
   ],
   what_to_watch: ["US 2Y", "US 10Y", "Nasdaq futures"],
 };
+
+describe("longitud de la alerta", () => {
+  it("nunca pasa del máximo, conserva la fuente y el aviso de obsoleto, y no parte un emoji", () => {
+    const larguisimo: Analysis = {
+      why_it_matters: "🟢".repeat(3000),
+      catalysts: [], risks: [],
+      affected_assets: [],
+      what_to_watch: Array.from({ length: 50 }, (_, i) => `Punto ${i} ${"x".repeat(100)}`),
+    };
+    const texto = formatAlert({ ...event, stale: true }, scoring, larguisimo, { tambien: ["A", "B"] });
+    expect(texto.length).toBeLessThanOrEqual(MAXIMO_ALERTA);
+    expect(texto).toContain("Dato obsoleto");
+    expect(texto.endsWith(`Fuente: ${event.source_url} · dato de 2026-08-01`)).toBe(true);
+    expect(texto).toContain("…");
+    // Ningún sustituto alto huérfano: el recorte no deja medio emoji.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(texto)).toBe(false);
+  });
+
+  it("una alerta normal no se toca", () => {
+    expect(formatAlert(event, scoring, analysis)).not.toContain("…");
+  });
+});
 
 describe("formato de la alerta", () => {
   it("respeta el formato objetivo del spec", () => {

@@ -126,14 +126,33 @@ export function formatAlert(
     lines.push(`También lo cuentan: ${opts.tambien.join(", ")}`);
   }
 
+  const cola: string[] = [];
   if (event.stale) {
-    lines.push("⚠️ Dato obsoleto: es el último válido conocido, no uno fresco.");
+    cola.push("⚠️ Dato obsoleto: es el último válido conocido, no uno fresco.");
   }
-  lines.push(
+  cola.push(
     `Fuente: ${event.source_url ?? event.source} · ${ETIQUETA_FECHA[event.kind]} ${fecha(event.observed_at)}`,
   );
 
-  return lines.join("\n\n");
+  // Telegram rechaza con un 400 lo que pasa de 4096 caracteres, y un 400 es un
+  // rechazo permanente: la alerta no volvería nunca. Un análisis largo, una lista
+  // larga de «también lo cuentan» o un titular desmesurado bastaban. Se recorta
+  // el cuerpo y se conservan siempre el aviso de obsoleto y la fuente, que son
+  // lo que dice de dónde sale y cuánto fiarse.
+  const pie = cola.join("\n\n");
+  const cuerpo = recortar(lines.join("\n\n"), MAXIMO_ALERTA - pie.length - 2);
+  return `${cuerpo}\n\n${pie}`;
+}
+
+/** Margen bajo los 4096 de Telegram, que no cuenta igual que `length` en todos los casos. */
+export const MAXIMO_ALERTA = 4000;
+
+/** Recorta sin partir un par sustituto (un emoji) y lo dice con «…». */
+function recortar(texto: string, limite: number): string {
+  if (texto.length <= limite) return texto;
+  let corte = texto.slice(0, Math.max(0, limite - 1));
+  if (/[\uD800-\uDBFF]$/.test(corte)) corte = corte.slice(0, -1);
+  return `${corte}…`;
 }
 
 /**
