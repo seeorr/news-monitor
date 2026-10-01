@@ -50,7 +50,7 @@ export const HEALTH_STATE_MEANING: Record<HealthState, string> = {
   healthy: "captura, procesamiento, entrega y disparador automático acreditados en la ventana.",
   delayed: "la captura existe pero llega tarde respecto al SLO medido.",
   no_recent_execution: "no consta ninguna ejecución en la ventana de vigilancia.",
-  critical_source_failed: "una fuente crítica falló y su último intento sigue fallando.",
+  critical_source_failed: "una fuente crítica ha fallado en sus dos últimos intentos seguidos.",
   aged_queue: "hay trabajo pendiente más viejo que el límite de cola.",
   delivery_blocked: "hay entregas rechazadas o aplazadas cuyo plazo ya venció y requieren atención.",
   processing_paused: "captura viva y procesamiento parado a propósito (capture-only): no es un fallo.",
@@ -82,6 +82,8 @@ export interface HealthSignals {
   /** `undefined` = no comprobado. Solo `false` declara `telegram_unconfigured`. */
   telegramConfigured?: boolean;
 }
+/** Intentos seguidos fallidos de una fuente crítica para declararla caída (ver `evaluateHealth`). */
+export const CRITICAL_CONSECUTIVE_FAILURES = 2;
 export function evaluateHealth(runs: RunRecord[], options: HealthSignals) {
   const limits = options.limits ?? healthLimits();
   const age = (at: string | null | undefined) => at ? Math.max(0, (Date.parse(options.now) - Date.parse(at)) / 60_000) : Infinity;
@@ -107,11 +109,22 @@ export function evaluateHealth(runs: RunRecord[], options: HealthSignals) {
   // incluye—, nadie está demostrando una caída en curso, y dejarla en rojo
   // eterniza una incidencia que pudo resolverse sola. Se sigue publicando en
   // `criticalStale`, así que no se oculta: se deja de afirmar lo que no consta.
-  const lastSeen = (feed: typeof CRITICAL_FEEDS[number]) =>
-    records.find((run) => run.criticalFailed.includes(feed) || run.criticalOk.includes(feed));
-  const down = CRITICAL_FEEDS.filter((feed) => lastSeen(feed)?.criticalFailed.includes(feed));
-  const failed = down.filter((feed) => live(lastSeen(feed)!.startedAt));
-  const criticalStale = down.filter((feed) => !live(lastSeen(feed)!.startedAt));
+  //
+  // Y una caída son DOS intentos seguidos fallidos, no uno. El 01-10 a las 09:49
+  // el feed de la Fed contestó un 404 una sola vez, el ciclo siguiente ya leyó
+  // bien y el aviso llegó igual al teléfono: con la Fed y el BCE en los cuatro
+  // disparos de cada hora, dos fallos seguidos son ~15 minutos de caída real,
+  // que es lo que merece despertar a alguien. El fallo suelto no se esconde: se
+  // publica en `criticalTransient`, que no es notificable.
+  const intentos = (feed: typeof CRITICAL_FEEDS[number]) =>
+    records.filter((run) => run.criticalFailed.includes(feed) || run.criticalOk.includes(feed));
+  const caidaEn = (feed: typeof CRITICAL_FEEDS[number], n: number) =>
+    intentos(feed).slice(0, n).every((run) => run.criticalFailed.includes(feed)) && intentos(feed).length >= n;
+  const down = CRITICAL_FEEDS.filter((feed) => caidaEn(feed, 1));
+  const live1 = (feed: typeof CRITICAL_FEEDS[number]) => live(intentos(feed)[0]!.startedAt);
+  const failed = down.filter((feed) => live1(feed) && caidaEn(feed, CRITICAL_CONSECUTIVE_FAILURES));
+  const criticalTransient = down.filter((feed) => live1(feed) && !caidaEn(feed, CRITICAL_CONSECUTIVE_FAILURES));
+  const criticalStale = down.filter((feed) => !live1(feed));
   if (failed.length) states.push("critical_source_failed");
   const queueAge = age(options.oldestPendingAt);
   const aged = Boolean(options.oldestPendingAt) && queueAge > limits.queueMinutes;
@@ -168,7 +181,7 @@ export function evaluateHealth(runs: RunRecord[], options: HealthSignals) {
 
   const fullCircuit = !states.length && triggerState === "automatic" && captureState === "current" &&
     processingState === "current" && deliveryState === "confirmed";
-  return { states: states.length ? states : [fullCircuit ? "healthy" as const : "circuit_unproven" as const], criticalFailed: failed, criticalStale,
+  return { states: states.length ? states : [fullCircuit ? "healthy" as const : "circuit_unproven" as const], criticalFailed: failed, criticalStale, criticalTransient,
     fastAgeMinutes: finite(age(fast?.captureCompletedAt)), fullAgeMinutes: finite(age(full?.captureCompletedAt)),
     capture: { state: captureState, lastAt: captured[0]?.captureCompletedAt ?? null, ageMinutes: finite(age(captured[0]?.captureCompletedAt)),
       lastProfile: records[0]?.profile ?? null, lastMode: records[0]?.mode ?? null, lastTrigger: records[0]?.trigger ?? null },
