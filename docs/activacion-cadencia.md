@@ -913,10 +913,58 @@ gh workflow run monitor.yml -f profile=full -f mode=full -f origin=manual
 dentro del presupuesto; `alert_deliveries` crece solo con estados `sent`
 —ninguna fila `uncertain` o `sending` colgada—; los mensajes recibidos son los
 que se esperaban y **no** un reenvío del incidente del BCE. Si aparece una fila
-`uncertain`, **parar aquí**: no se libera por tiempo, hay que reconciliarla.
+`uncertain`, **parar aquí**: no se libera por tiempo, hay que reconciliarla
+—cómo, en «Reconciliar una entrega incierta», más abajo—.
 
 **Reversión del paso 2:** ninguna posible sobre lo ya enviado. Por eso el paso 0.1
 es bloqueante. Lo que sí se hace es no continuar.
+
+## Reconciliar una entrega incierta
+
+Una entrega queda en `uncertain` cuando la llamada a Telegram no devolvió ni un
+sí ni un no: un tiempo de espera agotado, la red cortada a media petición. **El
+mensaje pudo llegar.** El sistema no la reintenta —reintentar a ciegas duplica el
+envío— y tampoco la cierra por tiempo. El dato que falta no está en la base: está
+en el chat de Telegram, y solo una persona puede mirarlo.
+
+Mientras quede una fila sin reconciliar, la auditoría de salud publica
+`delivery_uncertain` en **todos** los ciclos. Eso tiene un coste que no se ve al
+principio: el 05-10 había tres filas del 22-09, trece días clavando la bandera.
+Una alarma que lleva dos semanas sonando ya no avisa de nada, y además tapa la
+siguiente —una entrega incierta de hoy se perdería entre las viejas—. Reconciliar
+no es higiene: es lo que mantiene útil el aviso.
+
+Ver qué espera veredicto, sin escribir nada:
+
+```powershell
+npm run reconciliar
+```
+
+Imprime el titular y la hora local del intento. Con eso se busca el mensaje en el
+chat y se responde una de dos cosas:
+
+```powershell
+npm run reconciliar -- --llego <event_id>      # aparece en el chat
+npm run reconciliar -- --no-llego <event_id>   # no aparece
+npm run reconciliar -- --no-llego --todas      # el mismo veredicto para todas
+```
+
+`--llego` cierra en `sent`; `--no-llego`, en `undeliverable`. Después,
+`npm run audit:health` ya no debe decir `delivery_uncertain`.
+
+Tres cosas que la herramienta **no** hace, a propósito:
+
+- **No reenvía.** Si el veredicto es que no llegó, la noticia no se recupera: a
+  los trece días ya no es noticia, y el corte de frescura la habría cerrado igual.
+  Reenviar material viejo es el fallo que `stale_at_delivery` existe para evitar.
+- **No toca las filas en `sending`.** Las lista, pero no las escribe: una puede
+  ser un envío en vuelo ahora mismo, y cerrarla por detrás rompería el CHECK
+  `(state = 'sending') = (settled_at is null)`. Un `sending` atascado es otra
+  avería.
+- **No escribe en `alerts`.** `alerts` significa «esto lo aceptó Telegram», y
+  aquí Telegram nunca contestó. Que alguien confirme que el mensaje estaba en su
+  chat cierra la entrega, pero no convierte en confirmada una respuesta que no
+  existió.
 
 ### Paso 3 · La doble llave del modo, las dos a la vez
 

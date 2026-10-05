@@ -24,6 +24,7 @@
     "verify:migrations:postgres": "tsx scripts/verificar-migraciones-reejecutables.ts",
     "verify:retention:postgres": "tsx scripts/verificar-retencion-postgres.ts",
     "retencion": "tsx scripts/retencion.ts",
+    "reconciliar": "tsx scripts/reconciliar-entregas.ts",
     "verify:access:postgres": "tsx scripts/verificar-acceso-postgres.ts",
     "evaluate:news": "tsx scripts/evaluar-noticias.ts",
     "audit:news": "tsx scripts/auditar-noticias.ts",
